@@ -16,13 +16,18 @@ import "./wegenrace.css";
 import { getAuth, signInWithCustomToken } from "firebase/auth";
 import { toast } from "react-toastify";
 
+// --- NEW IMPORTS ---
+import { useProfile } from '../../../context/ProfileContext'; // Import useProfile
+import { api } from '../../../services/api'; // Import your configured Axios instance
+// --- END NEW IMPORTS ---
+
 // --- Types ---
 interface WegenRaceConfig {
     players: Player[];
     duration: number;
     humanChoice: Player;
     betAmount?: number;
-    currency?: string;
+    currency?: 'SOL' | 'FREE'; // Ensure currency can be 'FREE'
     paymentSignature?: string;
     gameId?: string;
     gameTitle?: string;
@@ -41,6 +46,10 @@ export default function WegenRace() {
     const location = useLocation();
     const navigate = useNavigate();
 
+    // --- NEW REF FOR TOKEN CONSUMPTION ---
+    const freeTokenConsumedForSessionRef = useRef(false); // To ensure token is consumed only once
+    // --- END NEW REF ---
+
     const [showGameOverModal, setShowGameOverModal] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState("Loading game...");
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -57,7 +66,6 @@ export default function WegenRace() {
         raceProgress: 0,
         winner: null,
         raceElapsedTime: 0,
-        raceEndTime: null,
         raceDuration: 0,
         currentPhase: 'Initializing',
         timeRemaining: 0,
@@ -68,6 +76,10 @@ export default function WegenRace() {
 
     const gameContainerRef = useRef<HTMLDivElement>(null);
     const phaserGameRef = useRef<Phaser.Game | null>(null);
+
+    // --- Access useProfile context ---
+    const { refreshProfile } = useProfile();
+    // --- End useProfile access ---
 
     // --- Callbacks passed to Phaser ---
     const handleGameStateChange = useCallback((state: GameState) => {
@@ -105,6 +117,8 @@ export default function WegenRace() {
     }, []);
 
     // --- Core Logic Effects ---
+
+    // Effect 1: Load Game Configuration from Route State
     useEffect(() => {
         console.log("DEBUG: WegenRace.tsx: Effect 1 (Load Config) - Component mounted. Checking route state.");
         setLoadingMessage("Validating game configuration...");
@@ -116,6 +130,7 @@ export default function WegenRace() {
             navigate("/games"); 
             return;
         }
+        // Validate essential config properties
         if (!config.players || config.players.length === 0 || !config.humanChoice || !config.authToken || !config.gameEntryTokenId) {
             console.error("ERROR: WegenRace.tsx: Effect 1 - Validation failed: Incomplete game data.", config);
             toast.error("Invalid game data. Please restart from games page.");
@@ -127,68 +142,136 @@ export default function WegenRace() {
         setLoadingMessage("Configuration loaded. Authenticating session...");
     }, [location.state, navigate]);
 
+    // Effect 2: Firebase Authentication (using Custom Token Exchange)
     useEffect(() => {
         console.log(`DEBUG: WegenRace.tsx: Effect 2 (Auth) - LoadedConfig: ${!!loadedGameConfig}, SessionAuthenticated: ${isSessionAuthenticated}`);
         if (!loadedGameConfig || isSessionAuthenticated) {
-            return;
+            return; // Skip if config not loaded or already authenticated
         }
-        const consumeTokenAndAuth = async () => {
-            setLoadingMessage("Verifying game session...");
-            try {
-                const consumeTokenResponse = await fetch('http://localhost:4000/api/game-sessions/consume-token', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${loadedGameConfig.authToken}`, },
-                    body: JSON.stringify({ gameEntryTokenId: loadedGameConfig.gameEntryTokenId }),
-                });
-                if (!consumeTokenResponse.ok) {
-                    const errorData = await consumeTokenResponse.json();
-                    throw new Error(errorData.message || 'Failed to consume game entry token.');
-                }
-                console.log("DEBUG: WegenRace.tsx: Effect 2 - Game entry token consumed successfully.");
 
-                setLoadingMessage("Securing authentication...");
-                const customTokenResponse = await fetch('http://localhost:4000/api/auth/exchange-id-for-custom', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${loadedGameConfig.authToken}`, },
-                });
-                if (!customTokenResponse.ok) {
-                    const errorData = await customTokenResponse.json();
-                    throw new Error(errorData.message || 'Failed to get custom authentication token from backend.');
-                }
-                const { customToken } = await customTokenResponse.json();
+        const authenticateSession = async () => {
+            setLoadingMessage("Securing authentication...");
+            try {
+                // Exchange Firebase ID Token for a Custom Token from your backend
+                // This call uses the `api` instance which includes your Authorization header
+                const customTokenResponse = await api.post('/api/auth/exchange-id-for-custom', {});
+                
+                const { customToken } = customTokenResponse.data; // Axios data property
                 console.log("DEBUG: WegenRace.tsx: Effect 2 - Received Firebase custom token.");
 
                 setLoadingMessage("Authenticating user with Firebase...");
                 await signInWithCustomToken(auth, customToken);
                 console.log("DEBUG: WegenRace.tsx: Effect 2 - Firebase Authentication successful.");
                 setIsSessionAuthenticated(true);
-                setLoadingMessage("Session authenticated. Initializing game engine...");
+                setLoadingMessage("Session authenticated. Consuming entry token (if free) and initializing game engine...");
             } catch (error: any) {
-                console.error("ERROR: WegenRace.tsx: Effect 2 - Game initiation error during token consumption or Firebase auth:", error);
+                console.error("ERROR: WegenRace.tsx: Effect 2 - Game initiation error during Firebase auth:", error);
                 toast.error(`Access denied: ${error.message}. Please restart from the games page.`);
                 navigate("/games"); 
             }
         };
-        consumeTokenAndAuth();
-    }, [loadedGameConfig, isSessionAuthenticated, navigate]);
+        authenticateSession();
+    }, [loadedGameConfig, isSessionAuthenticated, navigate]); // Dependencies
 
+    // --- NEW Effect 2.5: Consume Free Entry Token (if applicable) ---
+    // This runs AFTER authentication but BEFORE Phaser game initialization.
+    useEffect(() => {
+        console.log(`DEBUG: WegenRace.tsx: Effect 2.5 (Consume Free Token) - LoadedConfig=${!!loadedGameConfig}, SessionAuthenticated=${isSessionAuthenticated}, FreeTokenConsumed=${freeTokenConsumedForSessionRef.current}`);
+
+        // Only proceed if config is loaded, session is authenticated,
+        // it's a FREE entry, and we haven't consumed the token for this session yet.
+        if (loadedGameConfig && isSessionAuthenticated && 
+            loadedGameConfig.currency === 'FREE' && !freeTokenConsumedForSessionRef.current) {
+            
+            const consumeFreeEntryToken = async () => {
+                setLoadingMessage("Consuming free entry token...");
+                console.log("WegenRace: Attempting to consume free entry token for game session:", loadedGameConfig.gameEntryTokenId);
+                try {
+                    // Call the new backend endpoint for free token consumption
+                    // This will decrement the user's free pickerTokens count in Firestore
+                    const response = await api.post('/game-sessions/consume-entry-token', {
+                        gameEntryTokenId: loadedGameConfig.gameEntryTokenId,
+                        gameType: 'picker' // Category for free tokens
+                    });
+
+                    if (response.data.success) {
+                        toast.success("1 Free Entry Token consumed for this game!");
+                        await refreshProfile(); // Refresh profile to show updated token count immediately
+                        freeTokenConsumedForSessionRef.current = true; // Mark as consumed for this session
+                        setLoadingMessage("Free token consumed. Initializing game engine...");
+                    } else {
+                        // This case should ideally be caught by backend validation
+                        console.error("WegenRace: Backend failed to consume token:", response.data.message);
+                        throw new Error(response.data.message || "Failed to consume free entry token.");
+                    }
+                } catch (error: any) {
+                    console.error("ERROR: WegenRace.tsx: Effect 2.5 - Error consuming free entry token:", error);
+                    toast.error(`Game access denied: ${error.message}. Please restart from the games page.`);
+                    navigate("/games"); // Critical error, send back to games list
+                }
+            };
+            consumeFreeEntryToken();
+        } else if (loadedGameConfig && isSessionAuthenticated && loadedGameConfig.currency === 'SOL') {
+            // For SOL entries, we still need to mark the gameEntryToken as consumed
+            // but we don't decrement a free token count. The original consume-token
+            // endpoint is appropriate here, or if generate-entry-token already marks it,
+            // this step might be redundant. For safety, let's keep the original logic here for SOL.
+            const markPaidEntryTokenConsumed = async () => {
+                setLoadingMessage("Marking paid entry token as consumed...");
+                console.log("WegenRace: Marking paid entry token as consumed for game session:", loadedGameConfig.gameEntryTokenId);
+                try {
+                    // Use the existing endpoint to simply mark the token record as `consumed: true`
+                    const response = await api.post('/api/game-sessions/consume-token', {
+                        gameEntryTokenId: loadedGameConfig.gameEntryTokenId,
+                    });
+
+                    if (response.data.success) {
+                        console.log("WegenRace: Paid entry token successfully marked as consumed.");
+                        setLoadingMessage("Entry token consumed. Initializing game engine...");
+                    } else {
+                        console.warn("WegenRace: Backend failed to mark paid token as consumed, but game might still proceed:", response.data.message);
+                        // This is a warning, not a critical error preventing game start,
+                        // as payment has already occurred and game access granted.
+                        // You might want to log this more verbosely on your server.
+                        setLoadingMessage("Warning: Token status not updated. Initializing game engine...");
+                    }
+                } catch (error: any) {
+                    console.error("WegenRace: Error marking paid entry token as consumed:", error);
+                    // Again, a warning for logging, not preventing game start
+                    setLoadingMessage("Warning: Failed to mark token. Initializing game engine...");
+                }
+            };
+            markPaidEntryTokenConsumed();
+        }
+
+    }, [loadedGameConfig, isSessionAuthenticated, navigate, refreshProfile]); // Add refreshProfile to dependencies
+
+    // Effect 3: Phaser Game Initialization
     useEffect(() => {
         console.log(`DEBUG: WegenRace.tsx: Effect 3 (Phaser Init) - Conditions: LoadedConfig=${!!loadedGameConfig}, SessionAuthenticated=${isSessionAuthenticated}, PhaserRunning=${isPhaserGameRunning}`);
-        if (!loadedGameConfig || !isSessionAuthenticated || isPhaserGameRunning) {
+
+        // Define conditions for Phaser to initialize
+        const canInitializePhaser = loadedGameConfig && isSessionAuthenticated && !isPhaserGameRunning && (
+            (loadedGameConfig.currency === 'SOL') || // Always allow SOL if authenticated
+            (loadedGameConfig.currency === 'FREE' && freeTokenConsumedForSessionRef.current) // Only allow FREE if token is marked consumed
+        );
+
+        if (!canInitializePhaser) {
             if (!loadedGameConfig) console.log("DEBUG: WegenRace.tsx: Effect 3 - Skipping Phaser init: game config not yet loaded.");
             if (!isSessionAuthenticated) console.log("DEBUG: WegenRace.tsx: Effect 3 - Skipping Phaser init: session not yet authenticated.");
             if (isPhaserGameRunning) console.log("DEBUG: WegenRace.tsx: Effect 3 - Skipping Phaser init: game is already running.");
+            if (loadedGameConfig?.currency === 'FREE' && !freeTokenConsumedForSessionRef.current) console.log("DEBUG: WegenRace.tsx: Effect 3 - Skipping Phaser init: Free token not yet consumed.");
             return;
         }
 
         const gameContainer = gameContainerRef.current;
         if (!gameContainer) {
             console.error("ERROR: WegenRace.tsx: Effect 3 - Game container ref is null. Cannot initialize Phaser.");
-            // This error indicates a rendering issue, not a game logic issue
-            // We should not proceed with Phaser initialization until the ref is available.
-            // No toast.error here as it's an internal component rendering issue.
             setConnectionStatus('disconnected');
             return;
         }
 
+        // Clean up any existing Phaser instance before creating a new one
         if (phaserGameRef.current) {
             console.log("DEBUG: WegenRace.tsx: Effect 3 - Destroying previous Phaser instance before re-initialization.");
             destroyWegenRaceGame(phaserGameRef.current);
@@ -196,7 +279,7 @@ export default function WegenRace() {
         }
 
         try {
-            gameContainer.innerHTML = '';
+            gameContainer.innerHTML = ''; // Clear container to prevent duplicate canvases
             console.log("DEBUG: WegenRace.tsx: Effect 3 - Creating new Phaser game instance.");
             const game = createWegenRaceGame(gameContainer);
             phaserGameRef.current = game;
@@ -211,11 +294,16 @@ export default function WegenRace() {
                 }
                 scene.events.once('create', () => {
                     console.log("DEBUG: WegenRace.tsx: Effect 3 - WegenRaceScene 'create' event fired. Attaching listeners and initializing race.");
-                    enableDebugMode(game); 
+                    enableDebugMode(game); // Ensure debug mode is enabled if desired
                     scene.onStateChange(handleGameStateChange);
                     scene.onGameEnd(handleGameEnd);
-                    scene.initializeRaceWithData( loadedGameConfig.players, loadedGameConfig.duration, loadedGameConfig.humanChoice );
-                    scene.startRaceExternally();
+                    // Pass the necessary data to the Phaser game scene
+                    scene.initializeRaceWithData( 
+                        loadedGameConfig.players, 
+                        loadedGameConfig.duration, 
+                        loadedGameConfig.humanChoice 
+                    );
+                    scene.startRaceExternally(); // Tell Phaser to start the race
                     setConnectionStatus('connected');
                     setIsPhaserGameRunning(true);
                     setLoadingMessage("Game is running!");
@@ -229,6 +317,7 @@ export default function WegenRace() {
             setIsPhaserGameRunning(false);
         }
 
+        // Cleanup function for this effect
         return () => {
             if (phaserGameRef.current) {
                 console.log("DEBUG: WegenRace.tsx: Effect 3 Cleanup - Destroying Phaser instance on component unmount or re-render.");
@@ -238,6 +327,8 @@ export default function WegenRace() {
             setIsPhaserGameRunning(false);
             setLoadedGameConfig(null);
             setIsSessionAuthenticated(false);
+            // Reset the freeTokenConsumedForSessionRef on unmount
+            freeTokenConsumedForSessionRef.current = false; 
             setGameState({
                 status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
                 raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',
@@ -245,7 +336,7 @@ export default function WegenRace() {
             });
             setEventLog([]);
         };
-    }, [loadedGameConfig, isSessionAuthenticated, isPhaserGameRunning, handleGameStateChange, handleGameEnd]); // Added handleGameStateChange and handleGameEnd to dependencies
+    }, [loadedGameConfig, isSessionAuthenticated, isPhaserGameRunning, freeTokenConsumedForSessionRef, handleGameStateChange, handleGameEnd]); // Added freeTokenConsumedForSessionRef to dependencies
 
     // --- UI and Control Handlers ---
     const handleBackToGames = useCallback(() => {
@@ -263,7 +354,27 @@ export default function WegenRace() {
 
     const toggleFullscreen = useCallback(() => {
         const element = document.documentElement;
-        if (!isFullscreen) { /* ... */ } else { /* ... */ }
+        if (!isFullscreen) { 
+            if (element.requestFullscreen) {
+                element.requestFullscreen();
+            } else if ((element as any).mozRequestFullScreen) { /* Firefox */
+                (element as any).mozRequestFullScreen();
+            } else if ((element as any).webkitRequestFullscreen) { /* Chrome, Safari & Opera */
+                (element as any).webkitRequestFullscreen();
+            } else if ((element as any).msRequestFullscreen) { /* IE/Edge */
+                (element as any).msRequestFullscreen();
+            }
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else if ((document as any).mozCancelFullScreen) { /* Firefox */
+                (document as any).mozCancelFullScreen();
+            } else if ((document as any).webkitExitFullscreen) { /* Chrome, Safari and Opera */
+                (document as any).webkitExitFullscreen();
+            } else if ((document as any).msExitFullscreen) { /* IE/Edge */
+                (document as any).msExitFullscreen();
+            }
+        }
     }, [isFullscreen]);
 
     useEffect(() => {
@@ -292,7 +403,9 @@ export default function WegenRace() {
     // --- Conditional Rendering ---
 
     // Phase 1: Initial load and authentication check
-    if (!isSessionAuthenticated) {
+    // This state is shown until `isSessionAuthenticated` becomes true.
+    // It also shows if `loadedGameConfig` is null.
+    if (!loadedGameConfig || !isSessionAuthenticated) { // Consolidate conditions here
         return (
             <div className="min-h-screen bg-black flex items-center justify-center">
                 <div className="text-center text-white p-4">
@@ -317,8 +430,8 @@ export default function WegenRace() {
         );
     }
     
-    // Phase 2: Session authenticated, but Phaser game not yet running.
-    // The key here is to render the game container div, but keep it hidden or overlayed.
+    // Phase 2: Session authenticated, but Phaser game not yet running or free token not consumed.
+    // This overlay handles the transition while Phaser is setting up or waiting for token consumption.
     return (
         <div className={`wegenrace-root ${isFullscreen ? "fullscreen-mode" : ""}`}>
             {/* The Phaser game container needs to be present in the DOM for its ref to be set */}
@@ -327,26 +440,24 @@ export default function WegenRace() {
                 id="phaser-game-container"
                 ref={gameContainerRef}
                 style={{
-                    // Style to hide it or keep it at 100% size, but not display: none
-                    // Or, if using an overlay, it can be underneath
-                    position: 'absolute', // Or 'relative' depending on layout
+                    position: 'absolute',
                     width: '100%',
                     height: '100%',
                     top: 0,
                     left: 0,
                     visibility: isPhaserGameRunning ? 'visible' : 'hidden', // Hide when not running
-                    zIndex: isPhaserGameRunning ? 1 : -1, // Ensure it's behind the loading screen
+                    zIndex: isPhaserGameRunning ? 1 : -1, // Ensure it's behind the loading screen/overlay
                 }}
             />
 
+            {/* Loading/Setup Overlay */}
             {!isPhaserGameRunning && (
-                // Overlay for "Loading Game Engine..."
                 <div style={{
                     position: "fixed", inset: 0, background: "#000000cc", display: "flex", 
                     flexDirection: "column", alignItems: "center", justifyContent: "center", 
                     color: "#fff", zIndex: 999
                 }}>
-                    <div style={{ fontSize: "1.5rem", marginBottom: 16 }}>Loading Game Engine...</div>
+                    <div style={{ fontSize: "1.5rem", marginBottom: 16 }}>Preparing Game...</div>
                     <div style={{
                         width: 48, height: 48, border: "3px solid #333", borderTop: "3px solid #ffd93b",
                         borderRadius: "50%", animation: "spin 1s linear infinite", marginBottom: 16

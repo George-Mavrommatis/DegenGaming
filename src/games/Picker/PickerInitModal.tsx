@@ -4,10 +4,11 @@ import React, { useState, useMemo, useEffect, useCallback } from "react";
 import Modal from "react-modal";
 import { toast } from "react-toastify";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { Player as LottiePlayer } from "@lottiefiles/react-lottie-player";
-import { useProfile } from "../../context/ProfileContext"; // Ensure this path is correct
-import { getAuth } from "firebase/auth"; // Make sure Firebase is initialized elsewhere
+import { useProfile } from "../../context/ProfileContext";
+import { getAuth } from "firebase/auth";
+import { api } from '../../services/api';
 
 // Import the Player type from the WegenRaceGame module for type consistency.
 // Adjust this path if your WegenRaceGame interface is located elsewhere.
@@ -18,7 +19,7 @@ import { Player as WegenRacePlayerType } from '../../games/Picker/WegenRace/wege
 const FIXED_SOL_ENTRY_FEE = 0.01; // This is the fixed SOL fee for a picker game.
 
 // Initialize Firebase auth (should ideally be done in a higher-level context or utility file)
-const auth = getAuth();
+const auth = getAuth(); // This `auth` instance is fine for checking `currentUser`
 
 // OnboardingPanel component: Handles player selection and race duration setup.
 interface OnboardingPanelProps {
@@ -39,7 +40,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     const [humanPlayerChoice, setHumanPlayerChoice] = useState<WegenRacePlayerType | null>(null);
 
     // Get the current Firebase authenticated user
-    const { currentUser } = auth;
+    const { currentUser } = auth; // Using `auth` directly from Firebase SDK init for this component's needs
 
     // Predefined options for race duration buttons
     const timeOptions = [
@@ -350,12 +351,9 @@ const useTokenPricing = () => {
             setLoading(true);
             setError(null);
             try {
-                // Fetch only SOL price
-                const response = await fetch('http://localhost:4000/api/prices'); // Assuming this API can return only SOL too
-                if (!response.ok) {
-                    throw new Error('Failed to fetch prices from backend');
-                }
-                const data = await response.json();
+                // Fetch only SOL price using the `api` instance
+                const response = await api.get('/api/prices'); // <--- NEW: Using `api.get`
+                const data = response.data; // Axios automatically parses JSON
                 const solPrice = data.solUsd;
 
                 // Validate received SOL price data
@@ -399,7 +397,7 @@ interface PickerInitModalProps {
         betAmount: number;
         currency: 'SOL' | 'FREE'; // Updated currency types
         gameTitle: string;
-        authToken: string; // Firebase ID token for authentication
+        authToken: string; // Firebase ID token for authentication (still passed, but `api` handles it)
         gameEntryTokenId: string; // Token received from backend for game entry validation
         paymentSignature?: string | null; // Solana transaction signature if a payment occurred
     }) => void;
@@ -416,9 +414,9 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const wallet = useWallet();
     const { connection } = useConnection();
     // User profile context to access free entry tokens
-    const { profile, loading: loadingProfile, refreshProfile } = useProfile();
+    const { userProfile: profile, loadingAuth: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile(); // Corrected destructuring for loading and firebaseAuthToken
     // Firebase current user
-    const { currentUser } = auth;
+    const { currentUser } = auth; // This is fine for direct Firebase SDK access within `OnboardingPanel`
 
     // State to manage the current step of the modal flow
     const [step, setStep] = useState<"pay" | "paying" | "onboarding" | "done" | "error">("pay");
@@ -432,8 +430,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const [ledger, setLedger] = useState<any[]>([]);
     // Loading state for fetching the user ledger
     const [loadingLedger, setLoadingLedger] = useState(false);
-    // State to store the Firebase ID token for authenticating backend calls
-    const [firebaseIdToken, setFirebaseIdToken] = useState<string | null>(null);
+    
     // State to store the game entry token ID received from the backend
     const [gameEntryTokenId, setGameEntryTokenId] = useState<string | null>(null);
 
@@ -443,40 +440,40 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     // State to track the number of free entry tokens the user has for this game type
     const [pickerFreeEntryTokens, setPickerFreeEntryTokens] = useState<number>(0);
 
-    // Effect to obtain the Firebase ID token when the user is authenticated.
-    // This token is crucial for authenticating requests to your backend.
-    useEffect(() => {
-        async function getToken() {
-            if (currentUser) {
-                try {
-                    const token = await currentUser.getIdToken();
-                    setFirebaseIdToken(token);
-                } catch (error) {
-                    console.error("Error getting Firebase ID token:", error);
-                    setFirebaseIdToken(null);
-                }
-            } else {
-                setFirebaseIdToken(null);
-            }
-        }
-        // Listener for Firebase Auth state changes
-        const unsubscribe = auth.onIdTokenChanged(user => {
-            if (user) {
-                getToken(); // Get token if user is logged in
-            } else {
-                setFirebaseIdToken(null); // Clear token if user logs out
-            }
-        });
-        getToken(); // Initial token fetch
-        return () => unsubscribe(); // Cleanup subscription on component unmount
-    }, [currentUser]); // Dependency: re-run if currentUser object changes
 
-    // Update the count of free entry tokens from the user's profile context.
+    // --- DEBUGGING LOGS ---
+    // This one should always fire when the component renders or props change
     useEffect(() => {
-        if (profile && profile.freeEntryTokens) {
-            setPickerFreeEntryTokens(profile.freeEntryTokens.pickerTokens || 0);
+        console.log("PickerInitModal DEBUG: Component Render - Initial state/props check");
+        console.log("  props.isOpen:", props.isOpen);
+        console.log("  Current step:", step);
+        console.log("  profile (from useProfile):", profile);
+        console.log("  loadingProfile (from useProfile):", loadingProfile); // Use loadingProfile here
+        console.log("  pickerFreeEntryTokens (local state):", pickerFreeEntryTokens);
+        if (profile) {
+            console.log("  profile.freeEntryTokens (direct access):", profile.freeEntryTokens);
+            if (profile.freeEntryTokens) {
+                console.log("  profile.freeEntryTokens.pickerTokens (direct access):", profile.freeEntryTokens.pickerTokens);
+            }
         }
-    }, [profile]); // Dependency: re-run if profile changes
+    }, [props.isOpen, step, profile, loadingProfile, pickerFreeEntryTokens]); // Ensure all these are dependencies
+
+    // This one is specifically for updating the tokens when profile changes
+    useEffect(() => {
+        console.log("PickerInitModal DEBUG: Profile useEffect triggered. Profile:", profile, "Loading:", loadingProfile);
+        if (profile && profile.freeEntryTokens) {
+            console.log("PickerInitModal DEBUG: Profile has freeEntryTokens. Setting pickerFreeEntryTokens to:", profile.freeEntryTokens.pickerTokens || 0);
+            setPickerFreeEntryTokens(profile.freeEntryTokens.pickerTokens || 0);
+        } else if (!loadingProfile) {
+            // Only set to 0 if not loading, meaning profile is definitively empty or missing freeEntryTokens
+            console.log("PickerInitModal DEBUG: Profile or freeEntryTokens not available after loading. Setting pickerFreeEntryTokens to 0.");
+            setPickerFreeEntryTokens(0);
+        } else {
+            console.log("PickerInitModal DEBUG: Profile still loading, or no profile yet.");
+        }
+    }, [profile, loadingProfile]); // Dependencies: re-run if profile or loadingProfile changes
+    // --- END DEBUGGING LOGS ---
+
 
     // Fetch the user ledger (list of registered users) when transitioning to the 'onboarding' step.
     useEffect(() => {
@@ -487,12 +484,13 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     async function fetchLedger() {
         setLoadingLedger(true);
         try {
-            const res = await fetch("http://localhost:4000/api/usernames"); // Endpoint to fetch registered users
-            const data = await res.json();
+            // Using `api.get` now, which automatically adds the Authorization header
+            const response = await api.get("/api/usernames"); // <--- NEW: Using `api.get`
+            const data = response.data; // Axios automatically parses JSON
             const usersArray = Array.isArray(data) ? data : []; // Ensure data is an array
             console.log("📋 Fetched user ledger:", usersArray);
             setLedger(usersArray);
-        } catch (err) {
+        } catch (err: any) {
             console.error("Error fetching ledger:", err);
             toast.error("Problem loading users for selection.");
             setLedger([]); // Clear ledger on error
@@ -510,9 +508,9 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             return;
         }
 
-        // Firebase authentication token check
-        if (!firebaseIdToken) {
-            const msg = "Authentication required. Please log in to proceed.";
+        // Authentication token check: relies on firebaseAuthToken from ProfileContext being available
+        if (!firebaseAuthToken) { // Check `firebaseAuthToken` from `useProfile`
+            const msg = "Authentication required. Please log in to proceed. Firebase token not found.";
             setPaymentError(msg);
             onError(msg);
             toast.error(msg);
@@ -537,23 +535,17 @@ export default function PickerInitModal(props: PickerInitModalProps) {
 
                 console.log("Attempting to generate game entry token using free entry...");
                 // Call backend API to use a free entry token and generate a game entry token
-                const response = await fetch('http://localhost:4000/api/game-sessions/generate-entry-token', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${firebaseIdToken}`, // Authenticate with Firebase ID token
-                    },
-                    body: JSON.stringify({
-                        gameType: category.toLowerCase(), // e.g., 'picker'
-                        gameId: gameId,
-                        betAmount: 0, // Free entry, so bet amount is 0
-                        currency: 'FREE' // Indicate free entry to backend
-                    }),
+                // Using `api.post` which automatically handles Firebase token in header
+                const response = await api.post('/game-sessions/generate-entry-token', {
+                    gameType: category.toLowerCase(), // e.g., 'picker'
+                    gameId: gameId,
+                    betAmount: 0, // Free entry, so bet amount is 0
+                    currency: 'FREE' // Indicate free entry to backend
                 });
 
-                const data = await response.json();
+                const data = response.data; // Axios automatically parses JSON
 
-                if (!response.ok || !data.gameEntryTokenId) { // Check for success and token ID
+                if (!response.data || !response.data.gameEntryTokenId) { // Check for success and token ID
                     throw new Error(data.message || "Failed to consume free entry token on the server.");
                 }
 
@@ -563,7 +555,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 setStep("onboarding"); // Move to player selection
                 return; // Exit function as free entry path is complete
             }
-                        // Logic for SOL payment
+            
+            // Logic for SOL payment
             paymentAmountForBackend = ticketPriceSol;
             paymentCurrencyForBackend = 'SOL'; // Explicitly set to SOL
 
@@ -581,7 +574,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 SystemProgram.transfer({
                     fromPubkey: wallet.publicKey!,
                     toPubkey: new PublicKey(destinationWallet),
-                    lamports: Math.ceil(ticketPriceSol * 1e9) // Convert SOL to lamports
+                    lamports: Math.ceil(ticketPriceSol * LAMPORTS_PER_SOL) // Convert SOL to lamports
                 })
             );
 
@@ -603,28 +596,46 @@ export default function PickerInitModal(props: PickerInitModalProps) {
 
             // After successful Solana payment, call backend to issue game entry token
             console.log("Solana payment confirmed. Now generating game entry token...");
-            const generatePaidEntryTokenResponse = await fetch('http://localhost:4000/api/game-sessions/generate-entry-token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${firebaseIdToken}`,
-                },
-                body: JSON.stringify({
-                    gameType: category.toLowerCase(),
-                    gameId: gameId,
-                    betAmount: paymentAmountForBackend,
-                    currency: paymentCurrencyForBackend, // This will be 'SOL'
-                    paymentTxId: transactionSignature, // Link to the Solana transaction
-                }),
+            // Using `api.post` which automatically handles Firebase token in header
+            const generatePaidEntryTokenResponse = await api.post('/game-sessions/generate-entry-token', {
+                gameType: category.toLowerCase(),
+                gameId: gameId,
+                betAmount: paymentAmountForBackend,
+                currency: paymentCurrencyForBackend, // This will be 'SOL'
+                paymentTxId: transactionSignature, // Link to the Solana transaction
             });
 
-            const generatePaidEntryTokenData = await generatePaidEntryTokenResponse.json();
-            if (!generatePaidEntryTokenResponse.ok || !generatePaidEntryTokenData.gameEntryTokenId) {
+            const generatePaidEntryTokenData = generatePaidEntryTokenResponse.data; // Axios automatically parses JSON
+            if (!generatePaidEntryTokenResponse.data || !generatePaidEntryTokenData.gameEntryTokenId) { // Check for success and token ID
                 // If token generation fails AFTER Solana payment, it's a critical error
                 throw new Error(generatePaidEntryTokenData.message || 'Failed to generate game entry token after successful payment. Contact support with transaction ID: ' + transactionSignature);
             }
 
             setGameEntryTokenId(generatePaidEntryTokenData.gameEntryTokenId); // Store the received game entry token
+            
+            // --- NEW LOGIC: GRANT FREE ENTRY TOKEN ON SUCCESSFUL SOL PAYMENT ---
+            try {
+                console.log("Granting a picker token to user after successful SOL payment...");
+                // The Axios instance `api` will automatically attach the Firebase ID Token
+                const grantTokenResponse = await api.post('/profile/grant-token', {
+                    tokenType: 'pickerTokens', // Specifies which token type to grant (from backend, ensure it's 'pickerTokens')
+                    amount: 1, // Grant 1 token
+                    transactionId: transactionSignature, // Link to the SOL payment transaction for auditing
+                    reason: 'SOL_PAYMENT_PICKER_GAME' // A reason for logging/auditing
+                });
+                if (grantTokenResponse.data.success) {
+                    toast.success("1 Free Entry Token granted to your profile!");
+                    await refreshProfile(); // Crucial: Refresh profile context to show new token count immediately
+                } else {
+                    console.warn("Backend failed to grant token:", grantTokenResponse.data.message);
+                    toast.warn("Could not grant free token, but game entry is valid. Please contact support if needed.");
+                }
+            } catch (grantErr: any) {
+                console.error("Error granting free entry token after SOL payment:", grantErr);
+                toast.error("Failed to grant free token. Please contact support. Game entry is valid.");
+            }
+            // --- END NEW LOGIC ---
+
             setStep("onboarding"); // Move to player selection
 
         } catch (err: any) {
@@ -658,7 +669,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             return;
         }
         // Critical: Ensure Firebase ID token and game entry token are present
-        if (!firebaseIdToken) {
+        // `firebaseAuthToken` is from `useProfile` and should be reliable
+        if (!firebaseAuthToken) { // Check `firebaseAuthToken` from `useProfile`
             toast.error("Authentication token missing. Please try again or refresh.");
             onError("Authentication token missing.");
             return;
@@ -692,7 +704,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             paymentSignature: txSig,
             gameId: gameId,
             gameTitle: gameTitle,
-            authToken: firebaseIdToken, // Pass Firebase token for game validation
+            authToken: firebaseAuthToken, // Pass `firebaseAuthToken` from `useProfile`
             gameEntryTokenId: gameEntryTokenId, // Pass game entry token for backend validation
         };
 
@@ -707,7 +719,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             setStep("error"); // Transition to error state
             onError("Failed to initiate game configuration.");
         }
-    }, [onSuccess, onError, firebaseIdToken, gameEntryTokenId, txSig, gameId, gameTitle, paymentMethod, ticketPriceSol]); // Updated dependencies
+    }, [onSuccess, onError, firebaseAuthToken, gameEntryTokenId, txSig, gameId, gameTitle, paymentMethod, ticketPriceSol]); // Updated dependencies
 
     // Handles the modal cancellation, closing the modal.
     const handleCancel = () => {

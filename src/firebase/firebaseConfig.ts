@@ -1,8 +1,8 @@
 // src/firebase/firebaseConfig.ts
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeApp, FirebaseApp } from "firebase/app";
+import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-import { getAuth } from "firebase/auth"; // ✅ 1. Import getAuth
+import { getAuth, Auth } from "firebase/auth"; // ✅ 1. Import getAuth
 
 
 
@@ -18,10 +18,12 @@ const firebaseConfig = {
   measurementId: "G-BV5CGT7YX6"
 };
 
-// Initialize Firebase App
-const app = initializeApp(firebaseConfig);
 
-// ✅ 2. Initialize each service and export it
-export const db = getFirestore(app);
-export const storage = getStorage(app);
-export const auth = getAuth(app); // This creates and exports the auth instance for your whole app
+// Initialize Firebase
+export const app: FirebaseApp = initializeApp(firebaseConfig); // <--- THIS IS THE CRUCIAL LINE TO ADD/ENSURE
+export const auth: Auth = getAuth(app);
+export const db: Firestore = getFirestore(app); // Also good to export db if you use it frequently
+
+// You can add other services here if you initialize them with 'app'
+// export const storage = getStorage(app);
+// export const functions = getFunctions(app);
