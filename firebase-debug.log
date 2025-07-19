@@ -1,0 +1,76 @@
+[debug] [2025-07-17T08:00:54.002Z] ----------------------------------------------------------------------
+[debug] [2025-07-17T08:00:54.005Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\gmavr\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js init
+[debug] [2025-07-17T08:00:54.005Z] CLI Version:   14.11.0
+[debug] [2025-07-17T08:00:54.005Z] Platform:      win32
+[debug] [2025-07-17T08:00:54.005Z] Node Version:  v22.17.0
+[debug] [2025-07-17T08:00:54.005Z] Time:          Thu Jul 17 2025 11:00:54 GMT+0300 (Θερινή ώρα Ανατολικής Ευρώπης)
+[debug] [2025-07-17T08:00:54.006Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-07-17T08:00:54.012Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-07-17T08:00:54.012Z] > authorizing via signed-in user (degensgaming@gmail.com)
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  C:\NBF\GG Web3\DegenGaming
+
+Before we get started, keep in mind:
+
+  * You are currently outside your home directory
+
+[debug] [2025-07-17T08:01:20.320Z] ExitPromptError: User force closed the prompt with SIGINT
+    at Interface.sigint (C:\Users\gmavr\AppData\Roaming\npm\node_modules\firebase-tools\node_modules\@inquirer\core\dist\commonjs\lib\create-prompt.js:101:37)
+    at Interface.emit (node:events:518:28)
+    at Interface.emit (node:domain:489:12)
+    at [_ttyWrite] [as _ttyWrite] (node:internal/readline/interface:1132:18)
+    at ReadStream.onkeypress (node:internal/readline/interface:271:20)
+    at ReadStream.emit (node:events:530:35)
+    at ReadStream.emit (node:domain:489:12)
+    at emitKeys (node:internal/readline/utils:370:14)
+    at emitKeys.next (<anonymous>)
+    at ReadStream.onData (node:internal/readline/emitKeypressEvents:64:36)
+[error] 
+[error] Error: An unexpected error has occurred.
+[debug] [2025-07-17T08:01:40.973Z] ----------------------------------------------------------------------
+[debug] [2025-07-17T08:01:40.975Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\gmavr\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js init
+[debug] [2025-07-17T08:01:40.976Z] CLI Version:   14.11.0
+[debug] [2025-07-17T08:01:40.976Z] Platform:      win32
+[debug] [2025-07-17T08:01:40.976Z] Node Version:  v22.17.0
+[debug] [2025-07-17T08:01:40.977Z] Time:          Thu Jul 17 2025 11:01:40 GMT+0300 (Θερινή ώρα Ανατολικής Ευρώπης)
+[debug] [2025-07-17T08:01:40.977Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-07-17T08:01:40.982Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-07-17T08:01:40.983Z] > authorizing via signed-in user (degensgaming@gmail.com)
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  C:\NBF\GG Web3\DegenGaming
+
+Before we get started, keep in mind:
+
+  * You are currently outside your home directory
+
+[debug] [2025-07-17T08:02:18.834Z] ExitPromptError: User force closed the prompt with SIGINT
+    at Interface.sigint (C:\Users\gmavr\AppData\Roaming\npm\node_modules\firebase-tools\node_modules\@inquirer\core\dist\commonjs\lib\create-prompt.js:101:37)
+    at Interface.emit (node:events:518:28)
+    at Interface.emit (node:domain:489:12)
+    at [_ttyWrite] [as _ttyWrite] (node:internal/readline/interface:1132:18)
+    at ReadStream.onkeypress (node:internal/readline/interface:271:20)
+    at ReadStream.emit (node:events:530:35)
+    at ReadStream.emit (node:domain:489:12)
+    at emitKeys (node:internal/readline/utils:370:14)
+    at emitKeys.next (<anonymous>)
+    at ReadStream.onData (node:internal/readline/emitKeypressEvents:64:36)
+[error] 
+[error] Error: An unexpected error has occurred.

@@ -1,0 +1,180 @@
+@font-face {
+  font-family: 'SiderFont';
+  src: url('/WegenRaceAssets/sider-font.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Use SiderFont for all panels and main UI for WegenRace ONLY */
+.wegenrace-root,
+.wegenrace-sidebar,
+.leaderboard-panel,
+.eventlog-panel,
+.participants-panel,
+.race-bar-panel {
+  font-family: 'SiderFont', Arial, sans-serif !important;
+}
+
+
+.wegenrace-root {
+  display: flex;
+  min-height: 100vh;
+  background: #1a1a2e;
+}
+
+/* Sidebar (left) */
+.wegenrace-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  min-width: 220px;
+  max-width: 350px;
+  background: #161634;
+  padding: 16px 8px;
+  border-right: 2px solid #222260;
+  gap: 18px;
+}
+
+.leaderboard-panel, .eventlog-panel {
+  background: #232345;
+  border-radius: 12px;
+  box-shadow: 0px 2px 12px #0008;
+  overflow: hidden;
+  flex: none;
+  max-height: 520px;
+  display: flex;
+  flex-direction: column;
+}
+.leaderboard-scroll, .eventlog-scroll {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.5rem 0.8rem;
+}
+.leaderboard-panel h4, .eventlog-panel h4 {
+  font-weight: bold;
+  color: #ffd400;
+  margin: 0 0 5px 1rem;
+  font-size: 1.07rem;
+  letter-spacing: 1px;
+}
+
+/* Main area (right) */
+.wegenrace-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0px;
+  min-width: 0;
+}
+.race-bar-panel {
+  background: #171731;
+  color: #fff;
+  padding: 0.7rem 1.3rem 0.6rem 1.6rem;
+  border-bottom: 1px solid #232353;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+}
+
+#phaser-game-container {
+  width: 100%;
+  min-height: 420px;
+  background: #181828;
+  border-radius: 18px;
+  margin: 1.2rem 0 0.5rem 0;
+  border: 2.2px solid #232353;
+  position: relative;
+  flex: 1;
+}
+.participants-panel {
+  margin: 0.6rem 0 0 0;
+  background: #21215e;
+  border-radius: 11px;
+  min-height: 53px;
+  padding: 7px 15px;
+  display: flex;
+  gap: 17px;
+  align-items: center;
+  overflow-x: auto;
+}
+
+.participant-avatar {
+  border-radius: 99px;
+  border: 2px solid #ffe36e44;
+  width: 39px;
+  height: 39px;
+  object-fit: cover;
+  background: #555;
+  margin-bottom: 2px;
+}
+.participant-name {
+  font-size: 12px;
+  color: #fafaf7;
+  margin-top: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .wegenrace-root {
+    flex-direction: column;
+  }
+  .wegenrace-sidebar {
+    width: 100vw;
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 2px solid #232353;
+    max-width: none;
+    min-width: 0;
+  }
+  .leaderboard-panel, .eventlog-panel {
+    max-width: 50vw;
+    min-width: 180px;
+    margin-right: 8px;
+  }
+}
+/* Update the fullscreen mode styles */
+.fullscreen-mode {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  background: #1a1a2e;
+}
+
+.fullscreen-mode .wegenrace-sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 300px;
+  z-index: 111;
+  box-shadow: 7px 0 18px #03031a63;
+  background: #18183cde;
+  height: 100vh;
+}
+
+.fullscreen-mode .wegenrace-main {
+  position: fixed;
+  left: 300px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.fullscreen-mode #phaser-game-container {
+  flex: 1;
+  margin: 10px;
+  max-height: calc(100vh - 140px); /* Account for top bar and participants panel */
+}
+
+/* Fix the back button in fullscreen */
+.fullscreen-mode .back-to-games-btn {
+  z-index: 10000 !important;
+}
