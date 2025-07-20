@@ -1,6 +1,13 @@
-import React, { useState, useEffect } from 'react';
+// src/pages/Games.tsx
+
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { toast } from 'react-toastify'; // Ensure this is imported for toaster messages
+import { toast } from 'react-toastify';
+
+// --- CORRECTED IMPORTS ---
+import axios from 'axios';
+import { useProfile } from '../context/ProfileContext'; // Use your existing ProfileContext
+// --- END CORRECTED IMPORTS ---
 
 // Import all category-specific InitModal components
 import PickerInitModal from '../games/Picker/PickerInitModal';
@@ -15,19 +22,16 @@ import {
 } from 'react-icons/fa';
 
 // Wallet and payment configurations
-// Ensure this is your actual platform wallet address
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy"; 
-const CATEGORY_PAYMENT: { [key: string]: number } = { Arcade: 0.005, Picker: 0.01, PvP: 0.1, Casino: 0.02 }; // Defined as USD prices
+const CATEGORY_PAYMENT: { [key: string]: number } = { Arcade: 0.005, Picker: 0.01, PvP: 0.1, Casino: 0.02 };
 
-// Category configuration
 const categoryConfig: { [key: string]: any } = {
   Arcade: { icon: FaGamepad, color: 'from-purple-600 to-blue-600', bgColor: 'bg-purple-900/20', borderColor: 'border-purple-500/30', description: 'Classic arcade games' },
   Picker: { icon: FaGift, color: 'from-green-600 to-emerald-600', bgColor: 'bg-green-900/20', borderColor: 'border-green-500/30', description: 'Random selection games' },
   PvP: { icon: FaFistRaised, color: 'from-red-600 to-orange-600', bgColor: 'bg-red-900/20', borderColor: 'border-red-500/30', description: 'Player vs Player battles' },
-  Casino: { icon: FaDice, color: 'from-yellow-600 to-amber-600', bgColor: 'bg-yellow-900/20', borderColor: 'border-yellow-900/30', description: 'Traditional casino games' } // Fixed 'to-amber-600'
+  Casino: { icon: FaDice, color: 'from-yellow-600 to-amber-600', bgColor: 'bg-yellow-900/20', borderColor: 'border-yellow-900/30', description: 'Traditional casino games' }
 };
 
-// Games page related types
 type Game = {
   id: string;
   title: string;
@@ -36,13 +40,13 @@ type Game = {
   isNew?: boolean;
   isTrending?: boolean;
   prizePool?: string;
-  route: string; // The route to navigate to for this game, e.g., '/games/wegenrace'
+  route: string;
   description: string;
   solGathered?: number;
   solDistributed?: number;
-  ticketPriceUsd?: number; // This might still come from backend, but PickerInitModal doesn't use it directly now
+  ticketPriceUsd?: number;
   destinationWallet?: string;
-  minPlayers?: number; // Added for Picker game
+  minPlayers?: number;
 };
 
 type Category = {
@@ -51,7 +55,13 @@ type Category = {
   description?: string;
 };
 
-// Main Component
+interface FreeEntryTokens {
+    arcadeTokens: number;
+    pickerTokens: number;
+    casinoTokens: number;
+    pvpTokens: number;
+}
+
 export default function GamesPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [modalGame, setModalGame] = useState<Game | null>(null);
@@ -59,9 +69,37 @@ export default function GamesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  // --- CORRECTED: Use useProfile for currentUser and firebaseAuthToken ---
+  const { currentUser, firebaseAuthToken } = useProfile(); 
+
+  const [freeTokens, setFreeTokens] = useState<FreeEntryTokens | null>(null);
+  const [loadingTokens, setLoadingTokens] = useState(true);
+  const [errorTokens, setErrorTokens] = useState<string | null>(null);
 
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
+
+  const fetchFreeEntryTokens = useCallback(async () => {
+      if (!currentUser || !firebaseAuthToken) { // Check for firebaseAuthToken from useProfile
+          setLoadingTokens(false);
+          setErrorTokens("User not logged in or authentication token missing.");
+          return;
+      }
+
+      try {
+          // Use firebaseAuthToken directly, as it's already fetched by ProfileContext
+          const response = await axios.get<FreeEntryTokens>(`${process.env.VITE_BACKEND_URL || 'http://localhost:4000'}/api/user/free-entry-tokens`, {
+              headers: { Authorization: `Bearer ${firebaseAuthToken}` }, // Use firebaseAuthToken here
+          });
+          setFreeTokens(response.data);
+      } catch (error: any) {
+          console.error("Error fetching free entry tokens:", error);
+          setErrorTokens(error.response?.data?.message || "Failed to load free entry tokens.");
+          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
+      } finally {
+          setLoadingTokens(false);
+      }
+  }, [currentUser, firebaseAuthToken]); // Dependencies now include firebaseAuthToken
 
   useEffect(() => {
     console.log("DEBUG: GamesPage: Fetching games and categories data.");
@@ -70,14 +108,11 @@ export default function GamesPage() {
       fetch('http://localhost:4000/api/games').then(r => r.json()),
       fetch('http://localhost:4000/api/categories').then(r => r.json())
     ]).then(([gamesData, categoriesData]) => {
-      // Ensure gamesData includes ticketPriceUsd and destinationWallet for proper modal props
       const processedGames = gamesData.map((game: Game) => ({
         ...game,
-        ticketPriceUsd: CATEGORY_PAYMENT[game.category] || 0.01, // Default if not found
-        destinationWallet: PLATFORM_WALLET, // Assuming a single platform wallet for now
-        // For 'Picker' category, specifically 'Wegen Race', ensure minPlayers is set correctly.
-        // Backend should ideally provide this, but overriding here for known games like Wegen Race.
-        minPlayers: game.id === "wegen-race-game-id" ? 2 : undefined, // Assuming "wegen-race-game-id" is the ID for Wegen Race from your backend
+        ticketPriceUsd: CATEGORY_PAYMENT[game.category] || 0.01,
+        destinationWallet: PLATFORM_WALLET,
+        minPlayers: game.id === "wegen-race" ? 2 : undefined,
       }));
       console.log("DEBUG: GamesPage: Processed Games Data:", processedGames);
       console.log("DEBUG: GamesPage: Categories Data:", categoriesData);
@@ -91,10 +126,13 @@ export default function GamesPage() {
     });
   }, []);
 
+  useEffect(() => {
+    fetchFreeEntryTokens();
+  }, [fetchFreeEntryTokens]);
+
   const getGamesByCategory = (categoryId: string) =>
     games.filter(game => game.category === categoryId && game.title.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  // Game Card Component - All games now show modal first
   const GameCard = ({ game }: { game: Game }) => (
     <div className="group bg-slate-800 rounded-lg overflow-hidden hover:scale-105 transition-all duration-300 border border-slate-700 relative">
       <div onClick={() => setModalGame(game)} className="cursor-pointer">
@@ -134,7 +172,6 @@ export default function GamesPage() {
     </div>
   );
 
-  // Category Section Component
   const CategorySection = ({ category }: { category: Category }) => {
     const config = categoryConfig[category.id] || {};
     const IconComponent = config.icon || FaGamepad;
@@ -174,11 +211,9 @@ export default function GamesPage() {
     );
   };
 
-  // Main games page
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900/30 to-slate-900 pt-24 pb-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600 mb-4">Game Hub</h1>
           <p className="text-slate-300 text-xl max-w-2xl mx-auto mb-8">Compete, earn, and climb the leaderboards in our Web3 gaming ecosystem</p>
@@ -193,7 +228,6 @@ export default function GamesPage() {
           </div>
         </div>
 
-        {/* Featured Banner */}
         <div className="bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-2xl p-8 mb-12 border border-purple-500/30 backdrop-blur-md">
           <div className="flex flex-col lg:flex-row items-center gap-8">
             <div className="flex-1 text-center lg:text-left">
@@ -211,7 +245,36 @@ export default function GamesPage() {
           </div>
         </div>
 
-            {/* Category Sections */}
+        <div className="free-entry-tokens-display mb-8 p-6 bg-gray-800 rounded-lg shadow-lg border border-gray-700">
+            <h3 className="text-2xl font-bold text-white mb-4 text-center">Your Free Entry Tokens</h3>
+            {loadingTokens ? (
+                <p className="text-gray-400 text-center">Loading tokens...</p>
+            ) : errorTokens ? (
+                <p className="text-red-500 text-center">{errorTokens}</p>
+            ) : (currentUser && freeTokens) ? ( 
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-white text-center">
+                    <div className="p-3 bg-gray-700 rounded-md">
+                        <p className="text-xl font-semibold">Arcade</p>
+                        <p className="text-3xl font-bold text-blue-300 mt-1">{freeTokens.arcadeTokens}</p>
+                    </div>
+                    <div className="p-3 bg-gray-700 rounded-md">
+                        <p className="text-xl font-semibold">Picker</p>
+                        <p className="text-3xl font-bold text-green-300 mt-1">{freeTokens.pickerTokens}</p>
+                    </div>
+                    <div className="p-3 bg-gray-700 rounded-md">
+                        <p className="text-xl font-semibold">Casino</p>
+                        <p className="text-3xl font-bold text-yellow-300 mt-1">{freeTokens.casinoTokens}</p>
+                    </div>
+                    <div className="p-3 bg-gray-700 rounded-md">
+                        <p className="text-xl font-semibold">PvP</p>
+                        <p className="text-3xl font-bold text-red-300 mt-1">{freeTokens.pvpTokens}</p>
+                    </div>
+                </div>
+            ) : ( 
+                <p className="text-gray-400 text-center">Log in to view your free entry tokens.</p>
+            )}
+        </div>
+
         <div className="space-y-8">
           {loading ? (
             <div className="text-center text-xl text-purple-300 py-8">Loading games and categories...</div>
@@ -223,34 +286,23 @@ export default function GamesPage() {
             </div>
           )}
 
-          {/* Platform Stats Panel */}
           <div className="w-full mt-8 flex justify-center">
             <PlatformStatsPanel />
           </div>
         </div>
 
-        {/* Category-specific modals - Show correct modal based on selected game */}
         {modalGame && modalGame.category === "Picker" && (
           <PickerInitModal
             isOpen={!!modalGame}
             gameId={modalGame.id}
-            category={modalGame.category}
-            // Removed ticketPriceUsd prop as PickerInitModal now uses its own fixed internal fee.
-            destinationWallet={modalGame.destinationWallet || PLATFORM_WALLET}
+            gameType={modalGame.category}
             onSuccess={(gameConfigFromModal) => {
               console.log("DEBUG: GamesPage: PickerInitModal onSuccess triggered!");
               console.log("DEBUG: GamesPage: GameConfig received from PickerInitModal:", gameConfigFromModal);
               
-              // Validate critical properties for debugging purposes
               if (!gameConfigFromModal || typeof gameConfigFromModal !== 'object') {
                   console.error("ERROR: GamesPage: gameConfigFromModal is not a valid object!", gameConfigFromModal);
                   toast.error("Game configuration error. Please try again.");
-                  setModalGame(null);
-                  return;
-              }
-              if (!gameConfigFromModal.authToken) {
-                  console.error("ERROR: GamesPage: gameConfigFromModal is missing authToken!", gameConfigFromModal);
-                  toast.error("Authentication token missing for game. Please log in.");
                   setModalGame(null);
                   return;
               }
@@ -267,29 +319,24 @@ export default function GamesPage() {
                   return;
               }
 
-              // Close the modal and then navigate
               setModalGame(null); 
               console.log(`DEBUG: GamesPage: Navigating to ${modalGame.route} with gameConfig in state.`);
-              // THIS IS THE CRITICAL LINE (which was already there in your provided code)
               navigate(modalGame.route, { state: { gameConfig: gameConfigFromModal } });
             }}
             onError={msg => {
               console.error("ERROR: GamesPage: PickerInitModal onError:", msg);
               setModalGame(null);
-              toast.error(`Game initiation failed: ${msg}`); // Use toast for user feedback
+              toast.error(`Game initiation failed: ${msg}`);
             }}
             onClose={() => {
               console.log("DEBUG: GamesPage: PickerInitModal onClose triggered.");
               setModalGame(null);
             }}
             gameTitle={modalGame.title}
-            minPlayers={modalGame.minPlayers || 2} // Use minPlayers from game data, default to 2
+            minPlayers={modalGame.minPlayers || 2}
           />
         )}
 
-        {/* Other game category modals (Arcade, Casino, PvP) */}
-        {/* These still use window.location.href, as they seem to have a simpler navigation pattern */}
-        {/* If they also need to pass complex state, you would apply the same navigate(route, {state:{...}}) pattern */}
         {modalGame && modalGame.category === "Arcade" && (
           <ArcadeInitModal
             isOpen={!!modalGame}
@@ -300,7 +347,7 @@ export default function GamesPage() {
             onSuccess={sig => {
               console.log("DEBUG: GamesPage: ArcadeInitModal onSuccess. Sig:", sig);
               setModalGame(null);
-              window.location.href = modalGame.route; // Simplified for this category
+              window.location.href = modalGame.route;
             }}
             onError={msg => {
               console.error("ERROR: GamesPage: ArcadeInitModal onError:", msg);
@@ -322,7 +369,7 @@ export default function GamesPage() {
             onSuccess={sig => {
               console.log("DEBUG: GamesPage: CasinoInitModal onSuccess. Sig:", sig);
               setModalGame(null);
-              window.location.href = modalGame.route; // Simplified for this category
+              window.location.href = modalGame.route;
             }}
             onError={msg => {
               console.error("ERROR: GamesPage: CasinoInitModal onError:", msg);
@@ -344,7 +391,7 @@ export default function GamesPage() {
             onSuccess={sig => {
               console.log("DEBUG: GamesPage: PvPInitModal onSuccess. Sig:", sig);
               setModalGame(null);
-              window.location.href = modalGame.route; // Simplified for this category
+              window.location.href = modalGame.route;
             }}
             onError={msg => {
               console.error("ERROR: GamesPage: PvPInitModal onError:", msg);

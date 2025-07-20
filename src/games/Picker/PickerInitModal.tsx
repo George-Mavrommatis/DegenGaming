@@ -10,6 +10,11 @@ import { useProfile } from "../../context/ProfileContext";
 import { getAuth } from "firebase/auth";
 import { api } from '../../services/api';
 
+
+import axios from 'axios'; // For direct axios calls, if `api` doesn't cover all needs or for explicit calls
+// --- END NEW IMPORTS ---
+
+
 // Import the Player type from the WegenRaceGame module for type consistency.
 // Adjust this path if your WegenRaceGame interface is located elsewhere.
 import { Player as WegenRacePlayerType } from '../../games/Picker/WegenRace/wegenRaceGame';
@@ -386,8 +391,8 @@ interface PickerInitModalProps {
     onClose: () => void;
     gameId: string; // Unique identifier for the game
     gameTitle: string; // Title of the game (e.g., "Wegen Race")
-    category: string; // Category of the game (e.g., "picker")
-    destinationWallet: string; // Solana public key string for the recipient of payment
+    gameType: string; // The category of the game (e.g., "Picker", "Arcade")
+    // Removed destinationWallet prop as PickerInitModal now handles payment via backend
     minPlayers: number; // Minimum players required (passed to OnboardingPanel)
     // Callback for successful game setup, returning the complete game configuration
     onSuccess: (gameConfig: {
@@ -406,7 +411,7 @@ interface PickerInitModalProps {
 
 export default function PickerInitModal(props: PickerInitModalProps) {
     const {
-        gameId, category, destinationWallet, onSuccess,
+        gameId, gameType, onSuccess, // Renamed 'category' to 'gameType' for consistency
         onError, onClose, gameTitle, minPlayers = 2,
     } = props;
 
@@ -415,8 +420,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const { connection } = useConnection();
     // User profile context to access free entry tokens
     const { userProfile: profile, loadingAuth: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile(); // Corrected destructuring for loading and firebaseAuthToken
-    // Firebase current user
-    const { currentUser } = auth; // This is fine for direct Firebase SDK access within `OnboardingPanel`
+    // Firebase current user from AuthContext (for fetching specific token type if needed, though useProfile already provides it)
+    const { currentUser } = useAuth(); // Use useAuth for current user
 
     // State to manage the current step of the modal flow
     const [step, setStep] = useState<"pay" | "paying" | "onboarding" | "done" | "error">("pay");
@@ -438,40 +443,45 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const { loading: loadingPrices, error: pricingError, ticketPriceSol } = useTokenPricing();
 
     // State to track the number of free entry tokens the user has for this game type
-    const [pickerFreeEntryTokens, setPickerFreeEntryTokens] = useState<number>(0);
+    const [freeEntryTokensCount, setFreeEntryTokensCount] = useState<number>(0); // Renamed for clarity
 
+    // --- NEW: Dynamic destination wallet based on environment/game config ---
+    const destinationWallet = process.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy"; // Default or from env
 
     // --- DEBUGGING LOGS ---
-    // This one should always fire when the component renders or props change
     useEffect(() => {
         console.log("PickerInitModal DEBUG: Component Render - Initial state/props check");
         console.log("  props.isOpen:", props.isOpen);
         console.log("  Current step:", step);
         console.log("  profile (from useProfile):", profile);
-        console.log("  loadingProfile (from useProfile):", loadingProfile); // Use loadingProfile here
-        console.log("  pickerFreeEntryTokens (local state):", pickerFreeEntryTokens);
+        console.log("  loadingProfile (from useProfile):", loadingProfile);
+        console.log("  freeEntryTokensCount (local state):", freeEntryTokensCount);
         if (profile) {
             console.log("  profile.freeEntryTokens (direct access):", profile.freeEntryTokens);
             if (profile.freeEntryTokens) {
                 console.log("  profile.freeEntryTokens.pickerTokens (direct access):", profile.freeEntryTokens.pickerTokens);
             }
         }
-    }, [props.isOpen, step, profile, loadingProfile, pickerFreeEntryTokens]); // Ensure all these are dependencies
+    }, [props.isOpen, step, profile, loadingProfile, freeEntryTokensCount]);
 
-    // This one is specifically for updating the tokens when profile changes
+    // --- ORIGINAL LOGIC FOR UPDATING TOKEN COUNT FROM PROFILE ---
     useEffect(() => {
         console.log("PickerInitModal DEBUG: Profile useEffect triggered. Profile:", profile, "Loading:", loadingProfile);
         if (profile && profile.freeEntryTokens) {
-            console.log("PickerInitModal DEBUG: Profile has freeEntryTokens. Setting pickerFreeEntryTokens to:", profile.freeEntryTokens.pickerTokens || 0);
-            setPickerFreeEntryTokens(profile.freeEntryTokens.pickerTokens || 0);
+            // Ensure the specific token type is correctly accessed (e.g., 'pickerTokens')
+            // This relies on profile.freeEntryTokens having a key matching `<gameType>Tokens`
+            const tokenKey = `${gameType.toLowerCase()}Tokens`;
+            const currentTokens = profile.freeEntryTokens[tokenKey] || 0;
+            console.log(`PickerInitModal DEBUG: Profile has freeEntryTokens. Setting freeEntryTokensCount (${tokenKey}) to:`, currentTokens);
+            setFreeEntryTokensCount(currentTokens);
         } else if (!loadingProfile) {
-            // Only set to 0 if not loading, meaning profile is definitively empty or missing freeEntryTokens
-            console.log("PickerInitModal DEBUG: Profile or freeEntryTokens not available after loading. Setting pickerFreeEntryTokens to 0.");
-            setPickerFreeEntryTokens(0);
+            console.log("PickerInitModal DEBUG: Profile or freeEntryTokens not available after loading. Setting freeEntryTokensCount to 0.");
+            setFreeEntryTokensCount(0);
         } else {
             console.log("PickerInitModal DEBUG: Profile still loading, or no profile yet.");
         }
-    }, [profile, loadingProfile]); // Dependencies: re-run if profile or loadingProfile changes
+    }, [profile, loadingProfile, gameType]); // Add gameType as a dependency
+
     // --- END DEBUGGING LOGS ---
 
 
@@ -525,19 +535,19 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         try {
             let transactionSignature: string | null = null; // To store Solana transaction signature
             let paymentAmountForBackend: number = 0; // Amount to report to backend
-            let paymentCurrencyForBackend: 'SOL' | 'FREE' = currency; // Currency to report to backend
+            // `paymentCurrencyForBackend` is implicitly `currency`
 
             // Logic for 'FREE' entry token
             if (currency === 'FREE') {
-                if (pickerFreeEntryTokens <= 0) {
-                    throw new Error("No Degen Gaming Picker Free Entry Tokens available.");
+                if (freeEntryTokensCount <= 0) { // Check against the specific token count
+                    throw new Error(`No ${gameType} Free Entry Tokens available.`);
                 }
 
-                console.log("Attempting to generate game entry token using free entry...");
+                console.log(`Attempting to generate game entry token using free entry for ${gameType}...`);
                 // Call backend API to use a free entry token and generate a game entry token
                 // Using `api.post` which automatically handles Firebase token in header
                 const response = await api.post('/game-sessions/generate-entry-token', {
-                    gameType: category.toLowerCase(), // e.g., 'picker'
+                    gameType: gameType.toLowerCase(), // e.g., 'picker'
                     gameId: gameId,
                     betAmount: 0, // Free entry, so bet amount is 0
                     currency: 'FREE' // Indicate free entry to backend
@@ -558,8 +568,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             
             // Logic for SOL payment
             paymentAmountForBackend = ticketPriceSol;
-            paymentCurrencyForBackend = 'SOL'; // Explicitly set to SOL
-
+            // `paymentCurrencyForBackend` remains 'SOL'
+            
             if (ticketPriceSol <= 0 || isNaN(ticketPriceSol)) {
                 throw new Error("Invalid SOL amount for payment.");
             }
@@ -598,10 +608,10 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             console.log("Solana payment confirmed. Now generating game entry token...");
             // Using `api.post` which automatically handles Firebase token in header
             const generatePaidEntryTokenResponse = await api.post('/game-sessions/generate-entry-token', {
-                gameType: category.toLowerCase(),
+                gameType: gameType.toLowerCase(), // This will be 'picker'
                 gameId: gameId,
                 betAmount: paymentAmountForBackend,
-                currency: paymentCurrencyForBackend, // This will be 'SOL'
+                currency: 'SOL', // This will be 'SOL'
                 paymentTxId: transactionSignature, // Link to the Solana transaction
             });
 
@@ -615,13 +625,13 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             
             // --- NEW LOGIC: GRANT FREE ENTRY TOKEN ON SUCCESSFUL SOL PAYMENT ---
             try {
-                console.log("Granting a picker token to user after successful SOL payment...");
+                console.log(`Granting a ${gameType.toLowerCase()} token to user after successful SOL payment...`);
                 // The Axios instance `api` will automatically attach the Firebase ID Token
                 const grantTokenResponse = await api.post('/profile/grant-token', {
-                    tokenType: 'pickerTokens', // Specifies which token type to grant (from backend, ensure it's 'pickerTokens')
+                    tokenType: `${gameType.toLowerCase()}Tokens`, // Specifies which token type to grant (from backend, ensure it's 'pickerTokens')
                     amount: 1, // Grant 1 token
                     transactionId: transactionSignature, // Link to the SOL payment transaction for auditing
-                    reason: 'SOL_PAYMENT_PICKER_GAME' // A reason for logging/auditing
+                    reason: `SOL_PAYMENT_${gameType.toUpperCase()}_GAME` // A reason for logging/auditing
                 });
                 if (grantTokenResponse.data.success) {
                     toast.success("1 Free Entry Token granted to your profile!");
@@ -749,7 +759,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                     <button className="absolute right-4 top-4 text-gray-400 text-2xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
                 )}
                 <h2 className="text-3xl font-extrabold mb-2 text-yellow-300 text-center font-orbitron">🎮 Play {gameTitle || "Game"}</h2>
-                <div className="mb-2 text-xs text-purple-300 uppercase font-semibold tracking-widest">{category}</div>
+                <div className="mb-2 text-xs text-purple-300 uppercase font-semibold tracking-widest">{gameType}</div> {/* Changed category to gameType */}
 
                 {/* Payment Step: User chooses payment method */}
                 {step === "pay" && (
@@ -758,7 +768,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                             <div className="text-sm text-yellow-200 animate-pulse">Loading token balance…</div>
                         ) : (
                             <div className="text-base text-white font-medium">
-                                Available <span className="font-bold text-yellow-300">Degen Gaming Picker Free Entry Tokens</span>: <span className="text-lime-300">{pickerFreeEntryTokens}</span>
+                                Available <span className="font-bold text-yellow-300">Degen Gaming {gameType} Free Entry Tokens</span>: <span className="text-lime-300">{freeEntryTokensCount}</span> {/* Dynamic token type */}
                             </div>
                         )}
                         <div className="text-lg text-white font-medium">
@@ -787,11 +797,11 @@ export default function PickerInitModal(props: PickerInitModalProps) {
 
                                 {/* "Use Free Tokens" button, enabled only if tokens > 0 */}
                                 <button
-                                    className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${pickerFreeEntryTokens > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
+                                    className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
                                     onClick={() => handlePay('FREE')}
-                                    disabled={step === "paying" || pickerFreeEntryTokens <= 0}
+                                    disabled={step === "paying" || freeEntryTokensCount <= 0}
                                 >
-                                    Use Free Token! ({pickerFreeEntryTokens} available)
+                                    Use Free Token! ({freeEntryTokensCount} available)
                                 </button>
                             </div>
                         )}
