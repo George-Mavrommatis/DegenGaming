@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { getUserChats, ChatListItem } from "../utilities/chatService"; // Corrected import path
+import { getUserChats, ChatListItem } from "../utilities/chat"; // Corrected import path
 
 interface MessagingPanelProps {
   myUid: string;
