@@ -1,126 +1,154 @@
 // src/components/OnlineUsersPanel.tsx
 
-import React, { useEffect, useState } from "react";
-import { db } from "../firebase/firebaseConfig";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
-// import { useFirebaseUser } from "../firebase/useFirebaseUser"; // <-- REMOVE THIS LINE
-import { useProfile } from "../context/ProfileContext"; // <-- ADD THIS LINE
-import type { ProfileData } from "../types/profile";
-import { FaEnvelope, FaCrosshairs } from "react-icons/fa";
-import { toast } from "react-toastify";
+import React, { useEffect, useState, useCallback } from 'react';
+import { useProfile } from '../context/ProfileContext';
+import { socket } from '../socket'; 
+import { ProfileData } from '../types/profile'; 
+import { doc, getDoc } from 'firebase/firestore'; 
+import { db } from '../firebase/firebaseConfig';
+import { toast } from 'react-toastify';
 
-interface OnlineUsersPanelProps {
-  onSelectChat: (user: ProfileData) => void;
-  onSendDuel?: (user: ProfileData) => void;
+// Define the shape of the user object that can be selected for chat or duel
+interface SelectableUser {
+  uid: string; 
+  username: string;
+  avatarUrl?: string;
+  wallet?: string; 
 }
 
-export default function OnlineUsersPanel({
-  onSelectChat,
-  onSendDuel,
-}: OnlineUsersPanelProps) {
-  // Destructure 'currentUser' from useProfile, aliasing it to 'user' for consistency
-  const { currentUser: user, loadingAuth } = useProfile(); // Added loadingAuth for safety
+interface OnlineUsersPanelProps {
+  onSelectChat: (user: SelectableUser) => void;
+  onSendDuel: (targetUser: ProfileData) => void;
+}
 
-  const [onlineUsers, setOnlineUsers] = useState<ProfileData[]>([]);
-  const [loading, setLoading] = useState(true);
+// Assuming your REST API URL for online users:
+const ONLINE_USERS_API_URL = import.meta.env.PROD
+  ? "/onlineUsers"
+  : "http://localhost:4000/onlineUsers";
 
-  useEffect(() => {
-    // Only subscribe if authentication state is determined and user object is available (or null if not logged in)
-    if (!loadingAuth) {
-      console.log("OnlineUsersPanel: Subscribing to online users.");
-      const q = query(
-        collection(db, "users"),
-        where("isOnline", "==", true)
-      );
+export default function OnlineUsersPanel({ onSelectChat, onSendDuel }: OnlineUsersPanelProps) {
+  const { user, loading: profileLoading, isAuthenticated } = useProfile();
+  const [onlineUserProfiles, setOnlineUserProfiles] = useState<ProfileData[]>([]);
+  const [panelLoading, setPanelLoading] = useState(true);
 
-      const unsub = onSnapshot(q, (snap) => {
-        const users: ProfileData[] = snap.docs
-          .map(doc => ({ ...(doc.data() as ProfileData), uid: doc.id, id: doc.id }))
-          .filter(u => u.uid !== user?.uid); // Filter out the current user
-        
-        setOnlineUsers(users);
-        setLoading(false);
-        console.log("OnlineUsersPanel: Fetched online users:", users);
-      }, (error) => {
-        console.error("OnlineUsersPanel: Error fetching online users:", error);
-        toast.error("Failed to load online users.");
-        setLoading(false);
+  // Function to fetch profiles of online users given their UIDs
+  const fetchOnlineUserProfiles = useCallback(async (uids: string[]) => {
+    if (uids.length === 0) {
+      setOnlineUserProfiles([]);
+      return;
+    }
+    
+    // Filter out the current user's UID from the list
+    const filteredUids = uids.filter(uid => uid !== user?.uid);
+
+    try {
+      const profilePromises = filteredUids.map(async (uid) => {
+        const userDocRef = doc(db, 'users', uid); 
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          return userDocSnap.data() as ProfileData;
+        }
+        return null;
       });
 
-      // Cleanup function to unsubscribe when component unmounts or dependencies change
-      return () => {
-        console.log("OnlineUsersPanel: Unsubscribing from online users.");
-        unsub();
-      };
-    } else {
-      // If still loading auth, set loading to true and clear users
-      setLoading(true);
-      setOnlineUsers([]);
+      const fetchedProfiles = (await Promise.all(profilePromises)).filter(p => p !== null) as ProfileData[];
+      setOnlineUserProfiles(fetchedProfiles);
+    } catch (error) {
+      console.error("OnlineUsersPanel: Error fetching online user profiles:", error);
+      toast.error("Failed to load online user details.");
+      setOnlineUserProfiles([]);
     }
-  }, [user?.uid, loadingAuth]); // Add loadingAuth to dependencies
+  }, [user]); 
 
-  const handleSendMessage = (target: ProfileData) => {
-    if (!target.dmsOpen) {
-      toast.error(`${target.username || target.wallet} has closed direct messages.`);
+  useEffect(() => {
+    if (profileLoading) {
+      setPanelLoading(true);
       return;
     }
-    if (onSelectChat) {
-      onSelectChat(target);
-    } else {
-      toast.success(`DM window to ${target.username || target.wallet} would open here!`);
-    }
-  };
 
-  const handleSendDuel = (target: ProfileData) => {
-    if (!target.duelsOpen) {
-      toast.error(`${target.username || target.wallet} is not accepting duel invitations.`);
+    if (!isAuthenticated || !user) {
+      setOnlineUserProfiles([]);
+      setPanelLoading(false);
       return;
     }
-    if (onSendDuel) {
-      onSendDuel(target);
-    } else {
-      toast.success(`Duel invite sent to ${target.username || target.wallet}!`);
-    }
-  };
+
+    // --- Initial fetch via REST API ---
+    const fetchInitialOnlineUsers = async () => {
+      try {
+        const response = await fetch(ONLINE_USERS_API_URL);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        const initialUids: string[] = data.onlineUserIds || [];
+        await fetchOnlineUserProfiles(initialUids);
+      } catch (error) {
+        console.error("OnlineUsersPanel: Failed to fetch initial online users:", error);
+        toast.error("Failed to load online users.");
+      } finally {
+        setPanelLoading(false);
+      }
+    };
+    fetchInitialOnlineUsers();
+
+    // --- Listen for real-time updates via Socket.IO ---
+    socket.on('onlineUsers', async (uids: string[]) => {
+      console.log("OnlineUsersPanel: Socket.IO received updated online users list:", uids);
+      await fetchOnlineUserProfiles(uids); 
+    });
+
+    // Cleanup on unmount
+    return () => {
+      socket.off('onlineUsers');
+    };
+  }, [isAuthenticated, user, profileLoading, fetchOnlineUserProfiles]);
+
+  if (panelLoading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-400">
+        Loading online users...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-500">
+        Sign in to see online users.
+      </div>
+    );
+  }
+
+  // Filter out the current user from the displayed list
+  const displayOnlineProfiles = onlineUserProfiles.filter(p => p.uid !== user?.uid);
 
   return (
-    <div className="flex-1 flex flex-col bg-gray-900 rounded-xl shadow-lg p-3 relative min-h-[220px] max-h-[340px]">
-      <div className="overflow-y-auto flex-1 pr-1">
-        {loading ? (
-          <div className="text-gray-400 mt-12 mb-4 text-center">Loading online users…</div>
-        ) : onlineUsers.length === 0 ? (
-          <div className="text-gray-400 mt-10 mb-8 text-center">No users online.</div>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {onlineUsers.map(u => (
-              // Use u.uid as key, as it's guaranteed to be unique and consistent
-              <li key={u.uid} className="flex items-center bg-gray-800 p-3 rounded-lg">
-                <img src={u.avatarUrl || "/placeholder-avatar.png"} alt="avatar" className="w-9 h-9 rounded-full border-2 border-purple-400 object-cover mr-3" />
-                <div className="mr-auto min-w-0">
-                  <div className="font-bold text-[#FFA600] truncate">{u.username || (u.wallet ? u.wallet.slice(0, 7) + "..." : "Unknown")}</div>
-                  <div className="text-xs text-gray-400 truncate max-w-[120px]">{u.wallet}</div>
-                </div>
-                <button
-                  className={`ml-3 mr-2 text-white p-2 rounded-full hover:bg-purple-600 transition ${!u.dmsOpen && "opacity-50 pointer-events-none"}`}
-                  title={u.dmsOpen ? "Send Message" : "DMs Closed"}
-                  onClick={() => handleSendMessage(u)}
-                  disabled={!u.dmsOpen}
-                >
-                  <FaEnvelope />
-                </button>
-                <button
-                  className={`text-white p-2 rounded-full hover:bg-pink-600 transition ${!u.duelsOpen && "opacity-50 pointer-events-none"}`}
-                  title={u.duelsOpen ? "Send Duel Invite" : "Not Accepting Duels"}
-                  onClick={() => handleSendDuel(u)}
-                  disabled={!u.duelsOpen}
-                >
-                  <FaCrosshairs />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+    <div className="h-full bg-gray-900 overflow-y-auto">
+      <div className="font-bold p-3 text-purple-400">Online Users ({displayOnlineProfiles.length})</div>
+      {displayOnlineProfiles.length === 0 ? (
+        <div className="p-4 text-gray-500">No other users online right now.</div>
+      ) : (
+        displayOnlineProfiles.map(onlineProfile => (
+          <div key={onlineProfile.uid} className="flex items-center gap-2 px-3 py-2 hover:bg-purple-950 cursor-pointer">
+            <img 
+              src={onlineProfile.avatarUrl || "/WegenRaceAssets/G1small.png"} 
+              alt={onlineProfile.username} 
+              className="w-8 h-8 rounded-full object-cover" 
+            />
+            <div className="font-bold truncate">{onlineProfile.username}</div>
+            <div className="ml-auto flex gap-2">
+              <button 
+                onClick={() => onSelectChat({ uid: onlineProfile.uid, username: onlineProfile.username, avatarUrl: onlineProfile.avatarUrl, wallet: onlineProfile.wallet })} 
+                className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
+              >Chat</button>
+              <button 
+                onClick={() => onSendDuel(onlineProfile)} 
+                className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs"
+              >Duel</button>
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

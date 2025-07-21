@@ -26,6 +26,8 @@ export default defineConfig({
     }),
   ],
 
+  exclude: ['socket.io-client'],
+
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { FaUserPlus, FaUserCheck, FaUserTimes, FaTrash, FaSyncAlt } from "react-icons/fa";
 import { useProfile } from "../context/ProfileContext";
 import { db } from "../firebase/firebaseConfig";
@@ -11,6 +11,7 @@ import {
   agreeDuelTime,
   cancelDuelInvitation,
 } from "../utilities/duelInvitations";
+import { ProfileData } from "../types/profile"; // Import ProfileData
 
 type PendingType = "incoming" | "outgoing";
 type FullPending = {
@@ -23,8 +24,8 @@ type FullPending = {
 type Tab = "friends" | "pending";
 
 interface FriendsPanelProps {
-  onSelectChat: (user: any) => void;
-  onSendDuel?: (user: any) => void;
+  onSelectChat: (user: ProfileData) => void; // Explicitly define type as ProfileData
+  onSendDuel?: (user: ProfileData) => void;
 }
 
 const sectionCard =
@@ -37,97 +38,129 @@ export default function FriendsPanel({
   const { user, profile, refreshProfile } = useProfile();
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ProfileData[]>([]); // Explicitly type searchResults
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const [friends, setFriends] = useState<any[]>([]);
+  const [friends, setFriends] = useState<ProfileData[]>([]); // Explicitly type friends
   const [pendingList, setPendingList] = useState<FullPending[]>([]);
   const [tab, setTab] = useState<Tab>("friends");
 
-  useEffect(() => {
-    if (profile) {
-      if (!Array.isArray(profile.friends)) profile.friends = [];
-      if (!Array.isArray(profile.friendRequests)) profile.friendRequests = [];
-      if (!Array.isArray(profile.sentInvitations))
-        profile.sentInvitations = [];
-    }
-  }, [profile]);
+  const [loading, setLoading] = useState(true);
 
-  const loadAll = async () => {
-    if (!profile || !user) return;
-    if (profile.friends?.length) {
-      const docs = await Promise.all(
-        profile.friends.map((fid: string) => getDoc(doc(db, "users", fid)))
-      );
-      setFriends(
-        docs
-          .filter((d) => d.exists())
-          .map((d) => ({ id: d.id, ...d.data() }))
-      );
-    } else setFriends([]);
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+
+    if (!profile || !user) {
+        setFriends([]);
+        setPendingList([]);
+        setLoading(false);
+        return;
+    }
+    
+    const currentFriends = profile.friends || [];
+    const currentFriendRequests = profile.friendRequests || [];
+    const currentSentInvitations = profile.sentInvitations || [];
+
+    try {
+      if (currentFriends.length > 0) {
+        const docs = await Promise.all(
+          currentFriends.map((fid: string) => getDoc(doc(db, "users", fid)))
+        );
+        setFriends(
+          docs
+            .filter((d) => d.exists())
+            .map((d) => ({ id: d.id, ...d.data() as ProfileData })) // Cast to ProfileData
+        );
+      } else {
+        setFriends([]);
+      }
+    } catch (err) {
+      console.error("Error loading friends:", err);
+      setError("Failed to load friends data.");
+      setFriends([]);
+    }
+
     let merged: FullPending[] = [];
-    if (profile.friendRequests && profile.friendRequests.length > 0) {
-      const docsIncoming = await Promise.all(
-        profile.friendRequests.map((fid: string) => getDoc(doc(db, "users", fid)))
+    try {
+      if (currentFriendRequests.length > 0) {
+        const docsIncoming = await Promise.all(
+          currentFriendRequests.map((fid: string) => getDoc(doc(db, "users", fid)))
+        );
+        merged = merged.concat(
+          docsIncoming
+            .filter((d) => d.exists())
+            .map((d) => ({
+              id: d.id,
+              username: d.data()?.username || "",
+              wallet: d.data()?.wallet || "",
+              avatarUrl: d.data()?.avatarUrl,
+              __pendingType: "incoming" as const,
+            }))
+        );
+      }
+      if (currentSentInvitations.length > 0) {
+        const docsOutgoing = await Promise.all(
+          currentSentInvitations.map((fid: string) => getDoc(doc(db, "users", fid)))
+        );
+        merged = merged.concat(
+          docsOutgoing
+            .filter((d) => d.exists())
+            .map((d) => ({
+              id: d.id,
+              username: d.data()?.username || "",
+              wallet: d.data()?.wallet || "",
+              avatarUrl: d.data()?.avatarUrl,
+              __pendingType: "outgoing" as const,
+            }))
+        );
+      }
+      const seen = new Set<string>();
+      setPendingList(
+        merged.filter((x) => {
+          const key = `${x.id}_${x.__pendingType}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
       );
-      merged = merged.concat(
-        docsIncoming
-          .filter((d) => d.exists())
-          .map((d) => ({
-            id: d.id,
-            username: d.data().username || "",
-            wallet: d.data().wallet || "",
-            avatarUrl: d.data().avatarUrl,
-            __pendingType: "incoming" as const,
-          }))
-      );
+    } catch (err) {
+      console.error("Error loading pending requests:", err);
+      setError("Failed to load pending requests data.");
+      setPendingList([]);
+    } finally {
+        setLoading(false);
     }
-    if (profile.sentInvitations && profile.sentInvitations.length > 0) {
-      const docsOutgoing = await Promise.all(
-        profile.sentInvitations.map((fid: string) => getDoc(doc(db, "users", fid)))
-      );
-      merged = merged.concat(
-        docsOutgoing
-          .filter((d) => d.exists())
-          .map((d) => ({
-            id: d.id,
-            username: d.data().username || "",
-            wallet: d.data().wallet || "",
-            avatarUrl: d.data().avatarUrl,
-            __pendingType: "outgoing" as const,
-          }))
-      );
-    }
-    const seen = new Set<string>();
-    setPendingList(
-      merged.filter((x) => {
-        const key = `${x.id}_${x.__pendingType}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-    );
-  };
+  }, [user, profile]); 
 
   useEffect(() => {
     loadAll();
-    // eslint-disable-next-line
-  }, [user, profile]);
+  }, [user, profile, loadAll]); 
 
   const onSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSearching(true);
     setError("");
     setSuccess("");
+    if (!searchTerm.trim()) {
+        setError("Please enter a username or wallet address.");
+        setIsSearching(false);
+        return;
+    }
+    if (!user) {
+        setError("You must be logged in to search for users.");
+        setIsSearching(false);
+        return;
+    }
+
     try {
       const isWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(searchTerm.trim());
       const matches = await searchUsers({
         username: isWallet ? undefined : searchTerm.trim(),
         wallet: isWallet ? searchTerm.trim() : undefined,
       });
-      setSearchResults((matches || []).filter((u: any) => !!u.id));
+      setSearchResults((matches || []).filter((u: any) => u.id && u.id !== user.uid));
     } catch (e: any) {
       setError("Search failed: " + (e?.message || "Unknown error"));
     }
@@ -138,36 +171,56 @@ export default function FriendsPanel({
     setSuccess(msg);
     setTimeout(() => setSuccess(""), 2500);
   };
+  const showError = (msg: string) => {
+    setError(msg);
+    setTimeout(() => setError(""), 5000);
+  };
 
-  // Friend actions
   const sendFriendRequest = async (targetUserId: string) => {
-    if (!user) return setError("Not logged in!");
-    if (!profile) return setError("Profile not loaded yet!");
-    if (!targetUserId) return setError("No user selected!");
-    if (targetUserId === user.uid) return setError("You cannot friend yourself!");
+    if (!user) return showError("Not logged in!");
+    if (!profile) return showError("Profile not loaded yet!");
+    if (!targetUserId) return showError("No user selected!");
+    if (targetUserId === user.uid) return showError("You cannot friend yourself!");
+
+    const currentFriends = profile.friends || [];
+    const currentSentInvitations = profile.sentInvitations || [];
+    const currentFriendRequests = profile.friendRequests || [];
+
+    if (currentFriends.includes(targetUserId)) {
+        return showError("Already friends with this user.");
+    }
+    if (currentSentInvitations.includes(targetUserId)) {
+        return showError("Friend request already sent to this user.");
+    }
+    if (currentFriendRequests.includes(targetUserId)) {
+        return showError("This user has already sent you a friend request. Please accept it from the Pending tab.");
+    }
+
     try {
       await ensureUserHasArrays(user.uid);
       await ensureUserHasArrays(targetUserId);
+
       await updateDoc(doc(db, "users", targetUserId), {
         friendRequests: arrayUnion(user.uid),
       });
       await updateDoc(doc(db, "users", user.uid), {
         sentInvitations: arrayUnion(targetUserId),
       });
-      setError("");
+      showError("");
       setSearchTerm("");
       setSearchResults([]);
       showSuccess("Friend request sent!");
-      refreshProfile && (await refreshProfile());
+      await refreshProfile?.(); 
+      await loadAll();
     } catch (e: any) {
-      setError("Failed to send request: " + (e?.message || "Unknown error"));
+      showError("Failed to send request: " + (e?.message || "Unknown error"));
     }
   };
 
   const acceptFriendRequest = async (fromUserId: string) => {
-    if (!user) return setError("Not logged in!");
-    if (!profile) return setError("Profile not loaded yet!");
-    if (!fromUserId) return setError("Invalid incoming request!");
+    if (!user) return showError("Not logged in!");
+    if (!profile) return showError("Profile not loaded yet!");
+    if (!fromUserId) return showError("Invalid incoming request!");
     try {
       await ensureUserHasArrays(user.uid);
       await ensureUserHasArrays(fromUserId);
@@ -180,16 +233,17 @@ export default function FriendsPanel({
         sentInvitations: arrayRemove(user.uid),
       });
       showSuccess("Friend request accepted.");
-      refreshProfile && (await refreshProfile());
+      await refreshProfile?.();
+      await loadAll();
     } catch (e) {
-      setError("Failed to accept request");
+      showError("Failed to accept request");
     }
   };
 
   const declineFriendRequest = async (fromUserId: string) => {
-    if (!user) return setError("Not logged in!");
-    if (!profile) return setError("Profile not loaded yet!");
-    if (!fromUserId) return setError("Invalid incoming request!");
+    if (!user) return showError("Not logged in!");
+    if (!profile) return showError("Profile not loaded yet!");
+    if (!fromUserId) return showError("Invalid incoming request!");
     try {
       await ensureUserHasArrays(user.uid);
       await ensureUserHasArrays(fromUserId);
@@ -200,16 +254,17 @@ export default function FriendsPanel({
         sentInvitations: arrayRemove(user.uid),
       });
       showSuccess("Friend request declined.");
-      refreshProfile && (await refreshProfile());
+      await refreshProfile?.();
+      await loadAll();
     } catch (e) {
-      setError("Failed to decline request");
+      showError("Failed to decline request");
     }
   };
 
   const cancelSentInvitation = async (toUserId: string) => {
-    if (!user) return setError("Not logged in!");
-    if (!profile) return setError("Profile not loaded yet!");
-    if (!toUserId) return setError("No invitation found!");
+    if (!user) return showError("Not logged in!");
+    if (!profile) return showError("Profile not loaded yet!");
+    if (!toUserId) return showError("No invitation found!");
     try {
       await ensureUserHasArrays(user.uid);
       await ensureUserHasArrays(toUserId);
@@ -220,16 +275,17 @@ export default function FriendsPanel({
         friendRequests: arrayRemove(user.uid),
       });
       showSuccess("Invitation cancelled.");
-      refreshProfile && (await refreshProfile());
+      await refreshProfile?.();
+      await loadAll();
     } catch (e) {
-      setError("Failed to cancel invitation");
+      showError("Failed to cancel invitation");
     }
   };
 
   const removeFriend = async (friendId: string) => {
-    if (!user) return setError("Not logged in!");
-    if (!profile) return setError("Profile not loaded yet!");
-    if (!friendId) return setError("Invalid friend!");
+    if (!user) return showError("Not logged in!");
+    if (!profile) return showError("Profile not loaded yet!");
+    if (!friendId) return showError("Invalid friend!");
     try {
       await ensureUserHasArrays(user.uid);
       await ensureUserHasArrays(friendId);
@@ -240,9 +296,10 @@ export default function FriendsPanel({
         friends: arrayRemove(user.uid),
       });
       showSuccess("Friend removed.");
-      refreshProfile && (await refreshProfile());
+      await refreshProfile?.();
+      await loadAll();
     } catch (e) {
-      setError("Failed to remove friend");
+      showError("Failed to remove friend");
     }
   };
 
@@ -264,7 +321,7 @@ export default function FriendsPanel({
           />
           <button
             type="submit"
-            disabled={isSearching || !profile}
+            disabled={isSearching || !profile || !user}
             className="bg-purple-600 hover:bg-purple-700 active:bg-purple-800 transition px-4 py-2 rounded-lg flex items-center gap-2 font-bold text-white shadow disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <FaUserPlus /> Add
@@ -272,13 +329,18 @@ export default function FriendsPanel({
           <button
             type="button"
             onClick={async () => {
-              await refreshProfile?.();
-              setError("");
-              setSuccess("");
-              await loadAll();
+              if (user) {
+                showError("");
+                showSuccess("");
+                await refreshProfile?.();
+                await loadAll();
+              } else {
+                showError("Please log in to refresh friend data.");
+              }
             }}
             title="Refresh friends"
-            className="bg-gray-700 hover:bg-gray-600 ml-2 px-3 py-2 rounded-lg flex items-center text-white"
+            disabled={!user || !profile}
+            className="bg-gray-700 hover:bg-gray-600 ml-2 px-3 py-2 rounded-lg flex items-center text-white disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <FaSyncAlt />
           </button>
@@ -296,9 +358,10 @@ export default function FriendsPanel({
               className="flex gap-4 items-center border-b border-gray-700 last:border-b-0 py-2"
             >
               <img
-                src={r.avatarUrl || "/placeholder-avatar.png"}
+                src={r.avatarUrl || "/WegenRaceAssets/G1small.png"}
                 className="w-10 h-10 rounded-full object-cover bg-gray-700"
                 alt=""
+                onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
               />
               <div className="flex-1">
                 <div className="font-bold text-white">{r.username}</div>
@@ -336,88 +399,97 @@ export default function FriendsPanel({
           }`}
           onClick={() => setTab("pending")}
         >
-          Pending
+          Pending ({pendingList.length})
         </button>
       </div>
 
       {/* Friends List */}
       {tab === "friends" && (
         <div className={sectionCard + " flex-1 min-h-0 overflow-y-auto"}>
-          {friends.length === 0 && (
-            <div className="text-gray-400">No friends yet.</div>
-          )}
-          {friends.map((friend: any) => {
-            // Find duel invitation (if any) with this friend:
-            const duelWithFriend = (profile.duelInvitations || []).find(
-              (inv: any) =>
-                (inv.from === friend.id || inv.to === friend.id) &&
-                inv.status !== "cancelled"
-            );
-            return (
-              <div
-                key={friend.id || friend.wallet}
-                className="flex items-center gap-4 border-b border-gray-700 last:border-b-0 py-2 group"
-              >
-                <img
-                  src={friend.avatarUrl || "/placeholder-avatar.png"}
-                  className="w-10 h-10 rounded-full object-cover bg-gray-700"
-                  alt=""
-                />
+          {loading || !user ? (
+            <div className="text-gray-400 text-center py-4">
+              {loading ? "Loading friends..." : "Please log in to see your friends."}
+            </div>
+          ) : friends.length === 0 ? (
+            <div className="text-gray-400 text-center py-4">No friends yet. Add some to start chatting or dueling!</div>
+          ) : (
+            friends.map((friend: ProfileData) => { // Explicitly type 'friend'
+              const duelWithFriend = (profile?.duelInvitations || []).find(
+                (inv: any) =>
+                  (inv.from === friend.id || inv.to === friend.id) &&
+                  inv.status !== "cancelled"
+              );
+              return (
                 <div
-                  className="flex-1 cursor-pointer"
-                  onClick={() => onSelectChat(friend)}
+                  key={friend.id || friend.wallet}
+                  className="flex items-center gap-4 border-b border-gray-700 last:border-b-0 py-2 group"
                 >
-                  <div className="font-bold text-white group-hover:underline">
-                    {friend.username}
+                  <img
+                    src={friend.avatarUrl || "/WegenRaceAssets/G1small.png"}
+                    className="w-10 h-10 rounded-full object-cover bg-gray-700"
+                    alt=""
+                    onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                  />
+                  <div
+                    className="flex-1 cursor-pointer"
+                    onClick={() => onSelectChat(friend)} // Pass the full ProfileData
+                  >
+                    <div className="font-bold text-white group-hover:underline">
+                      {friend.username}
+                    </div>
+                    <div className="text-xs text-gray-400 break-all">
+                      {friend.wallet}
+                    </div>
                   </div>
-                  <div className="text-xs text-gray-400 break-all">
-                    {friend.wallet}
-                  </div>
-                </div>
-                <button
-                  className="bg-blue-700 hover:bg-blue-800 px-2 py-1 rounded text-xs font-semibold text-white shadow"
-                  onClick={() => onSelectChat(friend)}
-                  title="Chat"
-                >
-                  💬
-                </button>
-                <button
-                  className="bg-yellow-700 hover:bg-yellow-800 px-2 py-1 rounded text-xs font-semibold text-white shadow"
-                  onClick={() =>
-                    onSendDuel ? onSendDuel(friend) : sendDuelInvite(user, friend)
-                  }
-                  title="Duel"
-                  disabled={!!duelWithFriend}
-                >
-                  ⚔️ Duel
-                </button>
-                <button
-                  className="bg-red-700 hover:bg-red-800 px-2 py-1 rounded text-xs font-semibold text-white shadow"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFriend(friend.id);
-                  }}
-                  title="Remove Friend"
-                >
-                  <FaTrash />
-                </button>
-                {/* Inline duel negotiation UI */}
-                {duelWithFriend && (
-                  <div className="ml-3 flex flex-col text-xs bg-gray-900 p-2 rounded">
-                    <div>
-                      <b>Duel:</b>{" "}
-                      {duelWithFriend.status === "pending" &&
-                        "Waiting for response"}
+                  <button
+                    className="bg-blue-700 hover:bg-blue-800 px-2 py-1 rounded text-xs font-semibold text-white shadow"
+                    onClick={() => {
+                        console.log("FriendsPanel: Clicking chat for:", friend);
+                        console.log("Current user UID (myUid):", user?.uid);
+                        console.log("Target user UID (targetUid):", friend.id);
+                        onSelectChat(friend); // Pass the full ProfileData
+                    }}
+                    title="Chat"
+                  >
+                    💬
+                  </button>
+                  <button
+                    className="bg-yellow-700 hover:bg-yellow-800 px-2 py-1 rounded text-xs font-semibold text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() =>
+                      onSendDuel ? onSendDuel(friend) : sendDuelInvite(user, friend)
+                    }
+                    title="Duel"
+                    disabled={!!duelWithFriend || !user?.uid || !(profile?.duelsOpen ?? true)}
+                  >
+                    ⚔️ Duel
+                  </button>
+                  <button
+                    className="bg-red-700 hover:bg-red-800 px-2 py-1 rounded text-xs font-semibold text-white shadow"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeFriend(friend.id);
+                    }}
+                    title="Remove Friend"
+                  >
+                    <FaTrash />
+                  </button>
+                  {duelWithFriend && (
+                    <div className="ml-3 flex flex-col text-xs bg-gray-900 p-2 rounded w-48">
+                      <b className="text-purple-300">Duel:</b>{" "}
+                      {duelWithFriend.status === "pending" && (
+                         <span className="text-gray-400">Waiting for response</span>
+                      )}
+                      {/* --- BEGIN CORRECTION AREA --- */}
                       {duelWithFriend.status === "proposed" && (
-                        <span>
-                          Proposed time:{" "}
-                          <b>{duelWithFriend.suggestedTime}</b>
-                          {duelWithFriend.lastActionBy !== user.uid && (
-                            <span>
+                        <> {/* Use a React Fragment to wrap multiple elements */}
+                          <span className="text-gray-400">Time:</span>{" "}
+                          <b className="text-white">{duelWithFriend.suggestedTime}</b>
+                          {duelWithFriend.lastActionBy !== user?.uid && (
+                            <div className="mt-2">
                               <button
-                                className="ml-2 px-2 py-1 bg-green-700 text-white rounded"
+                                className="px-2 py-1 bg-green-700 text-white rounded text-xs hover:bg-green-600 mr-1"
                                 onClick={async () => {
-                                  await agreeDuelTime(
+                                  if (user?.uid) await agreeDuelTime(
                                     user.uid,
                                     duelWithFriend.invitationId,
                                     user.uid
@@ -427,9 +499,9 @@ export default function FriendsPanel({
                                 Agree
                               </button>
                               <button
-                                className="ml-2 px-2 py-1 bg-gray-600 text-white rounded"
+                                className="px-2 py-1 bg-red-700 text-white rounded text-xs hover:bg-red-600"
                                 onClick={async () => {
-                                  await cancelDuelInvitation(
+                                  if (user?.uid) await cancelDuelInvitation(
                                     user.uid,
                                     duelWithFriend.invitationId
                                   );
@@ -437,99 +509,107 @@ export default function FriendsPanel({
                               >
                                 Decline
                               </button>
-                            </span>
+                            </div>
                           )}
-                        </span>
+                        </>
                       )}
                       {duelWithFriend.status === "agreed" && (
-                        <span>
-                          Agreed! Time: <b>{duelWithFriend.agreedTime}</b>
-                          <span className="ml-2 text-green-400">
+                        <> {/* Use a React Fragment to wrap multiple elements */}
+                          <span className="text-gray-400">Agreed! Time:</span>{" "}
+                          <b className="text-white">{duelWithFriend.agreedTime}</b>
+                          <span className="block mt-1 text-green-400">
                             Room will be created soon.
                           </span>
-                        </span>
+                        </>
                       )}
-                    </div>
-                    {/* Propose time form */}
-                    {duelWithFriend.status === "pending" &&
-                      duelWithFriend.lastActionBy !== user.uid && (
-                        <form
-                          onSubmit={async (e) => {
-                            e.preventDefault();
-                            const time = (e.target as any).elements.time.value;
-                            await proposeDuelTime(
-                              user.uid,
-                              duelWithFriend.invitationId,
-                              time,
-                              user.uid
-                            );
-                          }}
-                        >
-                          <input
-                            type="datetime-local"
-                            name="time"
-                            className="bg-gray-800 text-white px-1 mr-2 rounded"
-                            required
-                          />
-                          <button
-                            className="bg-purple-700 px-2 py-1 rounded text-white"
-                            type="submit"
+                      {/* --- END CORRECTION AREA --- */}
+                      {duelWithFriend.status === "pending" &&
+                        duelWithFriend.lastActionBy !== user?.uid && (
+                          <form
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              const time = (e.target as any).elements.time.value;
+                              if (user?.uid) await proposeDuelTime(
+                                user.uid,
+                                duelWithFriend.invitationId,
+                                time,
+                                user.uid
+                              );
+                            }}
+                            className="mt-2 flex flex-col"
                           >
-                            Propose Time
-                          </button>
-                        </form>
-                      )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                            <input
+                              type="datetime-local"
+                              name="time"
+                              className="bg-gray-800 text-white px-1 py-1 mb-1 rounded text-xs"
+                              required
+                            />
+                            <button
+                              className="bg-purple-700 px-2 py-1 rounded text-white text-xs hover:bg-purple-600"
+                              type="submit"
+                            >
+                              Propose Time
+                            </button>
+                          </form>
+                        )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
 
       {/* Merged Pending */}
       {tab === "pending" && (
-        <div className={sectionCard}>
-          {pendingList.length === 0 && (
-            <div className="text-gray-400">No pending friend requests or invitations.</div>
-          )}
-          {pendingList.map((u, i) => (
-            <div key={u.id + u.__pendingType} className="flex items-center gap-4 border-b border-gray-700 last:border-b-0 py-2">
-              <img src={u.avatarUrl || "/placeholder-avatar.png"}
-                   className="w-10 h-10 rounded-full object-cover bg-gray-700"
-                   alt="" />
-              <div className="flex-1">
-                <div className="font-bold text-white">{u.username}</div>
-                <div className="text-xs text-gray-400 break-all">{u.wallet}</div>
-                <div className="text-xs text-yellow-300 mt-1">
-                  {u.__pendingType === "incoming" ? "Incoming request" : "Sent invitation"}
-                </div>
-              </div>
-              {u.__pendingType === "incoming" ? (
-                <>
-                  <button
-                    className="bg-green-700 hover:bg-green-800 px-3 py-1 rounded text-xs font-semibold text-white shadow"
-                    onClick={() => acceptFriendRequest(u.id)}
-                  >
-                    <FaUserCheck /> Accept
-                  </button>
-                  <button
-                    className="bg-gray-700 hover:bg-gray-800 ml-2 px-3 py-1 rounded text-xs font-semibold text-white shadow"
-                    onClick={() => declineFriendRequest(u.id)}
-                  >
-                    <FaUserTimes /> Decline
-                  </button>
-                </>
-              ) : (
-                <button
-                  className="bg-gray-700 hover:bg-gray-800 px-3 py-1 rounded text-xs font-semibold text-white shadow"
-                  onClick={() => cancelSentInvitation(u.id)}
-                >
-                  <FaUserTimes /> Cancel
-                </button>
-              )}
+        <div className={sectionCard + " flex-1 min-h-0 overflow-y-auto"}>
+          {loading || !user ? (
+            <div className="text-gray-400 text-center py-4">
+              {loading ? "Loading pending requests..." : "Please log in to see pending requests."}
             </div>
-          ))}
+          ) : pendingList.length === 0 ? (
+            <div className="text-gray-400 text-center py-4">No pending friend requests or invitations.</div>
+          ) : (
+            pendingList.map((u, i) => (
+              <div key={u.id + u.__pendingType} className="flex items-center gap-4 border-b border-gray-700 last:border-b-0 py-2">
+                <img src={u.avatarUrl || "/WegenRaceAssets/G1small.png"}
+                     className="w-10 h-10 rounded-full object-cover bg-gray-700"
+                     alt=""
+                     onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }} />
+                <div className="flex-1">
+                  <div className="font-bold text-white">{u.username}</div>
+                  <div className="text-xs text-gray-400 break-all">{u.wallet}</div>
+                  <div className="text-xs text-yellow-300 mt-1">
+                    {u.__pendingType === "incoming" ? "Incoming request" : "Sent invitation"}
+                  </div>
+                </div>
+                {u.__pendingType === "incoming" ? (
+                  <>
+                    <button
+                      className="bg-green-700 hover:bg-green-800 px-3 py-1 rounded text-xs font-semibold text-white shadow"
+                      onClick={() => acceptFriendRequest(u.id)}
+                    >
+                      <FaUserCheck /> Accept
+                    </button>
+                    <button
+                      className="bg-red-700 hover:bg-red-800 ml-2 px-3 py-1 rounded text-xs font-semibold text-white shadow"
+                      onClick={() => declineFriendRequest(u.id)}
+                    >
+                      <FaUserTimes /> Decline
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="bg-red-700 hover:bg-red-800 px-3 py-1 rounded text-xs font-semibold text-white shadow"
+                    onClick={() => cancelSentInvitation(u.id)}
+                  >
+                    <FaUserTimes /> Cancel
+                  </button>
+                )}
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>

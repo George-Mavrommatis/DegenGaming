@@ -1,265 +1,279 @@
+// src/context/ProfileContext.tsx
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo } from 'react';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { onAuthStateChanged, User as FirebaseUser, signOut as firebaseSignOut } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, Timestamp } from 'firebase/firestore'; // Added Timestamp
 import { auth, db } from '../firebase/firebaseConfig';
 import { toast } from 'react-toastify';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useNavigate } from 'react-router-dom';
+import { socket } from '../socket'; 
 
-// --- ProfileData Interface Definition ---
-// This defines the structure of a user's profile data stored in Firestore.
-export interface ProfileData {
-  uid: string;
-  username: string;
-  usernameLowercase: string;
-  wallet: string; // Solana wallet address
-  avatarUrl: string;
-  bio: string;
-  dmsOpen: boolean; // Whether direct messages are open
-  duelsOpen: boolean; // Whether duel invitations are open
-  isOnline: boolean; // User's online status
-  lastSeen: string; // Timestamp of last activity
-
-  // Nested objects for various stats
-  stats: {
-    arcadeXP: number;
-    pickerArcade: number;
-    pickerCasino: number;
-    // Add other game/platform specific stats here
-    [key: string]: number; // Allow for other dynamic stat keys
-  };
-
-  // Nested objects for different coin types
-  coins: {
-    arcade: number;
-    casino: number;
-    // Add other coin types here
-    [key: string]: number; // Allow for other dynamic coin keys
-  };
-
-  // Nested object for free entry tokens for different game types
-  freeEntryTokens: {
-    pickerTokens: number;
-    arcadeTokens: number;
-    casinoTokens: number;
-    // Add other free token types here
-    [key: string]: number; // Allow for other dynamic token keys
-  };
-
-  // Array to store recent game history entries
-  recentGames: any[]; // Consider defining a more specific interface for game history entries
-  
-  // You can add more fields as your application grows
-  // For example: lastLogin, createdDate, friendList, etc.
-}
-
-// --- DEFAULT_PROFILE Constant ---
-// This provides default values for a new user's profile or a fallback when data is missing.
-export const DEFAULT_PROFILE: ProfileData = {
-  uid: "",
-  username: "Guest",
-  usernameLowercase: "guest",
-  wallet: "",
-  avatarUrl: "/placeholder-avatar.png", // Default avatar if none is set
-  bio: "",
-  dmsOpen: true,
-  duelsOpen: true,
-  isOnline: false,
-  lastSeen: new Date().toISOString(), // Current timestamp as ISO string
-
-  stats: {
-    arcadeXP: 0,
-    pickerArcade: 0,
-    pickerCasino: 0,
-  },
-
-  coins: {
-    arcade: 0,
-    casino: 0,
-  },
-
-  freeEntryTokens: {
-    pickerTokens: 0,
-    arcadeTokens: 0,
-    casinoTokens: 0,
-  },
-
-  recentGames: [],
-};
+// Import the canonical ProfileData and DEFAULT_PROFILE from types/profile.ts
+import { ProfileData, DEFAULT_PROFILE } from '../types/profile'; 
 
 // --- ProfileContextType Interface ---
-// Defines the shape of the context value that will be provided to consumers.
 interface ProfileContextType {
-  currentUser: FirebaseUser | null; // The authenticated Firebase user object
-  userProfile: ProfileData; // The user's custom profile data from Firestore
-  isAuthenticated: boolean; // True if a user is logged in
-  loadingAuth: boolean; // True if authentication state is currently being determined
-  firebaseAuthToken: string | null; // Firebase ID token for backend authentication
-  refreshProfile: () => Promise<void>; // Function to manually refresh user profile data
-  updateUserProfile: (data: Partial<ProfileData>) => Promise<void>; // Function to update user profile
+  user: FirebaseUser | null; 
+  profile: ProfileData | null; 
+  isAuthenticated: boolean; 
+  loading: boolean; 
+  firebaseAuthToken: string | null; 
+  refreshProfile: () => Promise<void>; 
+  updateUserProfile: (data: Partial<ProfileData>) => Promise<void>; 
+  logout: () => Promise<void>; 
 }
 
 // Create the React Context
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 
+// --- Internal Helper: ensureUserProfileData ---
+const ensureUserProfileData = async (
+  firebaseUser: FirebaseUser,
+  walletPublicKey: string | null,
+  connected: boolean
+): Promise<ProfileData> => {
+  const userRef = doc(db, 'users', firebaseUser.uid);
+  const userSnap = await getDoc(userRef);
+
+  let profileData: ProfileData;
+
+  if (!userSnap.exists()) {
+    console.log("ensureUserProfileData: Creating new profile for", firebaseUser.uid);
+    const now = new Date().toISOString();
+    profileData = {
+      ...DEFAULT_PROFILE, 
+      uid: firebaseUser.uid, 
+      username: firebaseUser.displayName || `user-${Math.random().toString(36).substring(2, 9)}`,
+      usernameLowercase: (firebaseUser.displayName || `user-${Math.random().toString(36).substring(2, 9)}`).toLowerCase(),
+      avatarUrl: firebaseUser.photoURL || DEFAULT_PROFILE.avatarUrl,
+      wallet: walletPublicKey || "", 
+      isOnline: true, 
+      lastSeen: now,
+      createdAt: now,
+      lastLogin: now,
+    };
+    await setDoc(userRef, profileData);
+  } else {
+    console.log("ensureUserProfileData: Fetching existing profile for", firebaseUser.uid);
+    const fetchedData = userSnap.data() as ProfileData;
+    
+    profileData = {
+      ...DEFAULT_PROFILE,
+      ...fetchedData,
+      uid: firebaseUser.uid, 
+      stats: { ...DEFAULT_PROFILE.stats, ...(fetchedData.stats || {}) },
+      coins: { ...DEFAULT_PROFILE.coins, ...(fetchedData.coins || {}) },
+      freeEntryTokens: { ...DEFAULT_PROFILE.freeEntryTokens, ...(fetchedData.freeEntryTokens || {}) },
+      friends: fetchedData.friends || [],
+      friendRequests: fetchedData.friendRequests || [],
+      sentInvitations: fetchedData.sentInvitations || [],
+      duelInvitations: fetchedData.duelInvitations || [],
+      pvpRoomInvites: fetchedData.pvpRoomInvites || [],
+      recentGames: fetchedData.recentGames || [],
+    };
+
+    const updateFields: Partial<ProfileData> = {};
+    if (walletPublicKey && profileData.wallet !== walletPublicKey) {
+      updateFields.wallet = walletPublicKey;
+    }
+    const now = new Date().toISOString();
+    updateFields.isOnline = true;
+    updateFields.lastSeen = now;
+    updateFields.lastLogin = now;
+
+    if (Object.keys(updateFields).length > 0) {
+      console.log("ensureUserProfileData: Updating existing profile fields for", firebaseUser.uid, updateFields);
+      await updateDoc(userRef, updateFields);
+      profileData = { ...profileData, ...updateFields }; 
+    }
+  }
+  return profileData;
+};
+
+
 // --- ProfileProvider Component ---
-// This component wraps your application and provides the profile context to all children.
 export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<ProfileData>(DEFAULT_PROFILE);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [profile, setProfile] = useState<ProfileData | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [firebaseAuthToken, setFirebaseAuthToken] = useState<string | null>(null);
 
-  // Callback to refresh the user's profile data from Firestore
+  const { connected, disconnect, publicKey } = useWallet();
+  const navigate = useNavigate();
+
   const refreshProfile = useCallback(async () => {
-    if (!currentUser) {
-      console.log("ProfileContext: Cannot refresh profile - no current user.");
+    if (!user) {
+      console.warn("ProfileContext: Cannot refresh profile - no current Firebase user.");
+      setProfile(null); 
       return;
     }
 
-    console.log("ProfileContext: Refreshing profile for", currentUser.uid);
-    const userDocRef = doc(db, "users", currentUser.uid);
+    console.log("ProfileContext: Refreshing profile for", user.uid);
     try {
-      const userDocSnap = await getDoc(userDocRef);
-      if (userDocSnap.exists()) {
-        const fetchedProfileData = userDocSnap.data() as ProfileData;
-        
-        // Merge fetched data with DEFAULT_PROFILE to ensure all fields are present and typed correctly
-        const mergedProfile = {
-          ...DEFAULT_PROFILE,
-          ...fetchedProfileData,
-          stats: { ...DEFAULT_PROFILE.stats, ...(fetchedProfileData.stats || {}) },
-          coins: { ...DEFAULT_PROFILE.coins, ...(fetchedProfileData.coins || {}) },
-          freeEntryTokens: { ...DEFAULT_PROFILE.freeEntryTokens, ...(fetchedProfileData.freeEntryTokens || {}) },
-          recentGames: fetchedProfileData.recentGames || [],
-        };
-        setUserProfile(mergedProfile);
-        console.log("ProfileContext: Profile refreshed and set to:", mergedProfile);
-      } else {
-        // This case indicates a profile document that somehow got deleted while the user was logged in
-        console.warn("ProfileContext: User profile document not found during refresh for logged-in user. Resetting to default.");
-        setUserProfile(DEFAULT_PROFILE); // Fallback to default
-        // Optionally, you might want to create a new one here, or prompt the user.
-      }
+      const fetchedProfile = await ensureUserProfileData(user, publicKey?.toBase58() || null, connected);
+      setProfile(fetchedProfile);
+      console.log("ProfileContext: Profile refreshed:", fetchedProfile);
     } catch (error) {
       console.error("ProfileContext: Error during profile refresh:", error);
       toast.error("Failed to refresh user profile data.");
+      setProfile(null); 
     }
-  }, [currentUser]); // Dependency on currentUser ensures this function is stable as long as currentUser is stable
+  }, [user, publicKey, connected]);
 
-  // Callback to update the user's profile data in Firestore and local state
   const updateUserProfile = useCallback(async (data: Partial<ProfileData>) => {
-    if (!currentUser) {
+    if (!user) {
       toast.error("Not logged in to update profile.");
       console.warn("ProfileContext: Attempted to update profile without a logged-in user.");
       return;
     }
 
-    const userDocRef = doc(db, "users", currentUser.uid);
+    const userDocRef = doc(db, "users", user.uid);
     try {
-      await updateDoc(userDocRef, data);
-      // Optimistically update local state
-      setUserProfile(prev => ({
-        ...prev,
-        ...data,
-        // Deep merge nested objects if they are part of the update
-        stats: data.stats ? { ...prev.stats, ...data.stats } : prev.stats,
-        coins: data.coins ? { ...prev.coins, ...data.coins } : prev.coins,
-        freeEntryTokens: data.freeEntryTokens ? { ...prev.freeEntryTokens, ...data.freeEntryTokens } : prev.freeEntryTokens,
-        recentGames: data.recentGames ? data.recentGames : prev.recentGames,
-      }));
+      await updateDoc(userDocRef, { ...data, updatedAt: new Date().toISOString() });
+      setProfile(prev => {
+        if (!prev) return null; 
+        return {
+          ...prev,
+          ...data,
+          stats: data.stats ? { ...prev.stats, ...data.stats } : prev.stats,
+          coins: data.coins ? { ...prev.coins, ...data.coins } : prev.coins,
+          freeEntryTokens: data.freeEntryTokens ? { ...prev.freeEntryTokens, ...data.freeEntryTokens } : prev.freeEntryTokens,
+        };
+      });
       toast.success("Profile updated successfully!");
-      console.log("ProfileContext: Profile updated for", currentUser.uid, data);
+      console.log("ProfileContext: Profile updated for", user.uid, data);
     } catch (error) {
       console.error("ProfileContext: Error updating user profile:", error);
       toast.error("Failed to update profile.");
     }
-  }, [currentUser]); // Dependency on currentUser
+  }, [user]);
 
-  // Main effect for handling Firebase authentication state changes
+  const logout = useCallback(async () => {
+    console.log("ProfileContext: Explicit logout initiated.");
+    setLoading(true); 
+    try {
+      if (user) {
+        const userDocRef = doc(db, 'users', user.uid);
+        await updateDoc(userDocRef, { isOnline: false, lastSeen: new Date().toISOString() });
+        console.log("ProfileContext: User's online status set to false in Firestore.");
+      }
+      
+      if (socket.connected) {
+          socket.disconnect(); 
+          console.log("ProfileContext: Socket.IO disconnected.");
+      }
+
+      if (connected) {
+        await disconnect();
+        console.log("ProfileContext: Solana wallet disconnected.");
+      }
+
+      await firebaseSignOut(auth); 
+      console.log("ProfileContext: Signed out from Firebase.");
+
+      setUser(null);
+      setProfile(null);
+      setIsAuthenticated(false);
+      setFirebaseAuthToken(null);
+      
+      toast.info("You have been logged out.");
+      navigate('/landing');
+    } catch (error) {
+      console.error("ProfileContext: Error during explicit logout:", error);
+      toast.error("Failed to log out.");
+    } finally {
+      setLoading(false); 
+    }
+  }, [user, connected, disconnect, navigate]);
+
+
   useEffect(() => {
+    console.log("ProfileContext: onAuthStateChanged listener setup.");
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setLoadingAuth(true); // Indicate that authentication state is being determined
-      setCurrentUser(firebaseUser);
-      setIsAuthenticated(!!firebaseUser);
+      console.log("--- onAuthStateChanged Fired ---");
+      console.log("firebaseUser received:", firebaseUser ? firebaseUser.uid : null);
 
+      setLoading(true); 
+      
       if (firebaseUser) {
-        console.log("ProfileContext: Auth state changed - User logged in:", firebaseUser.uid);
-        const userDocRef = doc(db, "users", firebaseUser.uid);
-        try {
-          const userDocSnap = await getDoc(userDocRef);
-          if (userDocSnap.exists()) {
-            const fetchedProfileData = userDocSnap.data() as ProfileData;
-            console.log("ProfileContext: Raw profile fetched from Firestore (on auth change):", fetchedProfileData);
+        console.log("ProfileContext: User logged in:", firebaseUser.uid);
+        setUser(firebaseUser);
+        setIsAuthenticated(true);
 
-            // Merge fetched data with DEFAULT_PROFILE to ensure all fields are initialized
-            const mergedProfile = {
-              ...DEFAULT_PROFILE, // Start with all defaults from ProfileData interface
-              ...fetchedProfileData, // Overlay fetched data from Firestore
-              // Explicitly merge nested objects to ensure they are maps and have defaults
-              stats: { ...DEFAULT_PROFILE.stats, ...(fetchedProfileData.stats || {}) },
-              coins: { ...DEFAULT_PROFILE.coins, ...(fetchedProfileData.coins || {}) },
-              freeEntryTokens: { ...DEFAULT_PROFILE.freeEntryTokens, ...(fetchedProfileData.freeEntryTokens || {}) },
-              recentGames: fetchedProfileData.recentGames || [], // Ensure recentGames is an array
-              uid: firebaseUser.uid, // Ensure UID from Firebase user is used
-            };
-            setUserProfile(mergedProfile);
-            console.log("ProfileContext: Merged user profile set to:", mergedProfile);
-          } else {
-            // New user, or profile document missing - create a new one with default values
-            console.log("ProfileContext: User profile does not exist. Creating new default profile.");
-            const newProfile: ProfileData = {
-              ...DEFAULT_PROFILE, // Initialize from DEFAULT_PROFILE
-              uid: firebaseUser.uid,
-              username: firebaseUser.displayName || `user-${Math.random().toString(36).substring(2, 9)}`,
-              usernameLowercase: (firebaseUser.displayName || `user-${Math.random().toString(36).substring(2, 9)}`).toLowerCase(),
-              avatarUrl: firebaseUser.photoURL || DEFAULT_PROFILE.avatarUrl,
-              isOnline: true, // New users are online by default upon creation
-              lastSeen: new Date().toISOString(),
-            };
-            await setDoc(userDocRef, newProfile); // Set the new profile in Firestore
-            setUserProfile(newProfile); // Update local state
-            console.log("ProfileContext: New default profile created and set:", newProfile);
+        try {
+          const userProfileData = await ensureUserProfileData(firebaseUser, publicKey?.toBase58() || null, connected);
+          setProfile(userProfileData);
+          console.log("ProfileContext: User profile loaded/ensured:", userProfileData);
+
+          if (!socket.connected) {
+            socket.connect(); 
           }
+          socket.emit('setUid', firebaseUser.uid);
+          console.log("ProfileContext: Socket.IO setUid emitted for UID:", firebaseUser.uid);
+
         } catch (error) {
-          console.error("ProfileContext: Error fetching/creating user profile:", error);
-          setUserProfile(DEFAULT_PROFILE); // Fallback to default on error
+          console.error("ProfileContext: Error during profile load/ensure:", error);
+          setProfile(null); 
           toast.error("Error loading user profile. Please refresh.");
         }
 
-        // Get Firebase ID token for backend authentication
         try {
-          const token = await firebaseUser.getIdToken(true); // `true` forces a token refresh
+          const token = await firebaseUser.getIdToken(true);
           setFirebaseAuthToken(token);
-          console.log("ProfileContext: Firebase ID Token generated (on auth change).");
+          console.log("ProfileContext: Firebase ID Token generated.");
         } catch (error) {
-          console.error("ProfileContext: Error getting Firebase ID token (on auth change):", error);
+          console.error("ProfileContext: Error getting Firebase ID token:", error);
           setFirebaseAuthToken(null);
         }
       } else {
-        // User logged out
-        console.log("ProfileContext: Auth state changed - User logged out.");
-        setCurrentUser(null);
-        setUserProfile(DEFAULT_PROFILE); // Reset profile to default state
+        console.log("ProfileContext: User logged out from Firebase.");
+        setUser(null);
+        setProfile(null);
         setIsAuthenticated(false);
         setFirebaseAuthToken(null);
+        
+        if (socket.connected) {
+          socket.disconnect();
+          console.log("ProfileContext: Socket.IO disconnected.");
+        }
       }
-      setLoadingAuth(false); // Authentication state determination complete
+      setLoading(false); 
+      console.log("--- onAuthStateChanged Finished ---");
     });
 
-    // Cleanup function: unsubscribe from auth state changes when component unmounts
-    return () => unsubscribe();
-  }, []); // Empty dependency array ensures this effect runs only once on mount
+    return () => {
+        console.log("ProfileContext: Cleaning up onAuthStateChanged listener.");
+        unsubscribe();
+    };
+  }, [publicKey, connected]); 
 
-  // Memoize the context value to prevent unnecessary re-renders of consumers
+  useEffect(() => {
+    if (user && !connected && !loading && isAuthenticated) {
+      console.log("ProfileContext: Solana wallet disconnected for active Firebase user. Initiating Firebase logout...");
+      if (auth.currentUser && auth.currentUser.uid === user.uid) {
+          firebaseSignOut(auth).then(() => {
+            console.log("ProfileContext: Firebase user signed out due to Solana wallet disconnect.");
+          }).catch((error) => {
+            console.error("ProfileContext: Error signing out from Firebase after Solana wallet disconnect:", error);
+            toast.error("Failed to log out after wallet disconnect.");
+          });
+      } else {
+        console.log("ProfileContext: auth.currentUser mismatch or null after Solana disconnect. No action.");
+      }
+    }
+  }, [connected, user, loading, isAuthenticated]); 
+
   const contextValue = useMemo(() => ({
-    currentUser,
-    userProfile,
+    user,
+    profile,
     isAuthenticated,
-    loadingAuth,
+    loading,
     firebaseAuthToken,
     refreshProfile,
     updateUserProfile,
-  }), [currentUser, userProfile, isAuthenticated, loadingAuth, firebaseAuthToken, refreshProfile, updateUserProfile]);
+    logout,
+  }), [user, profile, isAuthenticated, loading, firebaseAuthToken, refreshProfile, updateUserProfile, logout]);
 
   return (
     <ProfileContext.Provider value={contextValue}>
@@ -268,8 +282,6 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
   );
 };
 
-// --- useProfile Custom Hook ---
-// Provides a convenient way for functional components to access the profile context.
 export const useProfile = () => {
   const context = useContext(ProfileContext);
   if (context === undefined) {

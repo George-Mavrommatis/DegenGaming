@@ -3,17 +3,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import axios from 'axios'; // Ensure axios is imported
+import { useProfile } from '../context/ProfileContext';
 
-// --- CORRECTED IMPORTS ---
-import axios from 'axios';
-import { useProfile } from '../context/ProfileContext'; // Use your existing ProfileContext
-// --- END CORRECTED IMPORTS ---
-
-// Import all category-specific InitModal components
+// Import all category-specific InitModal components (ensure these paths are correct)
 import PickerInitModal from '../games/Picker/PickerInitModal';
-import ArcadeInitModal from '../games/Arcade/ArcadeInitModal'; // Assuming these exist
-import CasinoInitModal from '../games/Casino/CasinoInitModal'; // Assuming these exist
-import PvPInitModal from '../games/PvP/PvPInitModal'; // Assuming these exist
+import ArcadeInitModal from '../games/Arcade/ArcadeInitModal';
+import CasinoInitModal from '../games/Casino/CasinoInitModal';
+import PvPInitModal from '../games/PvP/PvPInitModal';
 
 import PlatformStatsPanel from "../components/PlatformStatsPanel";
 import {
@@ -67,47 +64,74 @@ export default function GamesPage() {
   const [modalGame, setModalGame] = useState<Game | null>(null);
   const [games, setGames] = useState<Game[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // Loading for games/categories
   const navigate = useNavigate();
-  // --- CORRECTED: Use useProfile for currentUser and firebaseAuthToken ---
-  const { currentUser, firebaseAuthToken } = useProfile(); 
+  const { currentUser, firebaseAuthToken } = useProfile(); // Get both currentUser (user data) and firebaseAuthToken
 
   const [freeTokens, setFreeTokens] = useState<FreeEntryTokens | null>(null);
-  const [loadingTokens, setLoadingTokens] = useState(true);
+  const [loadingTokens, setLoadingTokens] = useState(true); // Loading for free tokens
   const [errorTokens, setErrorTokens] = useState<string | null>(null);
+
+  // This line needs to correctly point to your backend.
+  // Ensure your .env file in the project root contains VITE_BACKEND_URL=http://localhost:8000
+  const API_BASE_URL = process.env.VITE_BACKEND_URL || 'http://localhost:4000'; 
 
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
 
+  // Fetch free entry tokens
   const fetchFreeEntryTokens = useCallback(async () => {
-      if (!currentUser || !firebaseAuthToken) { // Check for firebaseAuthToken from useProfile
+      setLoadingTokens(true);
+      setErrorTokens(null);
+      // Guard against calls when user/token is not available
+      if (!currentUser || !firebaseAuthToken) {
+          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
+          setErrorTokens("Log in to view your free entry tokens.");
           setLoadingTokens(false);
-          setErrorTokens("User not logged in or authentication token missing.");
           return;
       }
 
       try {
-          // Use firebaseAuthToken directly, as it's already fetched by ProfileContext
-          const response = await axios.get<FreeEntryTokens>(`${process.env.VITE_BACKEND_URL || 'http://localhost:4000'}/api/user/free-entry-tokens`, {
-              headers: { Authorization: `Bearer ${firebaseAuthToken}` }, // Use firebaseAuthToken here
+          const response = await axios.get<FreeEntryTokens>(`${API_BASE_URL}/api/user/free-entry-tokens`, {
+              headers: { Authorization: `Bearer ${firebaseAuthToken}` },
           });
           setFreeTokens(response.data);
       } catch (error: any) {
           console.error("Error fetching free entry tokens:", error);
           setErrorTokens(error.response?.data?.message || "Failed to load free entry tokens.");
-          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
+          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 }); // Reset on error
       } finally {
           setLoadingTokens(false);
       }
-  }, [currentUser, firebaseAuthToken]); // Dependencies now include firebaseAuthToken
+  }, [currentUser, firebaseAuthToken, API_BASE_URL]);
 
+  // Main useEffect for fetching games and categories
   useEffect(() => {
+    // Crucial Guard: Only attempt to fetch if Firebase Auth Token is available.
+    // This prevents 404s/permission denied if the token isn't ready yet.
+    if (!firebaseAuthToken) { 
+        setLoading(false); // Stop loading, as we can't fetch protected resources
+        console.warn("GamesPage: No Firebase Auth Token available. Skipping protected API calls for games and categories.");
+        return;
+    }
+
     console.log("DEBUG: GamesPage: Fetching games and categories data.");
-    setLoading(true);
+    setLoading(true); // Start loading for main game data
+
+    const config = {
+        headers: {
+            Authorization: `Bearer ${firebaseAuthToken}` // Add authorization header
+        }
+    };
+
     Promise.all([
-      fetch('http://localhost:4000/api/games').then(r => r.json()),
-      fetch('http://localhost:4000/api/categories').then(r => r.json())
-    ]).then(([gamesData, categoriesData]) => {
+      // Ensure API_BASE_URL is correctly configured via .env
+      axios.get<Game[]>(`${API_BASE_URL}/api/games`, config), 
+      axios.get<Category[]>(`${API_BASE_URL}/api/categories`, config) 
+    ]).then(([gamesResponse, categoriesResponse]) => {
+      const gamesData = gamesResponse.data;
+      const categoriesData = categoriesResponse.data;
+
       const processedGames = gamesData.map((game: Game) => ({
         ...game,
         ticketPriceUsd: CATEGORY_PAYMENT[game.category] || 0.01,
@@ -118,17 +142,19 @@ export default function GamesPage() {
       console.log("DEBUG: GamesPage: Categories Data:", categoriesData);
       setGames(processedGames);
       setCategories(categoriesData);
-      setLoading(false);
+      setLoading(false); // Stop loading for main game data
     }).catch(err => {
-      setLoading(false);
-      toast.error("Failed to load game data: " + err.message);
+      setLoading(false); // Stop loading for main game data
+      const errorMessage = err.response?.data?.message || err.message || "Unknown error";
+      toast.error("Failed to load game data: " + errorMessage);
       console.error("ERROR: GamesPage: Failed to load game data:", err);
     });
-  }, []);
+  }, [firebaseAuthToken, API_BASE_URL]); // Depend on firebaseAuthToken and API_BASE_URL
 
+  // useEffect for fetching free entry tokens separately
   useEffect(() => {
     fetchFreeEntryTokens();
-  }, [fetchFreeEntryTokens]);
+  }, [fetchFreeEntryTokens]); // Depend on the memoized fetchFreeEntryTokens
 
   const getGamesByCategory = (categoryId: string) =>
     games.filter(game => game.category === categoryId && game.title.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -177,6 +203,10 @@ export default function GamesPage() {
     const IconComponent = config.icon || FaGamepad;
     const categoryGames = getGamesByCategory(category.id);
 
+    // Only render section if there are games AFTER loading has completed AND there are no games
+    // This allows "Loading games..." to show while fetching.
+    if (!loading && categoryGames.length === 0) return null; 
+
     return (
       <div className={`${config.bgColor || 'bg-slate-900/20'} rounded-2xl p-6 border ${config.borderColor || 'border-slate-700/30'}`}>
         <div className="flex items-center justify-between mb-6">
@@ -195,7 +225,9 @@ export default function GamesPage() {
             </Link>
           )}
         </div>
-        {categoryGames.length > 0 ? (
+        {loading ? (
+            <div className="text-center py-8 text-gray-500">Loading games...</div>
+        ) : categoryGames.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {categoryGames.slice(0, 3).map(game => (
               <GameCard key={game.id} game={game} />
@@ -204,7 +236,7 @@ export default function GamesPage() {
         ) : (
           <div className="text-center py-8 text-gray-500">
             <FaGamepad className="mx-auto text-4xl mb-2" />
-            <p>No games found matching your search</p>
+            <p>No games found in this category.</p>
           </div>
         )}
       </div>
@@ -251,7 +283,7 @@ export default function GamesPage() {
                 <p className="text-gray-400 text-center">Loading tokens...</p>
             ) : errorTokens ? (
                 <p className="text-red-500 text-center">{errorTokens}</p>
-            ) : (currentUser && freeTokens) ? ( 
+            ) : (currentUser && freeTokens) ? ( // Check currentUser exists for display
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-white text-center">
                     <div className="p-3 bg-gray-700 rounded-md">
                         <p className="text-xl font-semibold">Arcade</p>
@@ -270,19 +302,24 @@ export default function GamesPage() {
                         <p className="text-3xl font-bold text-red-300 mt-1">{freeTokens.pvpTokens}</p>
                     </div>
                 </div>
-            ) : ( 
+            ) : (
+                // This state should indicate not logged in rather than an error if errorTokens is null
                 <p className="text-gray-400 text-center">Log in to view your free entry tokens.</p>
             )}
         </div>
 
         <div className="space-y-8">
-          {loading ? (
+          {loading ? ( // Use the 'loading' state for games/categories
             <div className="text-center text-xl text-purple-300 py-8">Loading games and categories...</div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {sortedCategories.map(category => (
-                <CategorySection key={category.id} category={category} />
-              ))}
+              {sortedCategories.length > 0 ? (
+                sortedCategories.map(category => (
+                  <CategorySection key={category.id} category={category} />
+                ))
+              ) : (
+                <div className="col-span-full text-center text-xl text-gray-500 py-8">No categories found or loaded.</div>
+              )}
             </div>
           )}
 
@@ -291,6 +328,7 @@ export default function GamesPage() {
           </div>
         </div>
 
+        {/* Modals remain mostly the same, ensure they correctly use game.id and game.category */}
         {modalGame && modalGame.category === "Picker" && (
           <PickerInitModal
             isOpen={!!modalGame}
