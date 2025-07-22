@@ -8,7 +8,7 @@
  lerna-debug.log*
  firebase-debug.log* 
 serviceAccountKey.json
-
+.env
  node_modules
  dist
  dist-ssr
