@@ -1,13 +1,14 @@
-// src/services/api.ts
+// DegenGamingFrontend/src/services/api.ts
+// Compare this with your branch, ensure all these methods are present and correct.
 
 import axios from 'axios';
 import { getAuth } from 'firebase/auth';
 import { toast } from 'react-toastify';
+import { ChatListItem } from '../utilities/chat'; 
 
 // Define your API base URL.
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
-// Create an Axios instance
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -15,19 +16,22 @@ const apiClient = axios.create({
   },
 });
 
-// Request Interceptor: Add Authorization header to every outgoing request
 apiClient.interceptors.request.use(async (config) => {
   const auth = getAuth();
   const user = auth.currentUser;
 
-  // Paths that do NOT require authentication (e.g., /register, /login, /).
-  const publicPaths = ['/', '/register', '/login', '/platform-stats'];
+  const publicPaths = [
+    '/', '/register', '/login', '/platform-stats', 
+    '/leaderboards', 
+    '/games', 
+    '/categories' 
+  ]; 
 
-  // Check if the current request URL (relative to base URL, removing leading slash for comparison) is in publicPaths
   const requestPath = config.url?.startsWith('/') ? config.url.substring(1) : config.url;
   const isPublicPath = publicPaths.some(path => {
     const publicPathClean = path.startsWith('/') ? path.substring(1) : path;
-    return requestPath?.startsWith(publicPathClean);
+    return requestPath?.startsWith(publicPathClean) && 
+           (requestPath.length === publicPathClean.length || requestPath[publicPathClean.length] === '/' || requestPath.includes('?'));
   });
 
   if (!isPublicPath && user) {
@@ -46,7 +50,6 @@ apiClient.interceptors.request.use(async (config) => {
   return Promise.reject(error);
 });
 
-// Response Interceptor: Handle common errors and display toasts
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -77,9 +80,7 @@ apiClient.interceptors.response.use(
   }
 );
 
-// --- API Service Functions ---
 export const apiService = {
-  // Authentication
   register: async (userData: any) => {
     const response = await apiClient.post('/register', userData);
     return response.data;
@@ -89,7 +90,6 @@ export const apiService = {
     return response.data;
   },
 
-  // Profile
   getProfile: async () => {
     const response = await apiClient.get('/profile');
     return response.data;
@@ -99,7 +99,6 @@ export const apiService = {
     return response.data;
   },
 
-  // Games & Categories
   getGames: async () => {
     const response = await apiClient.get('/games');
     return response.data;
@@ -109,25 +108,21 @@ export const apiService = {
     return response.data;
   },
 
-  // Game Initiation
   initiateGame: async (gameData: any) => {
     const response = await apiClient.post('/initiate-game', gameData);
     return response.data;
   },
 
-  // Free Entry Tokens
-  getFreeEntryTokens: async () => {
+  getFreeEntryTokens: async () => { // ADD THIS METHOD
     const response = await apiClient.get('/user/free-entry-tokens');
     return response.data;
   },
 
-  // Platform Stats
   getPlatformStats: async () => {
     const response = await apiClient.get('/platform-stats');
     return response.data;
   },
 
-  // Friend System
   sendFriendRequest: async (targetUsername: string) => {
     const response = await apiClient.post('/friend-request/send', { targetUsername });
     return response.data;
@@ -144,7 +139,7 @@ export const apiService = {
     const response = await apiClient.get('/friends');
     return response.data;
   },
-  getSentFriendRequests: async () => {
+  getSentFriendRequests: async () => { // ADD THIS METHOD
     const response = await apiClient.get('/friend-requests/sent');
     return response.data;
   },
@@ -153,17 +148,26 @@ export const apiService = {
     return response.data;
   },
 
-  // Chat
-  getUserChats: async () => {
-    const response = await apiClient.get('/chats');
-    return response.data;
-  },
-  findOrCreateChat: async (targetUid: string) => {
-    const response = await apiClient.post('/chats/findOrCreate', { targetUid });
+  findOrCreateChat: async (targetUid: string): Promise<ChatListItem> => {
+    const response = await apiClient.post<ChatListItem>('/chats/findOrCreate', { targetUid });
     return response.data;
   },
   sendChatMessage: async (chatId: string, text: string) => {
     const response = await apiClient.post(`/chats/${chatId}/messages`, { text });
+    return response.data;
+  },
+  getUserChats: async (): Promise<ChatListItem[]> => {
+    const response = await apiClient.get<ChatListItem[]>('/chats');
+    return response.data;
+  },
+
+  getLeaderboard: async (gameId: string) => {
+    const response = await apiClient.get(`/leaderboards/${gameId}`); 
+    return response.data;
+  },
+
+  getGameHistory: async () => {
+    const response = await apiClient.get('/user/game-history');
     return response.data;
   },
 };
