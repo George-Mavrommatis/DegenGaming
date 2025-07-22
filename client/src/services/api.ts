@@ -172,4 +172,4 @@ export const apiService = {
   },
 };
 
-export default apiClient;
+export const api = apiClient;

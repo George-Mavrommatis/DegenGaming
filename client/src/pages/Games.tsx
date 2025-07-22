@@ -1,9 +1,7 @@
-// src/pages/Games.tsx
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import axios from 'axios'; // Ensure axios is imported
+import axios from 'axios';
 import { useProfile } from '../context/ProfileContext';
 
 // Import all category-specific InitModal components (ensure these paths are correct)
@@ -19,7 +17,7 @@ import {
 } from 'react-icons/fa';
 
 // Wallet and payment configurations
-const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy"; 
+const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 const CATEGORY_PAYMENT: { [key: string]: number } = { Arcade: 0.005, Picker: 0.01, PvP: 0.1, Casino: 0.02 };
 
 const categoryConfig: { [key: string]: any } = {
@@ -66,7 +64,7 @@ export default function GamesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true); // Loading for games/categories
   const navigate = useNavigate();
-  const { currentUser, firebaseAuthToken } = useProfile(); // Get both currentUser (user data) and firebaseAuthToken
+  const { user, firebaseAuthToken } = useProfile(); // FIX: user, not currentUser
 
   const [freeTokens, setFreeTokens] = useState<FreeEntryTokens | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true); // Loading for free tokens
@@ -74,7 +72,7 @@ export default function GamesPage() {
 
   // This line needs to correctly point to your backend.
   // Ensure your .env file in the project root contains VITE_BACKEND_URL=http://localhost:8000
-  const API_BASE_URL = process.env.VITE_BACKEND_URL || 'http://localhost:4000'; 
+  const API_BASE_URL = process.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
@@ -83,51 +81,44 @@ export default function GamesPage() {
   const fetchFreeEntryTokens = useCallback(async () => {
       setLoadingTokens(true);
       setErrorTokens(null);
-      // Guard against calls when user/token is not available
-      if (!currentUser || !firebaseAuthToken) {
+      if (!user || !firebaseAuthToken) {
           setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
           setErrorTokens("Log in to view your free entry tokens.");
           setLoadingTokens(false);
           return;
       }
-
       try {
-          const response = await axios.get<FreeEntryTokens>(`${API_BASE_URL}/api/user/free-entry-tokens`, {
+          const response = await axios.get<FreeEntryTokens>(`${API_BASE_URL}/user/free-entry-tokens`, {
               headers: { Authorization: `Bearer ${firebaseAuthToken}` },
           });
           setFreeTokens(response.data);
       } catch (error: any) {
           console.error("Error fetching free entry tokens:", error);
           setErrorTokens(error.response?.data?.message || "Failed to load free entry tokens.");
-          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 }); // Reset on error
+          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
       } finally {
           setLoadingTokens(false);
       }
-  }, [currentUser, firebaseAuthToken, API_BASE_URL]);
+  }, [user, firebaseAuthToken, API_BASE_URL]); // FIX: user
 
-  // Main useEffect for fetching games and categories
   useEffect(() => {
-    // Crucial Guard: Only attempt to fetch if Firebase Auth Token is available.
-    // This prevents 404s/permission denied if the token isn't ready yet.
-    if (!firebaseAuthToken) { 
-        setLoading(false); // Stop loading, as we can't fetch protected resources
+    if (!firebaseAuthToken) {
+        setLoading(false);
         console.warn("GamesPage: No Firebase Auth Token available. Skipping protected API calls for games and categories.");
         return;
     }
 
-    console.log("DEBUG: GamesPage: Fetching games and categories data.");
-    setLoading(true); // Start loading for main game data
+    setLoading(true);
 
     const config = {
         headers: {
-            Authorization: `Bearer ${firebaseAuthToken}` // Add authorization header
+            Authorization: `Bearer ${firebaseAuthToken}`
         }
     };
 
     Promise.all([
-      // Ensure API_BASE_URL is correctly configured via .env
-      axios.get<Game[]>(`${API_BASE_URL}/api/games`, config), 
-      axios.get<Category[]>(`${API_BASE_URL}/api/categories`, config) 
+      axios.get<Game[]>(`${API_BASE_URL}/games`, config),
+      axios.get<Category[]>(`${API_BASE_URL}/categories`, config)
     ]).then(([gamesResponse, categoriesResponse]) => {
       const gamesData = gamesResponse.data;
       const categoriesData = categoriesResponse.data;
@@ -138,23 +129,19 @@ export default function GamesPage() {
         destinationWallet: PLATFORM_WALLET,
         minPlayers: game.id === "wegen-race" ? 2 : undefined,
       }));
-      console.log("DEBUG: GamesPage: Processed Games Data:", processedGames);
-      console.log("DEBUG: GamesPage: Categories Data:", categoriesData);
       setGames(processedGames);
       setCategories(categoriesData);
-      setLoading(false); // Stop loading for main game data
+      setLoading(false);
     }).catch(err => {
-      setLoading(false); // Stop loading for main game data
+      setLoading(false);
       const errorMessage = err.response?.data?.message || err.message || "Unknown error";
       toast.error("Failed to load game data: " + errorMessage);
-      console.error("ERROR: GamesPage: Failed to load game data:", err);
     });
-  }, [firebaseAuthToken, API_BASE_URL]); // Depend on firebaseAuthToken and API_BASE_URL
+  }, [firebaseAuthToken, API_BASE_URL]);
 
-  // useEffect for fetching free entry tokens separately
   useEffect(() => {
     fetchFreeEntryTokens();
-  }, [fetchFreeEntryTokens]); // Depend on the memoized fetchFreeEntryTokens
+  }, [fetchFreeEntryTokens]);
 
   const getGamesByCategory = (categoryId: string) =>
     games.filter(game => game.category === categoryId && game.title.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -182,7 +169,6 @@ export default function GamesPage() {
         <button
           className="mt-3 w-full py-2 rounded bg-gradient-to-r from-lime-500 to-green-600 text-white text-xs font-bold shadow hover:from-lime-600 hover:to-green-700"
           onClick={() => {
-            console.log(`DEBUG: GamesPage: GameCard click. Setting modalGame to:`, game);
             setModalGame(game);
           }}
         >
@@ -203,9 +189,7 @@ export default function GamesPage() {
     const IconComponent = config.icon || FaGamepad;
     const categoryGames = getGamesByCategory(category.id);
 
-    // Only render section if there are games AFTER loading has completed AND there are no games
-    // This allows "Loading games..." to show while fetching.
-    if (!loading && categoryGames.length === 0) return null; 
+    if (!loading && categoryGames.length === 0) return null;
 
     return (
       <div className={`${config.bgColor || 'bg-slate-900/20'} rounded-2xl p-6 border ${config.borderColor || 'border-slate-700/30'}`}>
@@ -283,7 +267,7 @@ export default function GamesPage() {
                 <p className="text-gray-400 text-center">Loading tokens...</p>
             ) : errorTokens ? (
                 <p className="text-red-500 text-center">{errorTokens}</p>
-            ) : (currentUser && freeTokens) ? ( // Check currentUser exists for display
+            ) : (user && freeTokens) ? (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-white text-center">
                     <div className="p-3 bg-gray-700 rounded-md">
                         <p className="text-xl font-semibold">Arcade</p>
@@ -303,13 +287,12 @@ export default function GamesPage() {
                     </div>
                 </div>
             ) : (
-                // This state should indicate not logged in rather than an error if errorTokens is null
                 <p className="text-gray-400 text-center">Log in to view your free entry tokens.</p>
             )}
         </div>
 
         <div className="space-y-8">
-          {loading ? ( // Use the 'loading' state for games/categories
+          {loading ? (
             <div className="text-center text-xl text-purple-300 py-8">Loading games and categories...</div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -328,48 +311,36 @@ export default function GamesPage() {
           </div>
         </div>
 
-        {/* Modals remain mostly the same, ensure they correctly use game.id and game.category */}
+        {/* Modals remain mostly the same */}
         {modalGame && modalGame.category === "Picker" && (
           <PickerInitModal
             isOpen={!!modalGame}
             gameId={modalGame.id}
             gameType={modalGame.category}
             onSuccess={(gameConfigFromModal) => {
-              console.log("DEBUG: GamesPage: PickerInitModal onSuccess triggered!");
-              console.log("DEBUG: GamesPage: GameConfig received from PickerInitModal:", gameConfigFromModal);
-              
               if (!gameConfigFromModal || typeof gameConfigFromModal !== 'object') {
-                  console.error("ERROR: GamesPage: gameConfigFromModal is not a valid object!", gameConfigFromModal);
                   toast.error("Game configuration error. Please try again.");
                   setModalGame(null);
                   return;
               }
               if (!gameConfigFromModal.gameEntryTokenId) {
-                  console.error("ERROR: GamesPage: gameConfigFromModal is missing gameEntryTokenId!", gameConfigFromModal);
                   toast.error("Game session token missing. Please re-initiate payment or free entry.");
                   setModalGame(null);
                   return;
               }
               if (!modalGame.route) {
-                  console.error("ERROR: GamesPage: modalGame.route is undefined. Cannot navigate to game.", modalGame);
                   toast.error("Game route not configured. Please try another game.");
                   setModalGame(null);
                   return;
               }
-
-              setModalGame(null); 
-              console.log(`DEBUG: GamesPage: Navigating to ${modalGame.route} with gameConfig in state.`);
+              setModalGame(null);
               navigate(modalGame.route, { state: { gameConfig: gameConfigFromModal } });
             }}
             onError={msg => {
-              console.error("ERROR: GamesPage: PickerInitModal onError:", msg);
               setModalGame(null);
               toast.error(`Game initiation failed: ${msg}`);
             }}
-            onClose={() => {
-              console.log("DEBUG: GamesPage: PickerInitModal onClose triggered.");
-              setModalGame(null);
-            }}
+            onClose={() => setModalGame(null)}
             gameTitle={modalGame.title}
             minPlayers={modalGame.minPlayers || 2}
           />
@@ -383,12 +354,10 @@ export default function GamesPage() {
             ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
             destinationWallet={PLATFORM_WALLET}
             onSuccess={sig => {
-              console.log("DEBUG: GamesPage: ArcadeInitModal onSuccess. Sig:", sig);
               setModalGame(null);
               window.location.href = modalGame.route;
             }}
             onError={msg => {
-              console.error("ERROR: GamesPage: ArcadeInitModal onError:", msg);
               setModalGame(null);
               toast.error(`Payment error: ${msg}`);
             }}
@@ -405,12 +374,10 @@ export default function GamesPage() {
             ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.01}
             destinationWallet={PLATFORM_WALLET}
             onSuccess={sig => {
-              console.log("DEBUG: GamesPage: CasinoInitModal onSuccess. Sig:", sig);
               setModalGame(null);
               window.location.href = modalGame.route;
             }}
             onError={msg => {
-              console.error("ERROR: GamesPage: CasinoInitModal onError:", msg);
               setModalGame(null);
               toast.error(`Payment error: ${msg}`);
             }}
@@ -427,12 +394,10 @@ export default function GamesPage() {
             ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.01}
             destinationWallet={PLATFORM_WALLET}
             onSuccess={sig => {
-              console.log("DEBUG: GamesPage: PvPInitModal onSuccess. Sig:", sig);
               setModalGame(null);
               window.location.href = modalGame.route;
             }}
             onError={msg => {
-              console.error("ERROR: GamesPage: PvPInitModal onError:", msg);
               setModalGame(null);
               toast.error(`Payment error: ${msg}`);
             }}
