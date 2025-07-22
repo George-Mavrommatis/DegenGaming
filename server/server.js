@@ -81,7 +81,7 @@ try {
 
 
 // --- Solana Configuration ---
-const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com'; // Use a default devnet RPC
+const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL ; // Use a default devnet RPC
 const connection = new Connection(SOLANA_CLUSTER, 'confirmed');
 console.log(`Solana cluster: ${SOLANA_CLUSTER}`);
 
@@ -1306,7 +1306,6 @@ app.use((err, req, res, next) => {
 server.listen(PORT, async () => {
     console.log(`DegenGaming Backend listening on port ${PORT}`);
     // Ensure the game token mint is loaded or created when the server starts
-    await ensureGameTokenMint();
     // Run initial cron jobs
     updateALLUsersOnlineStatus();
     updatePlatformStatsAggregatedInSol();
