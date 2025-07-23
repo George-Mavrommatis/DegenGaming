@@ -1,29 +1,27 @@
-// src/pages/Profile.tsx
-
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { ProfileData, RecentGame, DEFAULT_PROFILE } from "../types/profile"; 
+import { ProfileData, RecentGame, DEFAULT_PROFILE } from "../types/profile";
 import { toast } from "react-toastify";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useProfile } from "../context/ProfileContext"; 
+import { useProfile } from "../context/ProfileContext";
 import { Link } from 'react-router-dom';
-import { collection, query, where, getDocs, doc } from "firebase/firestore";
-import { db } from "../firebase/firebaseConfig"; 
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../firebase/firebaseConfig";
 import { FaEdit, FaHistory, FaGamepad, FaCoins } from 'react-icons/fa';
-import UserDashboard from "../components/UserDashboard"; 
+import UserDashboard from "../components/UserDashboard";
 
 export default function Profile() {
-  const { 
-    user, 
-    profile, 
-    updateUserProfile, 
-    loading, 
-    isAuthenticated 
-  } = useProfile(); 
+  const {
+    user,
+    profile,
+    updateUserProfile,
+    loading,
+    isAuthenticated
+  } = useProfile();
 
   const walletAdapter = useWallet();
 
-  const [form, setForm] = useState<ProfileData>(DEFAULT_PROFILE); 
+  const [form, setForm] = useState<ProfileData>(DEFAULT_PROFILE);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -32,16 +30,17 @@ export default function Profile() {
   const [usernameChecking, setUsernameChecking] = useState(false);
   const usernameInputRef = useRef<HTMLInputElement>(null);
 
-  // Load profile data into form state whenever context profile changes
+  // Keep keys in sync with backend: arcade, picker, casino, pvp
+  const tokenKeys = ["arcade", "picker", "casino", "pvp"] as const;
+
   useEffect(() => {
-    if (!loading) { 
-      if (isAuthenticated && user && profile) { 
-        console.log("Profile.tsx: Populating form with fetched profile data.");
+    if (!loading) {
+      if (isAuthenticated && user && profile) {
         setForm(prevForm => {
           const newFormState: ProfileData = {
-            ...DEFAULT_PROFILE, 
-            ...profile,       
-            uid: user.uid, 
+            ...DEFAULT_PROFILE,
+            ...profile,
+            uid: user.uid,
             stats: { ...DEFAULT_PROFILE.stats, ...(profile.stats || {}) },
             coins: { ...DEFAULT_PROFILE.coins, ...(profile.coins || {}) },
             freeEntryTokens: { ...DEFAULT_PROFILE.freeEntryTokens, ...(profile.freeEntryTokens || {}) },
@@ -53,23 +52,20 @@ export default function Profile() {
             pvpRoomInvites: profile.pvpRoomInvites || [],
             wallet: profile.wallet || walletAdapter.publicKey?.toBase58() || "",
           };
-
           if (JSON.stringify(prevForm) !== JSON.stringify(newFormState)) {
             return newFormState;
           }
           return prevForm;
         });
-        setAvatarPreview(null); 
-        setAvatarFile(null);    
-      } else { 
-        console.log("Profile.tsx: Resetting form to default as no user/profile is available.");
+        setAvatarPreview(null);
+        setAvatarFile(null);
+      } else {
         setForm({ ...DEFAULT_PROFILE });
         setAvatarPreview(null);
         setAvatarFile(null);
       }
     }
   }, [user, profile, loading, isAuthenticated, walletAdapter.publicKey]);
-
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type, checked } = e.target;
@@ -83,11 +79,11 @@ export default function Profile() {
     if (e.target.files?.[0]) {
       const file = e.target.files[0];
       if (file.size > 5 * 1024 * 1024) {
-          toast.error("Avatar image too large (max 5MB).");
-          e.target.value = '';
-          setAvatarFile(null);
-          setAvatarPreview(null);
-          return;
+        toast.error("Avatar image too large (max 5MB).");
+        e.target.value = '';
+        setAvatarFile(null);
+        setAvatarPreview(null);
+        return;
       }
       setAvatarFile(file);
       setAvatarPreview(URL.createObjectURL(file));
@@ -96,46 +92,39 @@ export default function Profile() {
 
   const checkUsernameUnique = useCallback(async (username: string) => {
     const trimmedUsername = username.trim().toLowerCase();
-    
     if (!trimmedUsername || (profile && trimmedUsername === (profile.usernameLowercase || "").toLowerCase())) {
       setUsernameError("");
       return true;
     }
-
     setUsernameChecking(true);
     try {
-        const q = query(collection(db, "users"), where("usernameLowercase", "==", trimmedUsername));
-        const querySnapshot = await getDocs(q);
-        
-        const isTaken = !querySnapshot.empty && querySnapshot.docs[0].id !== user?.uid;
-        setUsernameError(isTaken ? "Username is already taken!" : "");
-        return !isTaken;
+      const q = query(collection(db, "users"), where("usernameLowercase", "==", trimmedUsername));
+      const querySnapshot = await getDocs(q);
+      const isTaken = !querySnapshot.empty && querySnapshot.docs[0].id !== user?.uid;
+      setUsernameError(isTaken ? "Username is already taken!" : "");
+      return !isTaken;
     } catch (error) {
-        console.error("Error checking username uniqueness:", error);
-        setUsernameError("Error checking username. Please try again.");
-        return false;
+      setUsernameError("Error checking username. Please try again.");
+      return false;
     } finally {
-        setUsernameChecking(false);
+      setUsernameChecking(false);
     }
   }, [profile, user]);
 
   const handleUsernameBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    // Only check if value has changed from the last saved profile username
     if (e.target.value.trim().toLowerCase() !== (profile?.usernameLowercase || '').toLowerCase()) {
       checkUsernameUnique(e.target.value);
     } else {
-      setUsernameError(""); // Clear error if reverted to original username
+      setUsernameError("");
     }
   }, [profile, checkUsernameUnique]);
 
-
   const handleSave = useCallback(async () => {
     if (!user) {
-        toast.error("You must be logged in to save your profile.");
-        return;
+      toast.error("You must be logged in to save your profile.");
+      return;
     }
     setSaving(true);
-    
     const isUnique = await checkUsernameUnique(form.username);
     if (!isUnique) {
       toast.error("Please choose a different username.");
@@ -143,7 +132,6 @@ export default function Profile() {
       setSaving(false);
       return;
     }
-
     try {
       let finalAvatarUrl = form.avatarUrl;
       if (avatarFile) {
@@ -153,7 +141,6 @@ export default function Profile() {
         await uploadBytes(avatarRef, avatarFile);
         finalAvatarUrl = await getDownloadURL(avatarRef);
       }
-
       const dataToSave: Partial<ProfileData> = {
         username: form.username.trim(),
         usernameLowercase: form.username.trim().toLowerCase(),
@@ -166,34 +153,39 @@ export default function Profile() {
         dmsOpen: !!form.dmsOpen,
         duelsOpen: !!form.duelsOpen,
       };
-
-      await updateUserProfile(dataToSave); 
-      
+      await updateUserProfile(dataToSave);
       toast.success("Profile saved successfully!");
       setAvatarFile(null);
       setAvatarPreview(null);
     } catch (err) {
-      console.error("Failed to save profile:", err);
       toast.error("Failed to save profile: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setSaving(false);
     }
   }, [user, avatarFile, form, checkUsernameUnique, updateUserProfile]);
 
-
-  if (loading) { 
+  if (loading) {
     return <div className="text-center text-white mt-20 text-xl font-bold animate-pulse">Loading Profile...</div>;
   }
 
-  if (!isAuthenticated || !user) { 
+  if (!isAuthenticated || !user) {
     return (
       <div className="text-center text-white mt-20">
         <p className="text-xl font-bold mb-4">Please sign in to view your profile.</p>
       </div>
     );
   }
-  
+
   const displayedAvatar = avatarPreview || form.avatarUrl || '/WegenRaceAssets/G1small.png';
+
+  // Ensure correct keys and fallback
+  const tokensObj = form.freeEntryTokens || {};
+  const tokens = {
+    arcade: tokensObj.arcade ?? tokensObj.arcadeTokens ?? 0,
+    picker: tokensObj.picker ?? tokensObj.pickerTokens ?? 0,
+    casino: tokensObj.casino ?? tokensObj.casinoTokens ?? 0,
+    pvp: tokensObj.pvp ?? tokensObj.pvpTokens ?? 0,
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8">
@@ -201,10 +193,10 @@ export default function Profile() {
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-gray-800 rounded-lg p-6 text-center shadow-lg">
             <div className="relative inline-block mb-4">
-              <img 
-                src={displayedAvatar} 
-                alt={`${form.username}'s avatar`} 
-                className="w-32 h-32 rounded-full mx-auto border-4 border-purple-500 object-cover" 
+              <img
+                src={displayedAvatar}
+                alt={`${form.username}'s avatar`}
+                className="w-32 h-32 rounded-full mx-auto border-4 border-purple-500 object-cover"
                 onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
               />
               <label className="absolute bottom-1 right-1 bg-purple-600 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer hover:bg-purple-700 transition">
@@ -212,36 +204,27 @@ export default function Profile() {
                 <input type="file" accept="image/*" onChange={handleAvatar} className="hidden" />
               </label>
             </div>
-            <h2 className="text-2xl font-bold font-orbitron">{form.username || "Guest Player"}</h2> 
+            <h2 className="text-2xl font-bold font-orbitron">{form.username || "Guest Player"}</h2>
             <p className="text-sm text-gray-400 break-all">{form.wallet || walletAdapter.publicKey?.toBase58() || "No Wallet Connected"}</p>
           </div>
 
           <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
             <h3 className="text-xl font-semibold mb-4 font-orbitron">Free Entry Tokens</h3>
-            {form.freeEntryTokens ? ( 
-              <div className="grid grid-cols-2 gap-4 text-center">
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <p className="text-sm text-gray-400">Arcade</p>
-                  <p className="text-xl font-bold text-green-400">{form.freeEntryTokens.arcadeTokens}</p>
+            <div className="grid grid-cols-2 gap-4 text-center">
+              {tokenKeys.map(key => (
+                <div key={key} className="p-3 bg-gray-900 rounded-lg">
+                  <p className="text-sm text-gray-400">{key.charAt(0).toUpperCase() + key.slice(1)}</p>
+                  <p className={`text-xl font-bold ${
+                    key === 'arcade' ? 'text-green-400' :
+                    key === 'picker' ? 'text-yellow-400' :
+                    key === 'casino' ? 'text-red-400' :
+                    key === 'pvp' ? 'text-blue-400' : ''
+                  }`}>{tokens[key]}</p>
                 </div>
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <p className="text-sm text-gray-400">Picker</p>
-                  <p className="text-xl font-bold text-yellow-400">{form.freeEntryTokens.pickerTokens}</p>
-                </div>
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <p className="text-sm text-gray-400">Casino</p>
-                  <p className="text-xl font-bold text-red-400">{form.freeEntryTokens.casinoTokens}</p>
-                </div>
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <p className="text-sm text-gray-400">PvP</p>
-                  <p className="text-xl font-bold text-blue-400">{form.freeEntryTokens.pvpTokens}</p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-gray-500">No free entry tokens available yet.</p>
-            )}
+              ))}
+            </div>
           </div>
-          <UserDashboard profile={form} /> 
+          <UserDashboard profile={form} />
         </div>
 
         <div className="lg:col-span-2 space-y-6">
@@ -250,25 +233,25 @@ export default function Profile() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-bold mb-1 text-gray-400">Username</label>
-                <input 
-                  ref={usernameInputRef} 
-                  type="text" 
-                  name="username" 
-                  value={form.username} 
-                  onChange={handleChange} 
+                <input
+                  ref={usernameInputRef}
+                  type="text"
+                  name="username"
+                  value={form.username}
+                  onChange={handleChange}
                   onBlur={handleUsernameBlur}
-                  className="w-full p-2 bg-gray-900 rounded border border-gray-700 focus:ring-purple-500 focus:border-purple-500" 
+                  className="w-full p-2 bg-gray-900 rounded border border-gray-700 focus:ring-purple-500 focus:border-purple-500"
                 />
                 {usernameChecking && <span className="text-xs text-blue-400">Checking…</span>}
                 {usernameError && <p className="text-xs text-red-500 mt-1">{usernameError}</p>}
               </div>
               <div>
                 <label className="block text-sm font-bold mb-1 text-gray-400">Bio</label>
-                <textarea 
-                  name="bio" 
+                <textarea
+                  name="bio"
                   value={form.bio ?? ''}
-                  onChange={handleChange} 
-                  className="w-full p-2 bg-gray-900 rounded border border-gray-700 h-24 focus:ring-purple-500 focus:border-purple-500" 
+                  onChange={handleChange}
+                  className="w-full p-2 bg-gray-900 rounded border border-gray-700 h-24 focus:ring-purple-500 focus:border-purple-500"
                 />
               </div>
               <div className="flex gap-4">
@@ -312,8 +295,8 @@ export default function Profile() {
                 </label>
               </div>
               <div className="text-right">
-                <button 
-                  onClick={handleSave} 
+                <button
+                  onClick={handleSave}
                   disabled={saving || usernameChecking || !!usernameError}
                   className="bg-purple-600 hover:bg-purple-700 font-bold py-2 px-6 rounded-lg transition disabled:bg-gray-500 disabled:cursor-not-allowed"
                 >
@@ -330,7 +313,7 @@ export default function Profile() {
               </Link>
             </div>
             <div className="space-y-3">
-              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 5).map((game: RecentGame, idx) => ( 
+              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 5).map((game: RecentGame, idx) => (
                 <div key={idx} className="bg-gray-900/50 p-3 rounded-lg flex items-center justify-between text-sm flex-wrap gap-2">
                   <div className="flex items-center gap-3">
                     <FaGamepad className="text-purple-400" />

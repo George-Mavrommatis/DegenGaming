@@ -77,29 +77,7 @@ export default function GamesPage() {
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
 
-  // Fetch free entry tokens
-  const fetchFreeEntryTokens = useCallback(async () => {
-      setLoadingTokens(true);
-      setErrorTokens(null);
-      if (!user || !firebaseAuthToken) {
-          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
-          setErrorTokens("Log in to view your free entry tokens.");
-          setLoadingTokens(false);
-          return;
-      }
-      try {
-          const response = await axios.get<FreeEntryTokens>(`${API_BASE_URL}/user/free-entry-tokens`, {
-              headers: { Authorization: `Bearer ${firebaseAuthToken}` },
-          });
-          setFreeTokens(response.data);
-      } catch (error: any) {
-          console.error("Error fetching free entry tokens:", error);
-          setErrorTokens(error.response?.data?.message || "Failed to load free entry tokens.");
-          setFreeTokens({ arcadeTokens: 0, pickerTokens: 0, casinoTokens: 0, pvpTokens: 0 });
-      } finally {
-          setLoadingTokens(false);
-      }
-  }, [user, firebaseAuthToken, API_BASE_URL]); // FIX: user
+ 
 
   useEffect(() => {
     if (!firebaseAuthToken) {
@@ -139,9 +117,6 @@ export default function GamesPage() {
     });
   }, [firebaseAuthToken, API_BASE_URL]);
 
-  useEffect(() => {
-    fetchFreeEntryTokens();
-  }, [fetchFreeEntryTokens]);
 
   const getGamesByCategory = (categoryId: string) =>
     games.filter(game => game.category === categoryId && game.title.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -261,35 +236,7 @@ export default function GamesPage() {
           </div>
         </div>
 
-        <div className="free-entry-tokens-display mb-8 p-6 bg-gray-800 rounded-lg shadow-lg border border-gray-700">
-            <h3 className="text-2xl font-bold text-white mb-4 text-center">Your Free Entry Tokens</h3>
-            {loadingTokens ? (
-                <p className="text-gray-400 text-center">Loading tokens...</p>
-            ) : errorTokens ? (
-                <p className="text-red-500 text-center">{errorTokens}</p>
-            ) : (user && freeTokens) ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-white text-center">
-                    <div className="p-3 bg-gray-700 rounded-md">
-                        <p className="text-xl font-semibold">Arcade</p>
-                        <p className="text-3xl font-bold text-blue-300 mt-1">{freeTokens.arcadeTokens}</p>
-                    </div>
-                    <div className="p-3 bg-gray-700 rounded-md">
-                        <p className="text-xl font-semibold">Picker</p>
-                        <p className="text-3xl font-bold text-green-300 mt-1">{freeTokens.pickerTokens}</p>
-                    </div>
-                    <div className="p-3 bg-gray-700 rounded-md">
-                        <p className="text-xl font-semibold">Casino</p>
-                        <p className="text-3xl font-bold text-yellow-300 mt-1">{freeTokens.casinoTokens}</p>
-                    </div>
-                    <div className="p-3 bg-gray-700 rounded-md">
-                        <p className="text-xl font-semibold">PvP</p>
-                        <p className="text-3xl font-bold text-red-300 mt-1">{freeTokens.pvpTokens}</p>
-                    </div>
-                </div>
-            ) : (
-                <p className="text-gray-400 text-center">Log in to view your free entry tokens.</p>
-            )}
-        </div>
+       
 
         <div className="space-y-8">
           {loading ? (

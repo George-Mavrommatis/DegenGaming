@@ -9,6 +9,31 @@ import { api } from '../../services/api';
 
 const FIXED_SOL_ENTRY_FEE = 0.01;
 
+const modalStyles = {
+  overlay: {
+    backgroundColor: "rgba(10, 10, 10, 0.90)",
+    zIndex: 1000,
+  },
+  content: {
+    borderRadius: "18px",
+    border: "none",
+    background: "none",
+    padding: 0,
+    overflow: "visible",
+    top: "50%",
+    left: "50%",
+    right: "auto",
+    bottom: "auto",
+    marginRight: "-50%",
+    transform: "translate(-50%, -50%)",
+    minWidth: 320,
+    maxWidth: 420,
+    minHeight: 200,
+    maxHeight: "95vh",
+    boxShadow: "0 4px 48px 0 rgba(0,0,0,0.7)",
+  },
+};
+
 export interface PickerPlayer {
     key: string;
     name: string;
@@ -29,6 +54,17 @@ export interface PickerGameConfig {
     authToken: string;
     gameType: string;
     paymentSignature?: string;
+}
+
+interface PickerInitModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    gameId: string;
+    gameTitle: string;
+    gameType: string;
+    minPlayers: number;
+    onSuccess: (gameConfig: PickerGameConfig) => void;
+    onError: (message: string) => void;
 }
 
 interface OnboardingPanelProps {
@@ -78,7 +114,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         if (safeLedger.length === 0) return [];
         return safeLedger.filter(u =>
             ((u.username && u.username.toLowerCase().includes(query)) ||
-             (u.wallet && u.wallet.toLowerCase().includes(query))) &&
+            (u.wallet && u.wallet.toLowerCase().includes(query))) &&
             !selectedUsers.some(su =>
                 (su.key === (u.key || u.wallet || u.uid)) ||
                 (su.username && u.username && su.username.toLowerCase() === u.username.toLowerCase()) ||
@@ -139,8 +175,8 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     };
 
     const canStartRace = selectedUsers.length >= minPlayers &&
-                         raceDuration > 0 &&
-                         humanPlayerChoice !== null;
+                        raceDuration > 0 &&
+                        humanPlayerChoice !== null;
 
     return (
         <div className="max-w-md w-full m-auto text-white">
@@ -301,56 +337,15 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     );
 }
 
-const useTokenPricing = () => {
-    const [prices, setPrices] = useState<{ solUsd: number | null }>({ solUsd: null });
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        async function fetchPrices() {
-            setLoading(true);
-            setError(null);
-            try {
-                const response = await api.get('/api/prices');
-                const data = response.data;
-                const solPrice = data.solUsd;
-                if (typeof solPrice !== 'number' || solPrice <= 0) {
-                    throw new Error("Invalid SOL price data received from backend.");
-                }
-                setPrices({ solUsd: solPrice });
-            } catch (err: any) {
-                setError("Could not load real-time SOL price. Using fixed estimates.");
-                setPrices({ solUsd: null });
-            } finally {
-                setLoading(false);
-            }
-        }
-        fetchPrices();
-    }, []);
-    const ticketPriceSol = useMemo(() => FIXED_SOL_ENTRY_FEE, []);
-    return { loading, error, ticketPriceSol };
-};
-
-interface PickerInitModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    gameId: string;
-    gameTitle: string;
-    gameType: string;
-    minPlayers: number;
-    onSuccess: (gameConfig: PickerGameConfig) => void;
-    onError: (message: string) => void;
-}
-
 export default function PickerInitModal(props: PickerInitModalProps) {
+    const ticketPriceSol = FIXED_SOL_ENTRY_FEE; 
     const {
         gameId, gameType, onSuccess,
         onError, onClose, gameTitle, minPlayers = 2,
     } = props;
 
     const wallet = useWallet();
-    const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL, 'confirmed');
-    const { user, profile, loading: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile();
+    const { user, loading: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile();
 
     const [step, setStep] = useState<"pay" | "paying" | "onboarding" | "done" | "error">("pay");
     const [txSig, setTxSig] = useState<string | null>(null);
@@ -358,19 +353,39 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'FREE' | null>(null);
     const [ledger, setLedger] = useState<any[]>([]);
     const [loadingLedger, setLoadingLedger] = useState(false);
-
-    const { loading: loadingPrices, error: pricingError, ticketPriceSol } = useTokenPricing();
     const [freeEntryTokensCount, setFreeEntryTokensCount] = useState<number>(0);
 
     const destinationWallet = process.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
+    const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
+    const [rpcError, setRpcError] = useState<string | null>(null);
+
+    // Fetch free entry tokens from the backend endpoint (no UID in path, always authenticated user)
+    useEffect(() => {
+        async function fetchFreeEntryTokens() {
+            if (!user || !firebaseAuthToken) return setFreeEntryTokensCount(0);
+            try {
+                const res = await api.get(`/user/free-entry-tokens`, {
+                    headers: { Authorization: `Bearer ${firebaseAuthToken}` }
+                });
+                // expects: { arcade: 0, picker: 2, casino: 0, pvp: 0 }
+                setFreeEntryTokensCount(res.data.picker || 0);
+            } catch {
+                setFreeEntryTokensCount(0);
+            }
+        }
+        fetchFreeEntryTokens();
+    }, [user, firebaseAuthToken, step]);
 
     useEffect(() => {
-        if (profile && profile.freeEntryTokens) {
-            setFreeEntryTokensCount(profile.freeEntryTokens.picker || 0);
-        } else if (!loadingProfile) {
-            setFreeEntryTokensCount(0);
+        if (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) {
+            setRpcError("Solana RPC URL is not set! Please set VITE_SOLANA_RPC_URL in your .env file.");
         }
-    }, [profile, loadingProfile]);
+    }, [rpcUrl]);
+
+    const connection = useMemo(() => {
+        if (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) return null;
+        return new Connection(rpcUrl, 'confirmed');
+    }, [rpcUrl]);
 
     useEffect(() => {
         if (step === "onboarding") fetchLedger();
@@ -379,10 +394,12 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     async function fetchLedger() {
         setLoadingLedger(true);
         try {
-            const response = await api.get("/api/usernames");
+            const response = await api.get("/api/usernames", {
+                headers: { Authorization: `Bearer ${firebaseAuthToken}` }
+                });
             const data = response.data;
             setLedger(Array.isArray(data) ? data : []);
-        } catch (err: any) {
+        } catch {
             toast.error("Problem loading users for selection.");
             setLedger([]);
         }
@@ -390,6 +407,11 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     }
 
     async function handlePay(currency: 'SOL' | 'FREE') {
+        if (rpcError) {
+            setPaymentError(rpcError);
+            onError(rpcError);
+            return;
+        }
         if (currency === 'SOL' && (!wallet.publicKey || !wallet.sendTransaction)) {
             const msg = "Wallet not available. Please connect your wallet.";
             setPaymentError(msg);
@@ -416,12 +438,13 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 return;
             }
 
-            // --- SOL PAYMENT FLOW ---
+            if (!connection) throw new Error("RPC connection not available!");
+
             if (ticketPriceSol <= 0 || isNaN(ticketPriceSol)) {
                 throw new Error("Invalid SOL amount for payment.");
             }
 
-            // Build transaction with QuickNode endpoint!
+            // Initiate Solana transaction for the entry fee
             const tx = new Transaction();
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
@@ -462,7 +485,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             setTxSig(transactionSignature);
             toast.success("Payment successful on Solana!");
 
-            // Grant free picker token using /tokens/generate
+            // Grant free picker token using /tokens/generate (protected, uses current user)
             await api.post('/tokens/generate', { tokenType: "picker" }, {
                 headers: { Authorization: `Bearer ${firebaseAuthToken}` }
             });
@@ -497,7 +520,6 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         if (!firebaseAuthToken) {
             toast.error("Authentication token missing. Please try again or refresh."); onError("Authentication token missing."); return;
         }
-        // Pass config to parent (GamesPage) or via router
         const gameConfig: PickerGameConfig = {
             players: players.map(player => ({
                 ...player,
@@ -556,34 +578,28 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                             </div>
                         )}
                         <div className="text-lg text-white font-medium">
-                            Entry Fee: <span className="font-bold text-lime-300">{FIXED_SOL_ENTRY_FEE.toFixed(2)} SOL</span>
+                            Entry Fee: <span className="font-bold text-lime-300">{ticketPriceSol.toFixed(2)} SOL</span>
                         </div>
                         <div className="text-xs text-gray-400 mb-2 text-center">
                             To: <span className="font-mono text-slate-300">{safeWalletDisplay(destinationWallet)}</span>
                         </div>
                         {paymentError && <div className="bg-red-800 w-full rounded py-2 px-3 mb-1 text-center text-red-200 text-xs font-semibold shadow">{paymentError}</div>}
-                        {pricingError && <div className="bg-orange-800 w-full rounded py-2 px-3 mb-1 text-center text-orange-200 text-xs font-semibold shadow">{pricingError}</div>}
-                        {loadingPrices ? (
-                            <div className="flex items-center justify-center gap-2 py-3 text-yellow-200 animate-pulse">
-                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                <span>Fetching latest prices...</span>
-                            </div>
-                        ) : (
-                            <div className="w-full space-y-3">
-                                <button
-                                    className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
-                                    onClick={() => handlePay('SOL')} disabled={step === "paying" || ticketPriceSol <= 0}>
-                                    Pay {ticketPriceSol.toFixed(2)} SOL
-                                </button>
-                                <button
-                                    className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
-                                    onClick={() => handlePay('FREE')}
-                                    disabled={step === "paying" || freeEntryTokensCount <= 0}
-                                >
-                                    Use Free Token! ({freeEntryTokensCount} available)
-                                </button>
-                            </div>
-                        )}
+                        <div className="w-full space-y-3">
+                            <button
+                                className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                                onClick={() => handlePay('SOL')}
+                                disabled={step === "paying" || ticketPriceSol <= 0}
+                            >
+                                Pay {ticketPriceSol.toFixed(2)} SOL
+                            </button>
+                            <button
+                                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
+                                onClick={() => handlePay('FREE')}
+                                disabled={step === "paying" || freeEntryTokensCount <= 0}
+                            >
+                                Use Free Token! ({freeEntryTokensCount} available)
+                            </button>
+                        </div>
                         <button className="w-full py-2 mt-2 rounded-lg bg-gray-700 text-gray-200 font-bold hover:bg-gray-600" onClick={handleCancel}>Cancel</button>
                     </div>
                 )}

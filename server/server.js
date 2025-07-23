@@ -618,6 +618,28 @@ app.post("/verify-wallet", async (req, res) => {
 });
 
 
+//Get USERS 
+// Fetch all users for Picker onboarding (Protected)
+app.get('/api/usernames', protect, async (req, res) => {
+    try {
+        const usersSnapshot = await db.collection('users').get();
+        const users = [];
+        usersSnapshot.forEach(doc => {
+            const data = doc.data();
+            users.push({
+                key: doc.id,
+                username: data.username || '',
+                avatarUrl: data.avatarUrl || '',
+                wallet: data.wallet || '',
+            });
+        });
+        res.status(200).json(users);
+    } catch (error) {
+        console.error('Error fetching usernames:', error);
+        res.status(500).json({ message: 'Failed to fetch usernames.' });
+    }
+});
+
 // Get User Profile (Protected)
 app.get('/profile', protect, async (req, res) => {
     try {
