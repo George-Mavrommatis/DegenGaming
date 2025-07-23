@@ -359,6 +359,7 @@ const protect = async (req, res, next) => {
 
 // --- Cron Jobs & Scheduled Tasks ---
 
+
 async function updateALLUsersOnlineStatus() {
     console.log('Cron job: Running updateALLUsersOnlineStatus...');
     try {
@@ -466,6 +467,19 @@ app.get('/', (req, res) => {
 });
 
 // User Registration (Public - no protect middleware)
+app.get('/api/prices', async (req, res) => {
+  // You can fetch price from coingecko or similar
+  try {
+    // Example with coingecko:
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const data = await response.json();
+    const price = data.solana.usd;
+    res.json({ solUsd: price });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch SOL price' });
+  }
+});
+
 app.post('/register', async (req, res) => {
     const { email, password, username } = req.body;
     try {
