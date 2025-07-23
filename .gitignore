@@ -9,6 +9,7 @@
  firebase-debug.log* 
 serviceAccountKey.json
 .env
+.env.production
  node_modules
  dist
  dist-ssr

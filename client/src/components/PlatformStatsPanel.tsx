@@ -1,14 +1,9 @@
-// src/components/PlatformStatsPanel.tsx
+import React, { useEffect } from 'react';
+import { FaUsers, FaGamepad, FaDollarSign, FaChartLine, FaHourglassHalf, FaFire, FaDice, FaCrosshairs, FaEye, FaTrophy } from 'react-icons/fa';
+import { GiPistolGun, GiSlotMachine, GiGiraffe } from "react-icons/gi";
+import { usePlatformStats } from '../firebase/usePlatformStats';
+import { PlatformStats, CategoryStats, GameStats } from '../types/platformStats';
 
-import React, { useEffect } from 'react'; // No need for useState or axios anymore
-import { FaUsers, FaGamepad, FaDollarSign, FaChartLine, FaHourglassHalf, FaFire, FaDice, FaCrosshairs, FaEye, FaTrophy } from 'react-icons/fa'; // Ensure all icons are imported
-import { GiPistolGun, GiSlotMachine, GiGiraffe } from "react-icons/gi"; // Ensure these are imported if used
-
-import { usePlatformStats } from '../firebase/usePlatformStats'; // Import your custom hook that uses Firestore
-import { PlatformStats, CategoryStats, GameStats } from '../types/platformStats'; // Import your types
-
-
-// You can keep these helper functions and icon maps
 const CATEGORY_ICONS: Record<string, JSX.Element> = {
   arcade: <FaGamepad className="inline mr-1 text-pink-400" />,
   pvp: <FaCrosshairs className="inline mr-1 text-orange-400" />,
@@ -23,21 +18,20 @@ const CATEGORY_COLORS: Record<string, string> = {
   picker: "bg-purple-900/80 border-purple-400",
 };
 
-function formatSOL(n: number | undefined) { // Allow undefined for safety
-  if (typeof n !== 'number') return "N/A SOL"; // Handle undefined/null
+function formatSOL(n: number | undefined) {
+  if (typeof n !== 'number') return "N/A SOL";
   if (n === 0) return "0.000 SOL";
   return `${n.toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 6 })} SOL`;
 }
 
-function formatNum(n: number | undefined) { // Allow undefined for safety
-  if (typeof n !== 'number') return "N/A"; // Handle undefined/null
+function formatNum(n: number | undefined) {
+  if (typeof n !== 'number') return "N/A";
   return n.toLocaleString();
 }
 
 export default function PlatformStatsPanel() {
-  const { stats, loading } = usePlatformStats(); // Use your custom hook that listens to Firestore
+  const { stats, loading } = usePlatformStats();
 
-  // Optional: useEffect for debugging once stats are loaded
   useEffect(() => {
     if (!loading) {
       console.log("PlatformStatsPanel (via Firestore): Stats loaded:", stats);
@@ -58,7 +52,6 @@ export default function PlatformStatsPanel() {
     );
   }
 
-  // If stats is null (document doesn't exist), display a message
   if (!stats) {
     return (
       <div className="w-full flex items-center justify-center p-12 text-center text-slate-400">
@@ -72,15 +65,12 @@ export default function PlatformStatsPanel() {
 
   return (
     <div className="w-full max-w-6xl mx-auto p-4 md:p-8 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-black border-2 border-purple-700/40 shadow-2xl text-white">
-      {/* HEADER WITH REFRESH INDICATOR */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-purple-300">Platform Statistics</h2>
         <div className="text-xs text-slate-400">
           Last updated: {stats.lastUpdated ? new Date(stats.lastUpdated).toLocaleString() : "--"}
         </div>
       </div>
-
-      {/* USERS & GAMES */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <StatIconBox
           icon={<FaUsers className="text-3xl text-blue-300" />}
@@ -99,7 +89,6 @@ export default function PlatformStatsPanel() {
         />
       </div>
 
-      {/* LAST MONTH PANEL */}
       <SectionHeader label="Last Month" period={stats.lastMonthPeriod} />
       <CategoryStatsPanel
         stats={stats}
@@ -108,7 +97,6 @@ export default function PlatformStatsPanel() {
         type="month"
       />
 
-      {/* ALL TIME PANEL */}
       <SectionHeader label="All Time" />
       <CategoryStatsPanel
         stats={stats}
@@ -119,8 +107,6 @@ export default function PlatformStatsPanel() {
     </div>
   );
 }
-
-// --- COMPONENTS (These can remain as they were, they're independent) ---
 
 function SectionHeader({ label, period }: { label: string, period?: string }) {
   return (
@@ -146,8 +132,7 @@ function CategoryStatsPanel({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
       {categories.map(cat => {
-        const catStats = stats.categories ? stats.categories[cat] : undefined; // Safely access categories
-        
+        const catStats = stats.categories ? stats.categories[cat] : undefined;
         if (!catStats) {
           return (
             <div
@@ -162,9 +147,14 @@ function CategoryStatsPanel({
             </div>
           );
         }
-
         const color = CATEGORY_COLORS[cat] || "bg-slate-800 border-slate-600";
-        
+        const showDistributed = cat !== "picker"; // Picker has no distribution
+
+        // Defensive fallback for category stats
+        const solTotal = type === "month" ? catStats.solLastMonth : catStats.solTotal;
+        const solDistributed = type === "month" ? (catStats.solDistributedLastMonth || 0) : (catStats.solDistributed || 0);
+        const plays = type === "month" ? catStats.playsLastMonth : catStats.playsTotal;
+
         return (
           <div
             key={cat}
@@ -174,50 +164,51 @@ function CategoryStatsPanel({
               {CATEGORY_ICONS[cat]}
               <span className="text-lg font-bold capitalize">{cat}</span>
             </div>
-            
             <div className="flex flex-col gap-2 mb-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-slate-300">Gathered:</span>
                 <span className="font-bold text-yellow-300 text-sm">
-                  {formatSOL(type === "month" ? catStats.solLastMonth : catStats.solTotal)}
+                  {formatSOL(solTotal)}
                 </span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-slate-300">Distributed:</span>
-                <span className="font-bold text-green-400 text-sm">
-                  {formatSOL(type === "month" ? (catStats.solDistributedLastMonth) : (catStats.solDistributed))}
-                </span>
-              </div>
+              {showDistributed && (
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-300">Distributed:</span>
+                  <span className="font-bold text-green-400 text-sm">
+                    {formatSOL(solDistributed)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-sm text-slate-300">Plays:</span>
                 <span className="font-semibold text-blue-200 text-sm">
-                  {formatNum(type === "month" ? catStats.playsLastMonth : catStats.playsTotal)}
+                  {formatNum(plays)}
                 </span>
               </div>
             </div>
-            
-            {/* Per-game breakdown */}
             <div className="mt-3 pt-3 border-t border-slate-700/50">
               <div className="text-xs text-slate-400 mb-2 font-semibold">Games:</div>
               <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
-                {catStats.games && catStats.games.length === 0 ? ( // Check if games array exists and is empty
+                {catStats.games && catStats.games.length === 0 ? (
                   <div className="text-xs text-slate-500 italic">No games played</div>
                 ) : (
-                  catStats.games?.map(gameId => { // Safely map over games
+                  catStats.games?.map(gameId => {
                     const g = games[gameId];
                     if (!g) return null;
-                    
+                    const gSolTotal = type === "month" ? g.solLastMonth : g.solTotal;
+                    const gSolDistributed = type === "month" ? (g.solDistributedLastMonth || 0) : (g.solDistributed || 0);
+                    const gPlays = type === "month" ? g.playsLastMonth : g.playsTotal;
                     return (
                       <div key={gameId} className="p-2 rounded bg-black/30 border border-slate-700/30">
                         <div className="font-semibold text-white text-xs mb-1">{g.name}</div>
                         <div className="flex justify-between items-center text-xs">
-                          <span className="text-yellow-300">{formatSOL(type === "month" ? g.solLastMonth : g.solTotal)}</span>
-                          <span className="text-green-400">
-                            {formatSOL(type === "month" ? (g.solDistributedLastMonth) : (g.solDistributed))}
-                          </span>
+                          <span className="text-yellow-300">{formatSOL(gSolTotal)}</span>
+                          {showDistributed && (
+                            <span className="text-green-400">{formatSOL(gSolDistributed)}</span>
+                          )}
                         </div>
                         <div className="text-right text-blue-200 text-xs mt-1">
-                          {formatNum(type === "month" ? g.playsLastMonth : g.playsTotal)} plays
+                          {formatNum(gPlays)} plays
                         </div>
                       </div>
                     );

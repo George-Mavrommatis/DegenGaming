@@ -1,22 +1,7 @@
 import { useEffect, useState } from "react";
-import { doc,onSnapshot, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "./firebaseConfig";
-
-export interface PlatformStats {
-  registeredUsers: number;
-  onlineUsers: number;
-  totalGamesPlayed: number;
-  pickerSolTotal: number;
-  pickerSolLastMonth: number;
-  arcadeSolTotal: number;
-  casinoSolTotal: number;
-  pvpSolTotal: number;
-  arcadeSolLastMonth: number;
-  casinoSolLastMonth: number;
-  pvpSolLastMonth: number;
-  lastMonthPeriod: string;  // like "2024-05"
-  lastUpdated: string;
-}
+import { PlatformStats } from "../types/platformStats";
 
 export function usePlatformStats() {
   const [stats, setStats] = useState<PlatformStats | null>(null);
@@ -35,4 +20,4 @@ export function usePlatformStats() {
   }, []);
 
   return { stats, loading };
-}  
+}

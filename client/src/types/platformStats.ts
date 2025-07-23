@@ -1,26 +1,27 @@
 // src/types/platformStats.ts
+
 export interface GameStats {
   gameId: string;
   name: string;
-  category: "arcade" | "pvp" | "casino" | "picker"; // Added 'picker' to category type
-  solTotal: number;            // gathered
-  solDistributed: number;      // NEW: distributed
-  solLastMonth: number;
-  solDistributedLastMonth?: number; // Added: distributed last month
+  category: "arcade" | "pvp" | "casino" | "picker";
+  solTotal: number;                   // gathered all time
+  solDistributed: number;             // distributed all time (0 for picker)
+  solLastMonth: number;               // gathered last month
+  solDistributedLastMonth: number;    // distributed last month (0 for picker)
   playsTotal: number;
   playsLastMonth: number;
-  lastPayoutMonth?: string; // e.g. "2024-06"
+  lastPayoutMonth?: string;           // e.g. "2024-06"
   lastPayoutAmount?: number;
 }
 
 export interface CategoryStats {
-  solTotal: number;           // gathered
-  solDistributed: number;     // NEW: distributed
-  solLastMonth: number;
-  solDistributedLastMonth?: number; // Added: distributed last month
+  solTotal: number;                  // gathered all time
+  solDistributed: number;            // distributed all time (0 for picker)
+  solLastMonth: number;              // gathered last month
+  solDistributedLastMonth: number;   // distributed last month (0 for picker)
   playsTotal: number;
   playsLastMonth: number;
-  games: string[];
+  games: string[];                   // game IDs in this category
 }
 
 export interface PlatformStats {
@@ -28,18 +29,21 @@ export interface PlatformStats {
   onlineUsers: number;
   totalGamesPlayed: number;
 
-  // Aggregate fields (legacy) - these should continue to be accurate as they pull from the aggregated 'categories'
+  // Aggregate fields (legacy, for convenience)
   pickerSolTotal: number;
   pickerSolLastMonth: number;
-  arcadeSolTotal: number;      // gathered
-  arcadeSolDistributed: number; // NEW: distributed
+  arcadeSolTotal: number;
+  arcadeSolDistributed: number;
+  arcadeSolLastMonth: number;
+  arcadeSolDistributedLastMonth: number;
   casinoSolTotal: number;
   casinoSolDistributed: number;
+  casinoSolLastMonth: number;
+  casinoSolDistributedLastMonth: number;
   pvpSolTotal: number;
   pvpSolDistributed: number;
-  arcadeSolLastMonth: number;
-  casinoSolLastMonth: number;
   pvpSolLastMonth: number;
+  pvpSolDistributedLastMonth: number;
 
   // Scalable fields
   categories: { [cat in "picker" | "arcade" | "pvp" | "casino"]: CategoryStats };

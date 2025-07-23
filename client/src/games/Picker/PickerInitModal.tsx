@@ -1,50 +1,65 @@
-// src/games/Picker/PickerInitModal.tsx
-
 import React, { useState, useMemo, useEffect, useCallback } from "react";
 import Modal from "react-modal";
 import { toast } from "react-toastify";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Connection } from "@solana/web3.js";
 import { Player as LottiePlayer } from "@lottiefiles/react-lottie-player";
 import { useProfile } from "../../context/ProfileContext";
 import { api } from '../../services/api';
 
-import axios from 'axios'; // For direct axios calls, if `api` doesn't cover all needs or for explicit calls
+const FIXED_SOL_ENTRY_FEE = 0.01;
 
-import { Player as WegenRacePlayerType } from '../../games/Picker/WegenRace/wegenRaceGame';
+export interface PickerPlayer {
+    key: string;
+    name: string;
+    username?: string;
+    avatarUrl?: string;
+    wallet?: string;
+    isHumanPlayer?: boolean;
+    isGuest?: boolean;
+}
 
-const FIXED_SOL_ENTRY_FEE = 0.01; // This is the fixed SOL fee for a picker game.
+export interface PickerGameConfig {
+    players: PickerPlayer[];
+    duration: number;
+    humanChoice: PickerPlayer;
+    betAmount: number;
+    currency: 'SOL' | 'FREE';
+    gameTitle: string;
+    authToken: string;
+    gameType: string;
+    paymentSignature?: string;
+}
 
 interface OnboardingPanelProps {
     ledger: any[];
     minPlayers: number;
-    onComplete: (players: WegenRacePlayerType[], raceDuration: number, playerChoice: WegenRacePlayerType) => void;
+    onComplete: (players: PickerPlayer[], raceDuration: number, playerChoice: PickerPlayer) => void;
     onCancel: () => void;
 }
 
 function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: OnboardingPanelProps) {
-    const [selectedUsers, setSelectedUsers] = useState<WegenRacePlayerType[]>([]);
+    const [selectedUsers, setSelectedUsers] = useState<PickerPlayer[]>([]);
     const [search, setSearch] = useState("");
     const [raceDuration, setRaceDuration] = useState<number>(2);
-    const [humanPlayerChoice, setHumanPlayerChoice] = useState<WegenRacePlayerType | null>(null);
+    const [humanPlayerChoice, setHumanPlayerChoice] = useState<PickerPlayer | null>(null);
 
-    // Get the current Firebase authenticated user from ProfileContext
     const { user } = useProfile();
 
     const timeOptions = [
-        { value: 1, label: "1 Min", color: "from-blue-500 to-blue-600" },
-        { value: 2, label: "2 Mins", color: "from-green-500 to-green-600" },
-        { value: 3, label: "3 Mins", color: "from-yellow-500 to-yellow-600" },
-        { value: 4, label: "4 Mins", color: "from-orange-500 to-orange-600" },
-        { value: 5, label: "5 Mins", color: "from-red-500 to-red-600" },
-        { value: 8, label: "8 Mins", color: "from-purple-500 to-purple-600" },
-        { value: 15, label: "15 Mins", color: "from-pink-500 to-pink-600" },
-        { value: 30, label: "30 Mins", color: "from-indigo-500 to-indigo-600" },
+        { value: 1, label: "1 Min" },
+        { value: 2, label: "2 Mins" },
+        { value: 3, label: "3 Mins" },
+        { value: 4, label: "4 Mins" },
+        { value: 5, label: "5 Mins" },
+        { value: 8, label: "8 Mins" },
+        { value: 15, label: "15 Mins" },
+        { value: 30, label: "30 Mins" },
     ];
 
     useEffect(() => {
         if (user && !humanPlayerChoice && !selectedUsers.some(u => u.key === user.uid)) {
-            const userPlayer: WegenRacePlayerType = {
+            const userPlayer: PickerPlayer = {
                 key: user.uid,
                 name: user.displayName || 'You',
                 username: user.displayName || 'You',
@@ -73,7 +88,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     }, [search, ledger, selectedUsers]);
 
     const addUser = (user: any) => {
-        const userWithKey: WegenRacePlayerType = {
+        const userWithKey: PickerPlayer = {
             key: user.key || user.wallet || user.uid || `guest_${Date.now()}_${Math.random().toString(36).substring(7)}`,
             name: user.username || user.name || 'Guest Player',
             username: user.username || user.name,
@@ -101,7 +116,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         if (userFound) {
             addUser(userFound);
         } else {
-            const guestPlayer: WegenRacePlayerType = {
+            const guestPlayer: PickerPlayer = {
                 key: `guest_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                 name: trimmedVal,
                 username: trimmedVal,
@@ -232,7 +247,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                             key={option.value}
                             onClick={() => setRaceDuration(option.value)}
                             className={`px-2 py-2 text-xs font-bold rounded-lg transition-all duration-200 ${raceDuration === option.value
-                                ? `bg-gradient-to-r ${option.color} text-white scale-105 shadow-lg`
+                                ? `bg-gradient-to-r from-green-500 to-green-600 text-white scale-105 shadow-lg`
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                                 }`}
                         >
@@ -246,7 +261,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                             key={option.value}
                             onClick={() => setRaceDuration(option.value)}
                             className={`px-2 py-2 text-xs font-bold rounded-lg transition-all duration-200 ${raceDuration === option.value
-                                ? `bg-gradient-to-r ${option.color} text-white scale-105 shadow-lg`
+                                ? `bg-gradient-to-r from-green-500 to-green-600 text-white scale-105 shadow-lg`
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                                 }`}
                         >
@@ -286,11 +301,6 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     );
 }
 
-const modalStyles = {
-    overlay: { backgroundColor: "rgba(10, 10, 20, 0.9)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" },
-    content: { position: "static", maxWidth: 480, width: "100%", maxHeight: "90vh", border: "none", borderRadius: "1.2em", background: "none", padding: 0 }
-};
-
 const useTokenPricing = () => {
     const [prices, setPrices] = useState<{ solUsd: number | null }>({ solUsd: null });
     const [loading, setLoading] = useState(true);
@@ -309,7 +319,6 @@ const useTokenPricing = () => {
                 }
                 setPrices({ solUsd: solPrice });
             } catch (err: any) {
-                console.error("Failed to fetch SOL price:", err);
                 setError("Could not load real-time SOL price. Using fixed estimates.");
                 setPrices({ solUsd: null });
             } finally {
@@ -329,17 +338,7 @@ interface PickerInitModalProps {
     gameTitle: string;
     gameType: string;
     minPlayers: number;
-    onSuccess: (gameConfig: {
-        players: WegenRacePlayerType[];
-        duration: number;
-        humanChoice: WegenRacePlayerType;
-        betAmount: number;
-        currency: 'SOL' | 'FREE';
-        gameTitle: string;
-        authToken: string;
-        gameEntryTokenId: string;
-        paymentSignature?: string | null;
-    }) => void;
+    onSuccess: (gameConfig: PickerGameConfig) => void;
     onError: (message: string) => void;
 }
 
@@ -350,7 +349,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     } = props;
 
     const wallet = useWallet();
-    const { connection } = useConnection();
+    const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL, 'confirmed');
     const { user, profile, loading: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile();
 
     const [step, setStep] = useState<"pay" | "paying" | "onboarding" | "done" | "error">("pay");
@@ -359,23 +358,19 @@ export default function PickerInitModal(props: PickerInitModalProps) {
     const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'FREE' | null>(null);
     const [ledger, setLedger] = useState<any[]>([]);
     const [loadingLedger, setLoadingLedger] = useState(false);
-    const [gameEntryTokenId, setGameEntryTokenId] = useState<string | null>(null);
 
     const { loading: loadingPrices, error: pricingError, ticketPriceSol } = useTokenPricing();
-
     const [freeEntryTokensCount, setFreeEntryTokensCount] = useState<number>(0);
 
     const destinationWallet = process.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
     useEffect(() => {
         if (profile && profile.freeEntryTokens) {
-            const tokenKey = `${gameType.toLowerCase()}Tokens`;
-            const currentTokens = profile.freeEntryTokens[tokenKey] || 0;
-            setFreeEntryTokensCount(currentTokens);
+            setFreeEntryTokensCount(profile.freeEntryTokens.picker || 0);
         } else if (!loadingProfile) {
             setFreeEntryTokensCount(0);
         }
-    }, [profile, loadingProfile, gameType]);
+    }, [profile, loadingProfile]);
 
     useEffect(() => {
         if (step === "onboarding") fetchLedger();
@@ -386,10 +381,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         try {
             const response = await api.get("/api/usernames");
             const data = response.data;
-            const usersArray = Array.isArray(data) ? data : [];
-            setLedger(usersArray);
+            setLedger(Array.isArray(data) ? data : []);
         } catch (err: any) {
-            console.error("Error fetching ledger:", err);
             toast.error("Problem loading users for selection.");
             setLedger([]);
         }
@@ -413,38 +406,22 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         setStep("paying");
         setPaymentError(null);
         setPaymentMethod(currency);
-        setGameEntryTokenId(null);
 
         try {
-            let transactionSignature: string | null = null;
-            let paymentAmountForBackend: number = 0;
-
             if (currency === 'FREE') {
                 if (freeEntryTokensCount <= 0) {
-                    throw new Error(`No ${gameType} Free Entry Tokens available.`);
+                    throw new Error(`No Picker Free Entry Tokens available.`);
                 }
-                const response = await api.post('/game-sessions/generate-entry-token', {
-                    gameType: gameType.toLowerCase(),
-                    gameId: gameId,
-                    betAmount: 0,
-                    currency: 'FREE'
-                });
-                const data = response.data;
-                if (!data || !data.gameEntryTokenId) {
-                    throw new Error(data.message || "Failed to consume free entry token on the server.");
-                }
-                toast.success(data.message || "Free entry token used successfully!");
-                await refreshProfile();
-                setGameEntryTokenId(data.gameEntryTokenId);
                 setStep("onboarding");
                 return;
             }
 
-            paymentAmountForBackend = ticketPriceSol;
+            // --- SOL PAYMENT FLOW ---
             if (ticketPriceSol <= 0 || isNaN(ticketPriceSol)) {
                 throw new Error("Invalid SOL amount for payment.");
             }
 
+            // Build transaction with QuickNode endpoint!
             const tx = new Transaction();
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
@@ -459,7 +436,16 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 })
             );
 
-            transactionSignature = await wallet.sendTransaction(tx, connection);
+            let transactionSignature = null;
+            try {
+                transactionSignature = await wallet.sendTransaction(tx, connection);
+            } catch (walletSendErr: any) {
+                if (walletSendErr?.message?.toLowerCase().includes("user rejected")) {
+                    throw new Error("Transaction cancelled by user.");
+                }
+                throw walletSendErr;
+            }
+
             const confirmation = await connection.confirmTransaction({
                 signature: transactionSignature,
                 blockhash: blockhash,
@@ -467,49 +453,27 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             }, "confirmed");
 
             if (confirmation.value.err) {
+                if (confirmation.value.err.toString().toLowerCase().includes('insufficient')) {
+                    throw new Error("Insufficient funds. Please check your wallet balance.");
+                }
                 throw new Error(`Transaction failed: ${confirmation.value.err.toString()}`);
             }
 
             setTxSig(transactionSignature);
             toast.success("Payment successful on Solana!");
 
-            const generatePaidEntryTokenResponse = await api.post('/game-sessions/generate-entry-token', {
-                gameType: gameType.toLowerCase(),
-                gameId: gameId,
-                betAmount: paymentAmountForBackend,
-                currency: 'SOL',
-                paymentTxId: transactionSignature,
+            // Grant free picker token using /tokens/generate
+            await api.post('/tokens/generate', { tokenType: "picker" }, {
+                headers: { Authorization: `Bearer ${firebaseAuthToken}` }
             });
-
-            const generatePaidEntryTokenData = generatePaidEntryTokenResponse.data;
-            if (!generatePaidEntryTokenData || !generatePaidEntryTokenData.gameEntryTokenId) {
-                throw new Error(generatePaidEntryTokenData.message || 'Failed to generate game entry token after successful payment. Contact support with transaction ID: ' + transactionSignature);
-            }
-            setGameEntryTokenId(generatePaidEntryTokenData.gameEntryTokenId);
-
-            try {
-                const grantTokenResponse = await api.post('/profile/grant-token', {
-                    tokenType: `${gameType.toLowerCase()}Tokens`,
-                    amount: 1,
-                    transactionId: transactionSignature,
-                    reason: `SOL_PAYMENT_${gameType.toUpperCase()}_GAME`
-                });
-                if (grantTokenResponse.data.success) {
-                    toast.success("1 Free Entry Token granted to your profile!");
-                    await refreshProfile();
-                } else {
-                    toast.warn("Could not grant free token, but game entry is valid. Please contact support if needed.");
-                }
-            } catch (grantErr: any) {
-                toast.error("Failed to grant free token. Please contact support. Game entry is valid.");
-            }
+            toast.success("1 Picker Free Entry Token granted!");
+            await refreshProfile();
             setStep("onboarding");
         } catch (err: any) {
-            console.error("Payment error:", err);
             let msg = err?.message || "Transaction failed. Please check your balance and try again.";
-            if (msg.includes("insufficient funds")) {
+            if (msg.toLowerCase().includes("insufficient funds")) {
                 msg = "Insufficient funds. Please check your wallet balance.";
-            } else if (msg.includes("user rejected transaction")) {
+            } else if (msg.toLowerCase().includes("user rejected transaction") || msg.toLowerCase().includes("transaction cancelled by user")) {
                 msg = "Transaction cancelled by user.";
             }
             setStep("error");
@@ -518,37 +482,29 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         }
     }
 
-    const handleOnboardingComplete = useCallback((players: WegenRacePlayerType[], raceDuration: number, playerChoice: WegenRacePlayerType) => {
+    const handleOnboardingComplete = useCallback((
+        players: PickerPlayer[], raceDuration: number, playerChoice: PickerPlayer
+    ) => {
         if (!Array.isArray(players) || players.length === 0) {
-            toast.error("No players selected.");
-            return;
+            toast.error("No players selected."); return;
         }
         if (!raceDuration || raceDuration <= 0) {
-            toast.error("Invalid race duration.");
-            return;
+            toast.error("Invalid race duration."); return;
         }
         if (!playerChoice) {
-            toast.error("No player choice selected.");
-            return;
+            toast.error("No player choice selected."); return;
         }
         if (!firebaseAuthToken) {
-            toast.error("Authentication token missing. Please try again or refresh.");
-            onError("Authentication token missing.");
-            return;
+            toast.error("Authentication token missing. Please try again or refresh."); onError("Authentication token missing."); return;
         }
-        if (!gameEntryTokenId) {
-            toast.error("Game entry token missing. Please re-initiate payment or free entry.");
-            onError("Game entry token missing.");
-            return;
-        }
-        const formattedPlayers: WegenRacePlayerType[] = players.map(player => ({
-            ...player,
-            isHumanPlayer: player.key === playerChoice.key,
-            avatarUrl: player.avatarUrl || '/WegenRaceAssets/G1small.png',
-            name: player.username || player.name || 'Guest Player'
-        }));
-        const gameConfig = {
-            players: formattedPlayers,
+        // Pass config to parent (GamesPage) or via router
+        const gameConfig: PickerGameConfig = {
+            players: players.map(player => ({
+                ...player,
+                isHumanPlayer: player.key === playerChoice.key,
+                avatarUrl: player.avatarUrl || '/WegenRaceAssets/G1small.png',
+                name: player.username || player.name || 'Guest Player'
+            })),
             duration: raceDuration,
             humanChoice: {
                 ...playerChoice,
@@ -558,25 +514,16 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             },
             betAmount: paymentMethod === 'SOL' ? ticketPriceSol : 0,
             currency: paymentMethod as 'SOL' | 'FREE',
-            paymentSignature: txSig,
-            gameId: gameId,
             gameTitle: gameTitle,
             authToken: firebaseAuthToken,
-            gameEntryTokenId: gameEntryTokenId,
+            gameType: gameType,
+            paymentSignature: txSig || undefined,
         };
-        try {
-            setStep("done");
-            onSuccess(gameConfig);
-        } catch (error) {
-            toast.error("Failed to start game. Please try again.");
-            setStep("error");
-            onError("Failed to initiate game configuration.");
-        }
-    }, [onSuccess, onError, firebaseAuthToken, gameEntryTokenId, txSig, gameId, gameTitle, paymentMethod, ticketPriceSol]);
+        setStep("done");
+        onSuccess(gameConfig);
+    }, [onSuccess, onError, firebaseAuthToken, txSig, gameTitle, paymentMethod, ticketPriceSol, gameType]);
 
-    const handleCancel = () => {
-        onClose();
-    };
+    const handleCancel = () => onClose();
 
     const safeWalletDisplay = (walletAddress: string) => {
         if (!walletAddress || typeof walletAddress !== 'string') return 'Invalid Address';
@@ -605,7 +552,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                             <div className="text-sm text-yellow-200 animate-pulse">Loading token balance…</div>
                         ) : (
                             <div className="text-base text-white font-medium">
-                                Available <span className="font-bold text-yellow-300">Degen Gaming {gameType} Free Entry Tokens</span>: <span className="text-lime-300">{freeEntryTokensCount}</span>
+                                Available <span className="font-bold text-yellow-300">Degen Gaming Picker Free Entry Tokens</span>: <span className="text-lime-300">{freeEntryTokensCount}</span>
                             </div>
                         )}
                         <div className="text-lg text-white font-medium">

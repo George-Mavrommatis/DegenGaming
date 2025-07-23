@@ -143,35 +143,31 @@ export default function WegenRace() {
     }, [location.state, navigate]);
 
     // Effect 2: Firebase Authentication (using Custom Token Exchange)
-    useEffect(() => {
-        console.log(`DEBUG: WegenRace.tsx: Effect 2 (Auth) - LoadedConfig: ${!!loadedGameConfig}, SessionAuthenticated: ${isSessionAuthenticated}`);
-        if (!loadedGameConfig || isSessionAuthenticated) {
-            return; // Skip if config not loaded or already authenticated
+   useEffect(() => {
+        if (
+          loadedGameConfig && isSessionAuthenticated &&
+          loadedGameConfig.gameEntryTokenId && !freeTokenConsumedForSessionRef.current
+        ) {
+            const consumeToken = async () => {
+                try {
+                    // POST to backend to consume token
+                    // (Backend will only decrement free token balance if FREE, else just mark as consumed)
+                    const response = await api.post('/game-sessions/consume-entry-token', {
+                        gameEntryTokenId: loadedGameConfig.gameEntryTokenId,
+                        gameType: loadedGameConfig.currency === "FREE" ? "picker" : "sol"
+                    });
+                    if (response.data.success) {
+                        freeTokenConsumedForSessionRef.current = true;
+                        await refreshProfile();
+                    }
+                } catch (err) {
+                    toast.error("Could not validate entry token. Please try to restart the game.");
+                    navigate("/games");
+                }
+            };
+            consumeToken();
         }
-
-        const authenticateSession = async () => {
-            setLoadingMessage("Securing authentication...");
-            try {
-                // Exchange Firebase ID Token for a Custom Token from your backend
-                // This call uses the `api` instance which includes your Authorization header
-                const customTokenResponse = await api.post('/api/auth/exchange-id-for-custom', {});
-                
-                const { customToken } = customTokenResponse.data; // Axios data property
-                console.log("DEBUG: WegenRace.tsx: Effect 2 - Received Firebase custom token.");
-
-                setLoadingMessage("Authenticating user with Firebase...");
-                await signInWithCustomToken(auth, customToken);
-                console.log("DEBUG: WegenRace.tsx: Effect 2 - Firebase Authentication successful.");
-                setIsSessionAuthenticated(true);
-                setLoadingMessage("Session authenticated. Consuming entry token (if free) and initializing game engine...");
-            } catch (error: any) {
-                console.error("ERROR: WegenRace.tsx: Effect 2 - Game initiation error during Firebase auth:", error);
-                toast.error(`Access denied: ${error.message}. Please restart from the games page.`);
-                navigate("/games"); 
-            }
-        };
-        authenticateSession();
-    }, [loadedGameConfig, isSessionAuthenticated, navigate]); // Dependencies
+    }, [loadedGameConfig, isSessionAuthenticated, navigate, refreshProfile]);
 
     // --- NEW Effect 2.5: Consume Free Entry Token (if applicable) ---
     // This runs AFTER authentication but BEFORE Phaser game initialization.

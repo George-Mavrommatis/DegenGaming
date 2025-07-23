@@ -1307,6 +1307,10 @@ app.post('/chats/:chatId/messages', protect, async (req, res) => {
 });
 
 
+
+// In your server.js, import and call once:
+// await ensurePlatformStatsSchema();
+
 // --- General Error Handling ---
 // This middleware should be last
 app.use((err, req, res, next) => {
@@ -1321,6 +1325,7 @@ server.listen(PORT, async () => {
     console.log(`DegenGaming Backend listening on port ${PORT}`);
     // Ensure the game token mint is loaded or created when the server starts
     // Run initial cron jobs
+    
     updateALLUsersOnlineStatus();
     updatePlatformStatsAggregatedInSol();
 });
