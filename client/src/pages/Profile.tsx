@@ -179,7 +179,7 @@ export default function Profile() {
   const displayedAvatar = avatarPreview || form.avatarUrl || '/WegenRaceAssets/G1small.png';
 
   // Ensure correct keys and fallback
-  const tokensObj = form.freeEntryTokens || {};
+const tokensObj = form.freeEntryTokens || {};
   const tokens = {
     arcade: tokensObj.arcade ?? tokensObj.arcadeTokens ?? 0,
     picker: tokensObj.picker ?? tokensObj.pickerTokens ?? 0,

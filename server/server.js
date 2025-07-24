@@ -719,6 +719,59 @@ app.get('/user/free-entry-tokens', protect, async (req, res) => {
     }
 });
 
+// CREATE SESSION TOKEN (Game Entry Token)
+app.post('/api/picker/create-session', protect, async (req, res) => {
+    const userId = req.user.uid;
+    const { gameId, paymentSignature, currency } = req.body;
+
+    try {
+        // Compose new entry token doc
+        const tokenDoc = {
+            userId,
+            category: "Picker",
+            gameId,
+            issuedAt: admin.firestore.FieldValue.serverTimestamp(),
+            isConsumed: false,
+            paymentCurrency: currency,
+            paymentAmount: currency === "SOL" ? 0.01 : 0,
+            txSig: paymentSignature || null,
+        };
+        // Add document to gameEntryTokens collection
+        const docRef = await db.collection('gameEntryTokens').add(tokenDoc);
+
+        res.status(200).json({ gameEntryTokenId: docRef.id });
+    } catch (error) {
+        console.error("Error creating game entry token:", error);
+        res.status(500).json({ message: "Failed to create game session token." });
+    }
+});
+
+// VALIDATE SESSION TOKEN (Game Entry Token)
+app.get('/api/picker/validate-session/:id', protect, async (req, res) => {
+    const userId = req.user.uid;
+    const tokenId = req.params.id;
+
+    try {
+        const docRef = db.collection('gameEntryTokens').doc(tokenId);
+        const docSnap = await docRef.get();
+        if (!docSnap.exists) {
+            return res.status(404).json({ valid: false, message: "Session token does not exist." });
+        }
+        const data = docSnap.data();
+        if (data.isConsumed) {
+            return res.status(400).json({ valid: false, message: "Session token already consumed." });
+        }
+        if (data.userId !== userId) {
+            return res.status(403).json({ valid: false, message: "Session token does not belong to this user." });
+        }
+        // You can check more: category, gameId, etc.
+        return res.status(200).json({ valid: true });
+    } catch (error) {
+        console.error("Error validating game entry token:", error);
+        res.status(500).json({ valid: false, message: "Failed to validate session token." });
+    }
+});
+
 // Update Free Entry Tokens (Generate/Consume) (Protected)
 app.post('/tokens/generate', protect, async (req, res) => {
     const userId = req.user.uid;

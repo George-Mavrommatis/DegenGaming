@@ -381,6 +381,7 @@ export default function PickerInitModal(props: any) {
     }
 
     async function handlePay(currency: 'SOL' | 'FREE') {
+        setPaymentMethod(currency);
         if (currency === 'SOL' && (!wallet.publicKey || !wallet.sendTransaction)) {
             setPaymentError("Wallet not available. Please connect your wallet.");
             onError("Wallet not available.");
@@ -394,16 +395,11 @@ export default function PickerInitModal(props: any) {
         }
         setStep("paying");
         setPaymentError(null);
-        setPaymentMethod(currency);
 
         try {
             if (currency === "FREE") {
+                // Only check here, do not consume yet!
                 if (freeEntryTokensCount <= 0) throw new Error("No Picker Free Entry Tokens available.");
-                // Consume a free entry token (backend will decrement user's freeEntryTokens.picker)
-                await api.post('/tokens/consume', { tokenType: "picker" }, {
-                    headers: { Authorization: `Bearer ${firebaseAuthToken}` }
-                });
-                await refreshProfile();
 
                 // Create a game session for free entry
                 const sessionId = await createGameSession("FREE");
@@ -542,6 +538,7 @@ export default function PickerInitModal(props: any) {
             contentLabel="Init Game Modal"
             shouldCloseOnOverlayClick={step !== "paying"}
         >
+ 
             <div className="w-full mx-auto px-6 py-6 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[320px] border-2 border-yellow-500">
                 {step !== "paying" && (
                     <button className="absolute right-4 top-4 text-gray-400 text-2xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
