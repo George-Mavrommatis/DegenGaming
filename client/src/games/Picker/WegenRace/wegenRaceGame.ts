@@ -615,6 +615,18 @@ export class WegenRaceScene extends Phaser.Scene {
         });
     }
 
+      // --- Robust sound playback ---
+    private safePlaySound(key: string, opts?: Phaser.Types.Sound.SoundConfig) {
+        if (!this.sound) return;
+        const snd = this.sound.get(key);
+        if (snd) {
+            try { return snd.play(opts); } catch (e) { console.warn(`Sound ${key} failed to play.`, e); }
+        } else if (this.cache.audio.exists(key)) {
+            try { return this.sound.add(key).play(opts); } catch (e) { console.warn(`Sound ${key} failed to play(add).`, e); }
+        }
+        return undefined;
+    }
+
     create(): void {
         console.log('🎮 WegenRaceScene created');
 
@@ -654,15 +666,10 @@ export class WegenRaceScene extends Phaser.Scene {
         this.gameLogic.onPlayerBoostEffectEnd((playerKey) => this.handlePlayerBoostEffectEnd(playerKey));
 
         // Play background music
-        const bgMusicSound = this.sound.get('background_music');
-        if (bgMusicSound) {
-            this.backgroundMusic = this.sound.play('background_music', { loop: true, volume: 0.2 });
-        } else {
-            console.warn('⚠️ Background music not loaded or not found in sound cache');
-        }
+       this.safePlaySound('background_music', { loop: true, volume: 0.2 });
 
-        // Emit 'create' event after all scene setup is done, for React to listen to
-        this.events.emit('create');
+        // Emit 'scene-ready' event after all scene setup is done, for React to listen to
+              this.events.emit('scene-ready');
     }
 
     /**
@@ -913,60 +920,51 @@ export class WegenRaceScene extends Phaser.Scene {
      * Also applies subtle bouncing animation.
      */
     private updatePlayerVisuals(): void {
-        const players = this.gameLogic.getAllPlayers();
+    const players = this.gameLogic.getAllPlayers();
+    players.forEach((player, index) => {
+        const container = this.playerVisualContainers.get(player.key);
+        const avatar = this.playerAvatars.get(player.key);
+        const progressBar = this.playerProgressBars.get(player.key);
 
-        players.forEach((player, index) => {
-            const container = this.playerVisualContainers.get(player.key);
-            const avatar = this.playerAvatars.get(player.key);
-            const progressBar = this.playerProgressBars.get(player.key);
+        if (!container || !avatar || !progressBar) return;
 
-            if (!container || !avatar || !progressBar) {
-                // This might happen if player data is somehow inconsistent or cleanup is partial
-                // console.warn(`DEBUG_VISUAL: Missing component for ${player.key}.`);
-                return;
-            }
+        const progress = this.gameLogic.getPlayerProgress(player.key); // 0-1
 
-            const progress = this.gameLogic.getPlayerProgress(player.key); // 0-1 ratio
+        // Avatars should move to the tip of their progress bar
+        const avatarWidth = avatar.displayWidth;
+        const trackLeft = this.trackStartX;
+        const trackRight = this.trackStartX + this.trackWidth;
+        // The avatar's center should be at: trackStartX + progress * trackWidth
+        let avatarCenterX = trackLeft + progress * this.trackWidth;
+        // Clamp, so it never goes outside the track
+        avatarCenterX = Math.max(trackLeft + avatarWidth / 2, Math.min(trackRight - avatarWidth / 2, avatarCenterX));
+        container.x = avatarCenterX;
 
-            // Calculate the target X position for the avatar's center in *scene* coordinates.
-            // It starts at `trackStartX` + `avatar.width/2` and moves to `trackStartX + trackWidth - avatar.width/2`
-            const startX_scene_for_avatar_center = this.trackStartX + (avatar.displayWidth / 2);
-            const endX_scene_for_avatar_center = this.trackStartX + this.trackWidth - (avatar.displayWidth / 2);
-            const totalTravelDistance_scene = endX_scene_for_avatar_center - startX_scene_for_avatar_center;
+        // Apply subtle vertical bounce
+        const time = Date.now();
+        const bounceOffset = Math.sin(time / 200 + index * 0.5) * 4;
+        const laneYTop = this.trackStartY + (index * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
+        const laneCenterY = laneYTop + (this.laneHeight / 2);
+        container.y = laneCenterY + bounceOffset;
 
-            const desiredAvatarCenterX_scene = startX_scene_for_avatar_center + (progress * totalTravelDistance_scene);
+        // Draw progress bar, from left to current avatar tip
+        progressBar.clear();
+        const progressBarX = this.trackStartX + 2;
+        const progressBarY = laneYTop + this.laneHeight - (this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO) - 2;
+        const progressBarWidth = Math.max(2, progress * this.trackWidth);
+        const progressBarHeight = this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO;
 
-            // Now, calculate the container's X position.
-            // The container's X + the avatar's local X (GAME_CONSTANTS.AVATAR_START_OFFSET_X) should equal desiredAvatarCenterX_scene.
-            container.x = desiredAvatarCenterX_scene - GAME_CONSTANTS.AVATAR_START_OFFSET_X;
+        progressBar.fillStyle(0xFFD700, 0.8);
+        progressBar.fillRoundedRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight, GAME_CONSTANTS.PROGRESS_BAR_ROUND_RADIUS);
 
-
-            // Apply subtle vertical bounce
-            const time = Date.now();
-            const bounceOffset = Math.sin(time / 200 + index * 0.5) * 4;
-            const laneYTop = this.trackStartY + (index * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
-            const laneCenterY = laneYTop + (this.laneHeight / 2);
-            container.y = laneCenterY + bounceOffset;
-
-            // Update player's progress bar
-            progressBar.clear();
-            const progressBarWidth = progress * this.trackWidth;
-            const progressBarHeight = this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO;
-            const progressBarX = this.trackStartX + 2; // Keep it slightly inside the track border
-            const progressBarY = laneYTop + this.laneHeight - progressBarHeight - 2; // Position at bottom of lane
-
-            progressBar.fillStyle(0xFFD700, 0.8); // Gold color
-            progressBar.fillRoundedRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight, GAME_CONSTANTS.PROGRESS_BAR_ROUND_RADIUS);
-
-            // Reset avatar scale and tint if no boost effect is active
-            const boost = this.gameLogic.getVisualBoost(player.key);
-            if (!boost) {
-                avatar.clearTint();
-                avatar.setScale(1);
-            }
-        });
-    }
-
+        // Reset avatar scale/tint if no boost
+        const boost = this.gameLogic.getVisualBoost(player.key);
+        if (!boost) {
+            avatar.clearTint();
+            avatar.setScale(1);
+        }
+    });
+}
     /**
      * Updates the text display for the overall race progress and time remaining.
      */
@@ -1218,50 +1216,67 @@ export class WegenRaceScene extends Phaser.Scene {
      * @param durationMinutes Race duration in minutes.
      * @param humanChoice The human player's chosen participant.
      */
-    public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
-        console.log('🚀 Initializing race with data:', { players: players.length, durationMinutes, humanChoice: humanChoice.name });
+   public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
+    console.log('Phaser: initializeRaceWithData called');
+    let avatarsToLoad = 0;
+    players.forEach(player => {
+        const dynamicAvatarKey = `avatar_${player.key}`;
+        if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
+            this.load.image(dynamicAvatarKey, player.avatarUrl);
+            avatarsToLoad++;
+        }
+    });
 
-        // Queue all player avatars for loading
-        players.forEach(player => {
-            const dynamicAvatarKey = `avatar_${player.key}`;
-            if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
-                console.log(`Queuing avatar for ${player.name} (${player.key}) from ${player.avatarUrl}`);
-                this.load.image(dynamicAvatarKey, player.avatarUrl);
-            } else if (!player.avatarUrl) {
-                console.warn(`Player ${player.name} (${player.key}) has no avatarUrl. Using default 'G1small.png'.`);
-                // 'G1small' is always preloaded, so no extra load needed here.
-            } else if (this.textures.exists(dynamicAvatarKey)) {
-                console.log(`Avatar for ${player.name} (${player.key}) already loaded/cached.`);
-            }
-        });
-        this.load.start(); // Start the queued loading process
-
+    const continueSetup = () => {
+        console.log("Phaser: All avatars loaded (or none), continuing with setupLayout/createTrack");
         this.gameLogic.initializeRace(players, durationMinutes);
         this.raceData = { players, duration: durationMinutes, humanChoice };
-        
         this.setupLayout();
-        this.createTrack(); // This also cleans up previous visuals if any
+        this.createTrack();
 
-        // Create player visuals and attempt to set their correct avatar texture
+        // Player visuals/avatars
         players.forEach((player, index) => {
             this.createPlayerVisualContainer(player, index);
             const avatarSprite = this.playerAvatars.get(player.key);
             const dynamicAvatarKey = `avatar_${player.key}`;
-            if (avatarSprite) {
-                // If avatar image is already loaded (either from cache or finished loading quickly)
-                if (this.textures.exists(dynamicAvatarKey)) {
-                    console.log(`DEBUG_VISUAL: Applying already loaded avatar texture for ${player.name} on creation.`);
-                    avatarSprite.setTexture(dynamicAvatarKey);
-                    const avatarSize = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO;
-                    avatarSprite.setDisplaySize(avatarSize, avatarSize);
-                    this.updateAvatarMask(player.key, avatarSprite);
-                } else {
-                    console.log(`DEBUG_VISUAL: Dynamic avatar for ${player.name} not yet loaded. Using 'G1small'.`);
-                }
+            if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
+                avatarSprite.setTexture(dynamicAvatarKey);
+                avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
+                this.updateAvatarMask(player.key, avatarSprite);
             }
         });
+
+        // This is crucial! Start the countdown after setup 
+        // this is where we should consume the  picker freeEntryToken 
+        if (typeof this.startRaceExternally === "function") {
+            console.log("Phaser: About to start race externally (countdown should show!)");
+            this.startRaceExternally();
+        } else {
+            console.error("Phaser: startRaceExternally is not a function!");
+        }
         console.log('✅ Race initialized with', players.length, 'players in scene.');
+    };
+
+    if (avatarsToLoad > 0) {
+        let avatarLoadTimedOut = false;
+        const timeout = setTimeout(() => {
+            avatarLoadTimedOut = true;
+            console.warn("Phaser: Avatar load timeout, continuing setup anyway.");
+            continueSetup();
+        }, 5000); // 5 seconds fallback
+
+        this.load.once('complete', () => {
+            if (!avatarLoadTimedOut) clearTimeout(timeout);
+            continueSetup();
+        });
+        this.load.once('loaderror', (file: any) => {
+            console.warn('Avatar load error for', file.key, 'using fallback.');
+        });
+        this.load.start();
+    } else {
+        continueSetup();
     }
+}
 
     /**
      * Starts the race countdown logic within the scene.
@@ -1412,68 +1427,38 @@ export class WegenRaceScene extends Phaser.Scene {
 export function createWegenRaceGame(container: HTMLElement): Phaser.Game {
     const config: Phaser.Types.Core.GameConfig = {
         type: Phaser.AUTO,
-        width: container.clientWidth || 800, // Use container size or default
+        width: container.clientWidth || 800,
         height: container.clientHeight || 500,
         parent: container,
         backgroundColor: '#1a1a2e',
         scene: WegenRaceScene,
-        physics: {
-            default: 'arcade',
-            arcade: {
-                gravity: { y: 0, x: 0 },
-                debug: false // Set to true for physics debugging visuals
-            }
-        },
+        physics: { default: 'arcade', arcade: { gravity: { y: 0, x: 0 }, debug: false } },
         audio: { disableWebAudio: false },
         scale: {
-            mode: Phaser.Scale.FIT, // Scale game to fit parent container
-            autoCenter: Phaser.Scale.CENTER_BOTH, // Center canvas in parent
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
             width: container.clientWidth || 800,
             height: container.clientHeight || 500
         }
     };
-
     return new Phaser.Game(config);
 }
-
-/**
- * Destroys a Phaser.Game instance, safely stopping its scene and removing it from the DOM.
- * @param game The Phaser.Game instance to destroy.
- */
 export function destroyWegenRaceGame(game: Phaser.Game): void {
     if (game && !game.isDestroyed) {
         game.scene.stop('WegenRaceScene');
         game.scene.remove('WegenRaceScene');
-        game.destroy(true); // Destroy game and its canvas
+        game.destroy(true);
     }
 }
-
-/**
- * Retrieves the WegenRaceScene instance from a Phaser.Game.
- * @param game The Phaser.Game instance.
- */
 export function getWegenRaceScene(game: Phaser.Game): WegenRaceScene | null {
     if (!game || game.isDestroyed) return null;
     return game.scene.getScene('WegenRaceScene') as WegenRaceScene;
 }
-
-/**
- * Checks if the Phaser game and its scene are valid and running.
- * @param game The Phaser.Game instance.
- */
 export function isGameValid(game: Phaser.Game): boolean {
     return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('WegenRaceScene');
 }
-
-// --- Exports ---
 export { WegenRaceGameLogic };
 export type { Player, GameState, GameEvent, VisualBoost };
-
-// --- Debug Utilities ---
-/**
- * Enables debug mode, exposing game and scene objects on the window for console inspection.
- * @param game The Phaser.Game instance.
- */
 export function enableDebugMode(game: Phaser.Game): void {
     const scene = getWegenRaceScene(game);
     if (scene) {
@@ -1481,11 +1466,10 @@ export function enableDebugMode(game: Phaser.Game): void {
         (window as any).wegenRaceDebug = {
             game,
             scene,
-            gameLogic: (scene as any).gameLogic, // Direct access to game logic
+            gameLogic: (scene as any).gameLogic,
             getState: () => scene.getGameState(),
             exportData: () => scene.exportRaceData()
         };
     }
 }
-
 console.log("🎮 WegenRaceGame.ts loaded successfully.");

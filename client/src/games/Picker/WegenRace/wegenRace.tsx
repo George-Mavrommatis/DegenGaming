@@ -11,7 +11,6 @@ import {
 } from '../../../games/Picker/WegenRace/wegenRaceGame';
 import GameOverModal from "../../Picker/PickerGameOverModal";
 import "./wegenrace.css";
-import { getAuth, signInWithCustomToken } from "firebase/auth";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
@@ -34,19 +33,19 @@ type WegenRaceState = GameState & {
     leaderboard?: Player[];
 };
 
-const auth = getAuth();
-
 export default function WegenRace() {
     const location = useLocation();
     const navigate = useNavigate();
-    const freeTokenConsumedForSessionRef = useRef(false);
+
+    // Only consume the free token after race actually starts ("running"), and only once!
+    const freeTokenConsumedRef = useRef(false);
 
     const [showGameOverModal, setShowGameOverModal] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState("Loading game...");
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
     const [loadedGameConfig, setLoadedGameConfig] = useState<WegenRaceConfig | null>(null);
-    const [isSessionAuthenticated, setIsSessionAuthenticated] = useState(true); // You can add auth logic if needed
+    const [isSessionAuthenticated, setIsSessionAuthenticated] = useState(true);
     const [isPhaserGameRunning, setIsPhaserGameRunning] = useState(false);
 
     const [gameState, setGameState] = useState<WegenRaceState>({
@@ -68,6 +67,7 @@ export default function WegenRace() {
     const phaserGameRef = useRef<Phaser.Game | null>(null);
     const { refreshProfile } = useProfile();
 
+    // Handle state changes from Phaser game
     const handleGameStateChange = useCallback((state: GameState) => {
         setGameState(prevState => ({
             ...prevState,
@@ -85,7 +85,28 @@ export default function WegenRace() {
         }));
         setEventLog(state.eventLog || []);
         setConnectionStatus('connected');
-    }, []);
+
+        // Only consume freeEntryToken on status === "running" (race actually starts!)
+        if (
+            loadedGameConfig &&
+            loadedGameConfig.currency === "FREE" &&
+            loadedGameConfig.authToken &&
+            state.status === "running" &&
+            !freeTokenConsumedRef.current
+        ) {
+            api.post(
+                "/tokens/consume",
+                { tokenType: "picker" },
+                { headers: { Authorization: `Bearer ${loadedGameConfig.authToken}` } }
+            ).then(() => {
+                toast.success("Free Entry Token consumed!");
+                refreshProfile();
+            }).catch(() => {
+                toast.error("Failed to consume Picker Free Entry Token.");
+            });
+            freeTokenConsumedRef.current = true;
+        }
+    }, [loadedGameConfig, refreshProfile]);
 
     const handleGameEnd = useCallback((winner: Player | null, rankings: Player[]) => {
         setGameState(prevState => ({
@@ -118,33 +139,6 @@ export default function WegenRace() {
         setLoadingMessage("Configuration loaded. Authenticating session...");
     }, [location.state, navigate]);
 
-    // Consume free entry token if needed
-    useEffect(() => {
-        async function consumeFreeTokenIfNeeded() {
-            if (
-              loadedGameConfig &&
-              loadedGameConfig.currency === "FREE" &&
-              loadedGameConfig.authToken &&
-              !freeTokenConsumedForSessionRef.current
-            ) {
-                try {
-                    await api.post(
-                        "/tokens/consume",
-                        { tokenType: "picker" },
-                        { headers: { Authorization: `Bearer ${loadedGameConfig.authToken}` } }
-                    );
-                    toast.success("Free Entry Token consumed!");
-                    await refreshProfile();
-                } catch (err: any) {
-                    toast.error("Failed to consume Picker Free Entry Token.");
-                    navigate("/games");
-                }
-                freeTokenConsumedForSessionRef.current = true;
-            }
-        }
-        consumeFreeTokenIfNeeded();
-    }, [loadedGameConfig, refreshProfile, navigate]);
-
     // Phaser game initialization
     useEffect(() => {
         const canInitializePhaser =
@@ -169,6 +163,7 @@ export default function WegenRace() {
             const game = createWegenRaceGame(gameContainer);
             phaserGameRef.current = game;
 
+            // Phaser emits EVENT_READY, then scene emits 'create'
             game.events.once(Phaser.Core.EVENT_READY, () => {
                 const scene = getWegenRaceScene(game);
                 if (!scene) {
@@ -176,16 +171,20 @@ export default function WegenRace() {
                     setConnectionStatus('disconnected');
                     return;
                 }
-                scene.events.once('create', () => {
+                // Wait for scene create before calling initialize/start
+              scene.events.once('scene-ready', () => {
+                    console.log("Parent: Scene create event received");
                     enableDebugMode(game);
                     scene.onStateChange(handleGameStateChange);
                     scene.onGameEnd(handleGameEnd);
+
+                    console.log("Parent: About to call initializeRaceWithData");
                     scene.initializeRaceWithData(
                         loadedGameConfig.players,
                         loadedGameConfig.duration,
                         loadedGameConfig.humanChoice
                     );
-                    scene.startRaceExternally();
+                    // No need to separately call startRaceExternally() if your scene calls it at the end of continueSetup above!
                     setConnectionStatus('connected');
                     setIsPhaserGameRunning(true);
                     setLoadingMessage("Game is running!");
@@ -204,7 +203,7 @@ export default function WegenRace() {
             setIsPhaserGameRunning(false);
             setLoadedGameConfig(null);
             setIsSessionAuthenticated(false);
-            freeTokenConsumedForSessionRef.current = false;
+            freeTokenConsumedRef.current = false;
             setGameState({
                 status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
                 raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',

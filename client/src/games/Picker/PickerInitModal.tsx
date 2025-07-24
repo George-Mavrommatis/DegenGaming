@@ -7,29 +7,21 @@ import { Player as LottiePlayer } from "@lottiefiles/react-lottie-player";
 import { useProfile } from "../../context/ProfileContext";
 import { api } from '../../services/api';
 
+// --- CONSTANTS ---
 const FIXED_SOL_ENTRY_FEE = 0.01;
 
 const modalStyles = {
-  overlay: {
-    backgroundColor: "rgba(10, 10, 10, 0.90)",
-    zIndex: 1000,
-  },
+  overlay: { backgroundColor: "rgba(10, 10, 10, 0.90)", zIndex: 1000 },
   content: {
     borderRadius: "18px",
     border: "none",
     background: "none",
     padding: 0,
     overflow: "visible",
-    top: "50%",
-    left: "50%",
-    right: "auto",
-    bottom: "auto",
+    top: "50%", left: "50%", right: "auto", bottom: "auto",
     marginRight: "-50%",
     transform: "translate(-50%, -50%)",
-    minWidth: 320,
-    maxWidth: 420,
-    minHeight: 200,
-    maxHeight: "95vh",
+    minWidth: 320, maxWidth: 420, minHeight: 200, maxHeight: "95vh",
     boxShadow: "0 4px 48px 0 rgba(0,0,0,0.7)",
   },
 };
@@ -55,6 +47,7 @@ export interface PickerGameConfig {
     gameType: string;
     paymentSignature?: string;
     gameEntryTokenId?: string;
+    // ...add new fields for future games here
 }
 
 interface OnboardingPanelProps {
@@ -64,6 +57,7 @@ interface OnboardingPanelProps {
     onCancel: () => void;
 }
 
+// --- ONBOARDING PANEL ---
 function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: OnboardingPanelProps) {
     const [selectedUsers, setSelectedUsers] = useState<PickerPlayer[]>([]);
     const [search, setSearch] = useState("");
@@ -72,23 +66,14 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     const { user } = useProfile();
 
     const timeOptions = [
-        { value: 1, label: "1 Min" }, { value: 2, label: "2 Mins" }, { value: 3, label: "3 Mins" }, { value: 4, label: "4 Mins" },
-        { value: 5, label: "5 Mins" }, { value: 8, label: "8 Mins" }, { value: 15, label: "15 Mins" }, { value: 30, label: "30 Mins" },
+        { value: 1, label: "1 Min" }, { value: 2, label: "2 Mins" },
+        { value: 3, label: "3 Mins" }, { value: 4, label: "4 Mins" },
+        { value: 5, label: "5 Mins" }, { value: 8, label: "8 Mins" },
+        { value: 15, label: "15 Mins" }, { value: 30, label: "30 Mins" }
     ];
 
-    useEffect(() => {
-        if (user && !humanPlayerChoice && !selectedUsers.some(u => u.key === user.uid)) {
-            const userPlayer: PickerPlayer = {
-                key: user.uid,
-                name: user.displayName || 'You',
-                username: user.displayName || 'You',
-                avatarUrl: user.photoURL || '/WegenRaceAssets/G1small.png',
-                isHumanPlayer: true,
-            };
-            setSelectedUsers([userPlayer]);
-            setHumanPlayerChoice(userPlayer);
-        }
-    }, [user, humanPlayerChoice, selectedUsers]);
+    // Add current user as default/human pick
+ 
 
     const filteredLedger = useMemo(() => {
         const query = search.trim().toLowerCase();
@@ -115,9 +100,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
             isHumanPlayer: false,
         };
         setSelectedUsers(prev => [...prev, userWithKey]);
-        if (!humanPlayerChoice) {
-            setHumanPlayerChoice(userWithKey);
-        }
+        if (!humanPlayerChoice) setHumanPlayerChoice(userWithKey);
         setSearch("");
     };
 
@@ -132,9 +115,8 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         const userFound = safeLedger.find(u =>
             (u.username?.toLowerCase() === trimmedVal.toLowerCase() || u.wallet?.toLowerCase() === trimmedVal.toLowerCase())
         );
-        if (userFound) {
-            addUser(userFound);
-        } else {
+        if (userFound) addUser(userFound);
+        else {
             const guestPlayer: PickerPlayer = {
                 key: `guest_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                 name: trimmedVal,
@@ -157,9 +139,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         });
     };
 
-    const canStartRace = selectedUsers.length >= minPlayers &&
-                         raceDuration > 0 &&
-                         humanPlayerChoice !== null;
+    const canStartRace = selectedUsers.length >= minPlayers && raceDuration > 0 && humanPlayerChoice !== null;
 
     return (
         <div className="max-w-md w-full m-auto text-white">
@@ -320,7 +300,6 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     );
 }
 
-
 export default function PickerInitModal(props: any) {
     const {
         gameId, gameType, onSuccess, onError, onClose, gameTitle, minPlayers = 2,
@@ -337,15 +316,11 @@ export default function PickerInitModal(props: any) {
     const [gameEntryTokenId, setGameEntryTokenId] = useState<string | null>(null);
 
     const freeEntryTokensCount = profile?.freeEntryTokens?.picker ?? 0;
-
     const destinationWallet = import.meta.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
     const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
     const connection = useMemo(() => (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed'), [rpcUrl]);
 
-    useEffect(() => {
-        if (step === "onboarding") fetchLedger();
-    }, [step]);
-
+    useEffect(() => { if (step === "onboarding") fetchLedger(); }, [step]);
     async function fetchLedger() {
         setLoadingLedger(true);
         try {
@@ -360,7 +335,6 @@ export default function PickerInitModal(props: any) {
         setLoadingLedger(false);
     }
 
-    // Helper to create a game session (token/id) for either payment or free entry.
     async function createGameSession(currency: 'SOL' | 'FREE', paymentSignature?: string) {
         try {
             const result = await api.post('/api/picker/create-session', {
@@ -380,6 +354,7 @@ export default function PickerInitModal(props: any) {
         }
     }
 
+    // --- PAYMENT HANDLER ---
     async function handlePay(currency: 'SOL' | 'FREE') {
         setPaymentMethod(currency);
         if (currency === 'SOL' && (!wallet.publicKey || !wallet.sendTransaction)) {
@@ -398,17 +373,15 @@ export default function PickerInitModal(props: any) {
 
         try {
             if (currency === "FREE") {
-                // Only check here, do not consume yet!
+                // Only check here, do NOT consume
                 if (freeEntryTokensCount <= 0) throw new Error("No Picker Free Entry Tokens available.");
-
-                // Create a game session for free entry
                 const sessionId = await createGameSession("FREE");
                 setGameEntryTokenId(sessionId);
-
                 setStep("onboarding");
                 return;
             }
 
+            // --- SOL path ---
             if (!connection) throw new Error("Solana RPC connection not available.");
             const tx = new Transaction();
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
@@ -460,7 +433,6 @@ export default function PickerInitModal(props: any) {
             // Create a game session for paid entry with paymentSignature
             const sessionId = await createGameSession("SOL", transactionSignature);
             setGameEntryTokenId(sessionId);
-
             setStep("onboarding");
         } catch (err: any) {
             let msg = err?.message || "Transaction failed. Please check your balance and try again.";
@@ -475,6 +447,7 @@ export default function PickerInitModal(props: any) {
         }
     }
 
+    // --- ONBOARDING COMPLETE ---
     const handleOnboardingComplete = useCallback((
         players: PickerPlayer[], raceDuration: number, playerChoice: PickerPlayer
     ) => {
@@ -538,7 +511,6 @@ export default function PickerInitModal(props: any) {
             contentLabel="Init Game Modal"
             shouldCloseOnOverlayClick={step !== "paying"}
         >
- 
             <div className="w-full mx-auto px-6 py-6 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[320px] border-2 border-yellow-500">
                 {step !== "paying" && (
                     <button className="absolute right-4 top-4 text-gray-400 text-2xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
