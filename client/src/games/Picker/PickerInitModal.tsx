@@ -54,17 +54,7 @@ export interface PickerGameConfig {
     authToken: string;
     gameType: string;
     paymentSignature?: string;
-}
-
-interface PickerInitModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    gameId: string;
-    gameTitle: string;
-    gameType: string;
-    minPlayers: number;
-    onSuccess: (gameConfig: PickerGameConfig) => void;
-    onError: (message: string) => void;
+    gameEntryTokenId?: string;
 }
 
 interface OnboardingPanelProps {
@@ -79,18 +69,11 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     const [search, setSearch] = useState("");
     const [raceDuration, setRaceDuration] = useState<number>(2);
     const [humanPlayerChoice, setHumanPlayerChoice] = useState<PickerPlayer | null>(null);
-
     const { user } = useProfile();
 
     const timeOptions = [
-        { value: 1, label: "1 Min" },
-        { value: 2, label: "2 Mins" },
-        { value: 3, label: "3 Mins" },
-        { value: 4, label: "4 Mins" },
-        { value: 5, label: "5 Mins" },
-        { value: 8, label: "8 Mins" },
-        { value: 15, label: "15 Mins" },
-        { value: 30, label: "30 Mins" },
+        { value: 1, label: "1 Min" }, { value: 2, label: "2 Mins" }, { value: 3, label: "3 Mins" }, { value: 4, label: "4 Mins" },
+        { value: 5, label: "5 Mins" }, { value: 8, label: "8 Mins" }, { value: 15, label: "15 Mins" }, { value: 30, label: "30 Mins" },
     ];
 
     useEffect(() => {
@@ -114,7 +97,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         if (safeLedger.length === 0) return [];
         return safeLedger.filter(u =>
             ((u.username && u.username.toLowerCase().includes(query)) ||
-            (u.wallet && u.wallet.toLowerCase().includes(query))) &&
+             (u.wallet && u.wallet.toLowerCase().includes(query))) &&
             !selectedUsers.some(su =>
                 (su.key === (u.key || u.wallet || u.uid)) ||
                 (su.username && u.username && su.username.toLowerCase() === u.username.toLowerCase()) ||
@@ -175,8 +158,8 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     };
 
     const canStartRace = selectedUsers.length >= minPlayers &&
-                        raceDuration > 0 &&
-                        humanPlayerChoice !== null;
+                         raceDuration > 0 &&
+                         humanPlayerChoice !== null;
 
     return (
         <div className="max-w-md w-full m-auto text-white">
@@ -337,55 +320,27 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
     );
 }
 
-export default function PickerInitModal(props: PickerInitModalProps) {
-    const ticketPriceSol = FIXED_SOL_ENTRY_FEE; 
+
+export default function PickerInitModal(props: any) {
     const {
-        gameId, gameType, onSuccess,
-        onError, onClose, gameTitle, minPlayers = 2,
+        gameId, gameType, onSuccess, onError, onClose, gameTitle, minPlayers = 2,
     } = props;
 
     const wallet = useWallet();
-    const { user, loading: loadingProfile, refreshProfile, firebaseAuthToken } = useProfile();
-
+    const { profile, refreshProfile, firebaseAuthToken } = useProfile();
     const [step, setStep] = useState<"pay" | "paying" | "onboarding" | "done" | "error">("pay");
     const [txSig, setTxSig] = useState<string | null>(null);
     const [paymentError, setPaymentError] = useState<string | null>(null);
     const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'FREE' | null>(null);
     const [ledger, setLedger] = useState<any[]>([]);
     const [loadingLedger, setLoadingLedger] = useState(false);
-    const [freeEntryTokensCount, setFreeEntryTokensCount] = useState<number>(0);
+    const [gameEntryTokenId, setGameEntryTokenId] = useState<string | null>(null);
 
-    const destinationWallet = process.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
+    const freeEntryTokensCount = profile?.freeEntryTokens?.picker ?? 0;
+
+    const destinationWallet = import.meta.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
     const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
-    const [rpcError, setRpcError] = useState<string | null>(null);
-
-    // Fetch free entry tokens from the backend endpoint (no UID in path, always authenticated user)
-    useEffect(() => {
-        async function fetchFreeEntryTokens() {
-            if (!user || !firebaseAuthToken) return setFreeEntryTokensCount(0);
-            try {
-                const res = await api.get(`/user/free-entry-tokens`, {
-                    headers: { Authorization: `Bearer ${firebaseAuthToken}` }
-                });
-                // expects: { arcade: 0, picker: 2, casino: 0, pvp: 0 }
-                setFreeEntryTokensCount(res.data.picker || 0);
-            } catch {
-                setFreeEntryTokensCount(0);
-            }
-        }
-        fetchFreeEntryTokens();
-    }, [user, firebaseAuthToken, step]);
-
-    useEffect(() => {
-        if (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) {
-            setRpcError("Solana RPC URL is not set! Please set VITE_SOLANA_RPC_URL in your .env file.");
-        }
-    }, [rpcUrl]);
-
-    const connection = useMemo(() => {
-        if (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) return null;
-        return new Connection(rpcUrl, 'confirmed');
-    }, [rpcUrl]);
+    const connection = useMemo(() => (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed'), [rpcUrl]);
 
     useEffect(() => {
         if (step === "onboarding") fetchLedger();
@@ -396,9 +351,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         try {
             const response = await api.get("/api/usernames", {
                 headers: { Authorization: `Bearer ${firebaseAuthToken}` }
-                });
-            const data = response.data;
-            setLedger(Array.isArray(data) ? data : []);
+            });
+            setLedger(Array.isArray(response.data) ? response.data : []);
         } catch {
             toast.error("Problem loading users for selection.");
             setLedger([]);
@@ -406,23 +360,36 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         setLoadingLedger(false);
     }
 
-    async function handlePay(currency: 'SOL' | 'FREE') {
-        if (rpcError) {
-            setPaymentError(rpcError);
-            onError(rpcError);
-            return;
+    // Helper to create a game session (token/id) for either payment or free entry.
+    async function createGameSession(currency: 'SOL' | 'FREE', paymentSignature?: string) {
+        try {
+            const result = await api.post('/api/picker/create-session', {
+                gameId,
+                paymentSignature: paymentSignature ?? null,
+                currency,
+            }, {
+                headers: { Authorization: `Bearer ${firebaseAuthToken}` }
+            });
+            if (result?.data?.gameEntryTokenId) {
+                return result.data.gameEntryTokenId;
+            } else {
+                throw new Error("Failed to create game session.");
+            }
+        } catch (err: any) {
+            throw new Error(err?.response?.data?.message || err?.message || "Failed to create game session.");
         }
+    }
+
+    async function handlePay(currency: 'SOL' | 'FREE') {
         if (currency === 'SOL' && (!wallet.publicKey || !wallet.sendTransaction)) {
-            const msg = "Wallet not available. Please connect your wallet.";
-            setPaymentError(msg);
-            onError(msg);
+            setPaymentError("Wallet not available. Please connect your wallet.");
+            onError("Wallet not available.");
             return;
         }
         if (!firebaseAuthToken) {
-            const msg = "Authentication required. Please log in to proceed. Firebase token not found.";
-            setPaymentError(msg);
-            onError(msg);
-            toast.error(msg);
+            setPaymentError("Authentication required. Please log in to proceed.");
+            onError("No Firebase token.");
+            toast.error("Authentication required.");
             return;
         }
         setStep("paying");
@@ -430,21 +397,23 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         setPaymentMethod(currency);
 
         try {
-            if (currency === 'FREE') {
-                if (freeEntryTokensCount <= 0) {
-                    throw new Error(`No Picker Free Entry Tokens available.`);
-                }
+            if (currency === "FREE") {
+                if (freeEntryTokensCount <= 0) throw new Error("No Picker Free Entry Tokens available.");
+                // Consume a free entry token (backend will decrement user's freeEntryTokens.picker)
+                await api.post('/tokens/consume', { tokenType: "picker" }, {
+                    headers: { Authorization: `Bearer ${firebaseAuthToken}` }
+                });
+                await refreshProfile();
+
+                // Create a game session for free entry
+                const sessionId = await createGameSession("FREE");
+                setGameEntryTokenId(sessionId);
+
                 setStep("onboarding");
                 return;
             }
 
-            if (!connection) throw new Error("RPC connection not available!");
-
-            if (ticketPriceSol <= 0 || isNaN(ticketPriceSol)) {
-                throw new Error("Invalid SOL amount for payment.");
-            }
-
-            // Initiate Solana transaction for the entry fee
+            if (!connection) throw new Error("Solana RPC connection not available.");
             const tx = new Transaction();
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
@@ -455,7 +424,7 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 SystemProgram.transfer({
                     fromPubkey: wallet.publicKey!,
                     toPubkey: new PublicKey(destinationWallet),
-                    lamports: Math.ceil(ticketPriceSol * LAMPORTS_PER_SOL)
+                    lamports: Math.ceil(FIXED_SOL_ENTRY_FEE * LAMPORTS_PER_SOL)
                 })
             );
 
@@ -471,8 +440,8 @@ export default function PickerInitModal(props: PickerInitModalProps) {
 
             const confirmation = await connection.confirmTransaction({
                 signature: transactionSignature,
-                blockhash: blockhash,
-                lastValidBlockHeight: lastValidBlockHeight,
+                blockhash,
+                lastValidBlockHeight,
             }, "confirmed");
 
             if (confirmation.value.err) {
@@ -491,6 +460,11 @@ export default function PickerInitModal(props: PickerInitModalProps) {
             });
             toast.success("1 Picker Free Entry Token granted!");
             await refreshProfile();
+
+            // Create a game session for paid entry with paymentSignature
+            const sessionId = await createGameSession("SOL", transactionSignature);
+            setGameEntryTokenId(sessionId);
+
             setStep("onboarding");
         } catch (err: any) {
             let msg = err?.message || "Transaction failed. Please check your balance and try again.";
@@ -520,6 +494,11 @@ export default function PickerInitModal(props: PickerInitModalProps) {
         if (!firebaseAuthToken) {
             toast.error("Authentication token missing. Please try again or refresh."); onError("Authentication token missing."); return;
         }
+        if (!gameEntryTokenId) {
+            toast.error("Game session token missing. Please re-initiate payment or free entry.");
+            onError("Game session token missing.");
+            return;
+        }
         const gameConfig: PickerGameConfig = {
             players: players.map(player => ({
                 ...player,
@@ -534,16 +513,17 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 avatarUrl: playerChoice.avatarUrl || '/WegenRaceAssets/G1small.png',
                 name: playerChoice.username || playerChoice.name || 'Guest Player'
             },
-            betAmount: paymentMethod === 'SOL' ? ticketPriceSol : 0,
+            betAmount: paymentMethod === 'SOL' ? FIXED_SOL_ENTRY_FEE : 0,
             currency: paymentMethod as 'SOL' | 'FREE',
             gameTitle: gameTitle,
             authToken: firebaseAuthToken,
             gameType: gameType,
             paymentSignature: txSig || undefined,
+            gameEntryTokenId: gameEntryTokenId,
         };
         setStep("done");
         onSuccess(gameConfig);
-    }, [onSuccess, onError, firebaseAuthToken, txSig, gameTitle, paymentMethod, ticketPriceSol, gameType]);
+    }, [onSuccess, onError, firebaseAuthToken, txSig, gameTitle, paymentMethod, gameType, gameEntryTokenId]);
 
     const handleCancel = () => onClose();
 
@@ -570,15 +550,11 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 <div className="mb-2 text-xs text-purple-300 uppercase font-semibold tracking-widest">{gameType}</div>
                 {step === "pay" && (
                     <div className="w-full flex flex-col items-center gap-3 mt-3">
-                        {loadingProfile ? (
-                            <div className="text-sm text-yellow-200 animate-pulse">Loading token balance…</div>
-                        ) : (
-                            <div className="text-base text-white font-medium">
-                                Available <span className="font-bold text-yellow-300">Degen Gaming Picker Free Entry Tokens</span>: <span className="text-lime-300">{freeEntryTokensCount}</span>
-                            </div>
-                        )}
+                        <div className="text-base text-white font-medium">
+                            Available <span className="font-bold text-yellow-300">Degen Gaming Picker Free Entry Tokens</span>: <span className="text-lime-300">{freeEntryTokensCount}</span>
+                        </div>
                         <div className="text-lg text-white font-medium">
-                            Entry Fee: <span className="font-bold text-lime-300">{ticketPriceSol.toFixed(2)} SOL</span>
+                            Entry Fee: <span className="font-bold text-lime-300">{FIXED_SOL_ENTRY_FEE.toFixed(2)} SOL</span>
                         </div>
                         <div className="text-xs text-gray-400 mb-2 text-center">
                             To: <span className="font-mono text-slate-300">{safeWalletDisplay(destinationWallet)}</span>
@@ -588,9 +564,9 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                             <button
                                 className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
                                 onClick={() => handlePay('SOL')}
-                                disabled={step === "paying" || ticketPriceSol <= 0}
+                                disabled={step === "paying" || FIXED_SOL_ENTRY_FEE <= 0}
                             >
-                                Pay {ticketPriceSol.toFixed(2)} SOL
+                                Pay {FIXED_SOL_ENTRY_FEE.toFixed(2)} SOL
                             </button>
                             <button
                                 className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
@@ -606,16 +582,12 @@ export default function PickerInitModal(props: PickerInitModalProps) {
                 {step === "paying" && (
                     <div className="w-full py-9 flex flex-col items-center">
                         <LottiePlayer src="/assets/lottie/loading-spinner.json" autoplay loop style={{ width: 68, height: 68 }} />
-                        {paymentMethod === 'FREE' ? (
-                            <p className="text-base text-yellow-200 text-center animate-pulse font-medium">Using free tokens…</p>
-                        ) : (
-                            <p className="text-base text-yellow-200 text-center animate-pulse font-medium">Waiting for wallet confirmation…</p>
-                        )}
-                        {paymentMethod === 'FREE' ? (
-                            <p className="text-xs text-gray-400 text-center">Updating your token balance…</p>
-                        ) : (
-                            <p className="text-xs text-gray-400 text-center">Please approve the transaction in your wallet.</p>
-                        )}
+                        <p className="text-base text-yellow-200 text-center animate-pulse font-medium">
+                            {paymentMethod === 'FREE' ? "Using free tokens…" : "Waiting for wallet confirmation…"}
+                        </p>
+                        <p className="text-xs text-gray-400 text-center">
+                            {paymentMethod === 'FREE' ? "Updating your token balance…" : "Please approve the transaction in your wallet."}
+                        </p>
                     </div>
                 )}
                 {step === "onboarding" && (
