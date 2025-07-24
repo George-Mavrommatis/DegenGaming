@@ -140,84 +140,85 @@ export default function WegenRace() {
     }, [location.state, navigate]);
 
     // Phaser game initialization
-    useEffect(() => {
-        const canInitializePhaser =
-            loadedGameConfig &&
-            isSessionAuthenticated &&
-            !isPhaserGameRunning &&
-            (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
+useEffect(() => {
+    const canInitializePhaser =
+        loadedGameConfig &&
+        isSessionAuthenticated &&
+        !isPhaserGameRunning &&
+        (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
 
-        if (!canInitializePhaser) return;
+    if (!canInitializePhaser) return;
 
-        const gameContainer = gameContainerRef.current;
-        if (!gameContainer) {
-            setConnectionStatus('disconnected');
-            return;
-        }
+    const gameContainer = gameContainerRef.current;
+    if (!gameContainer) {
+        setConnectionStatus('disconnected');
+        return;
+    }
+    if (phaserGameRef.current) {
+        destroyWegenRaceGame(phaserGameRef.current);
+        phaserGameRef.current = null;
+    }
+    try {
+        gameContainer.innerHTML = '';
+        const game = createWegenRaceGame(gameContainer);
+        phaserGameRef.current = game;
+
+        // Listen for custom global event 'scene-ready'
+        const onSceneReady = () => {
+            const scene = getWegenRaceScene(game);
+            if (!scene) {
+                toast.error("Game engine error: Core scene not found.");
+                setConnectionStatus('disconnected');
+                return;
+            }
+            console.log("Parent: Scene 'scene-ready' event received");
+            enableDebugMode(game);
+            scene.onStateChange(handleGameStateChange);
+            scene.onGameEnd(handleGameEnd);
+
+            console.log("Parent: About to call initializeRaceWithData");
+            scene.initializeRaceWithData(
+                loadedGameConfig.players,
+                loadedGameConfig.duration,
+                loadedGameConfig.humanChoice
+            );
+            setConnectionStatus('connected');
+            setIsPhaserGameRunning(true);
+            setLoadingMessage("Game is running!");
+
+            // Remove listener after fired
+            game.events.off('scene-ready', onSceneReady);
+        };
+
+        game.events.on('scene-ready', onSceneReady);
+    } catch (e: any) {
+        toast.error(`Failed to start game engine: ${e.message || "Unknown error."}`);
+        setConnectionStatus('disconnected');
+        setIsPhaserGameRunning(false);
+    }
+    return () => {
         if (phaserGameRef.current) {
             destroyWegenRaceGame(phaserGameRef.current);
             phaserGameRef.current = null;
         }
-        try {
-            gameContainer.innerHTML = '';
-            const game = createWegenRaceGame(gameContainer);
-            phaserGameRef.current = game;
-
-            // Phaser emits EVENT_READY, then scene emits 'create'
-            game.events.once(Phaser.Core.EVENT_READY, () => {
-                const scene = getWegenRaceScene(game);
-                if (!scene) {
-                    toast.error("Game engine error: Core scene not found.");
-                    setConnectionStatus('disconnected');
-                    return;
-                }
-                // Wait for scene create before calling initialize/start
-              scene.events.once('scene-ready', () => {
-                    console.log("Parent: Scene create event received");
-                    enableDebugMode(game);
-                    scene.onStateChange(handleGameStateChange);
-                    scene.onGameEnd(handleGameEnd);
-
-                    console.log("Parent: About to call initializeRaceWithData");
-                    scene.initializeRaceWithData(
-                        loadedGameConfig.players,
-                        loadedGameConfig.duration,
-                        loadedGameConfig.humanChoice
-                    );
-                    // No need to separately call startRaceExternally() if your scene calls it at the end of continueSetup above!
-                    setConnectionStatus('connected');
-                    setIsPhaserGameRunning(true);
-                    setLoadingMessage("Game is running!");
-                });
-            });
-        } catch (e: any) {
-            toast.error(`Failed to start game engine: ${e.message || "Unknown error."}`);
-            setConnectionStatus('disconnected');
-            setIsPhaserGameRunning(false);
-        }
-        return () => {
-            if (phaserGameRef.current) {
-                destroyWegenRaceGame(phaserGameRef.current);
-                phaserGameRef.current = null;
-            }
-            setIsPhaserGameRunning(false);
-            setLoadedGameConfig(null);
-            setIsSessionAuthenticated(false);
-            freeTokenConsumedRef.current = false;
-            setGameState({
-                status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
-                raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',
-                timeRemaining: 0, leaderboard: [], eventLog: []
-            });
-            setEventLog([]);
-        };
-    }, [
-        loadedGameConfig,
-        isSessionAuthenticated,
-        isPhaserGameRunning,
-        handleGameStateChange,
-        handleGameEnd
-    ]);
+        setIsPhaserGameRunning(false);
+        setLoadedGameConfig(null);
+        setIsSessionAuthenticated(false);
+        freeTokenConsumedRef.current = false;
+        setGameState({
+            status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
+            raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',
+            timeRemaining: 0, leaderboard: [], eventLog: []
+        });
+        setEventLog([]);
+    };
+}, [
+    loadedGameConfig,
+    isSessionAuthenticated,
+    isPhaserGameRunning,
+    handleGameStateChange,
+    handleGameEnd
+]);
 
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {

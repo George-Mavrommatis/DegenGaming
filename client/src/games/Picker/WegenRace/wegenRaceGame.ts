@@ -669,7 +669,8 @@ export class WegenRaceScene extends Phaser.Scene {
        this.safePlaySound('background_music', { loop: true, volume: 0.2 });
 
         // Emit 'scene-ready' event after all scene setup is done, for React to listen to
-              this.events.emit('scene-ready');
+            // At the end of create() in your WegenRaceScene class:
+        (this.game as Phaser.Game).events.emit('scene-ready');
     }
 
     /**
