@@ -195,13 +195,17 @@ export default function WegenRace() {
                         setLoadingMessage("Game is running!");
                         game.events.off('scene-ready', onSceneReady);
                     } else {
-                        toast.error("Game engine error: Core scene not ready (custom methods missing).");
-                        setConnectionStatus('disconnected');
-                        // Print prototype debug:
+                        // Fix: else block should match if and not be inside if!
+                        console.error("Scene instance at error check:", scene);
                         if (scene) {
+                            console.error("typeof onStateChange", typeof scene.onStateChange);
+                            console.error("typeof onGameEnd", typeof scene.onGameEnd);
+                            console.error("typeof initializeRaceWithData", typeof scene.initializeRaceWithData);
                             console.error("Scene prototype:", Object.getPrototypeOf(scene));
                             console.error("Scene own props:", Object.getOwnPropertyNames(scene));
                         }
+                        toast.error("Game engine error: Core scene not ready (custom methods missing).");
+                        setConnectionStatus('disconnected');
                     }
                 };
                 game.events.on('scene-ready', onSceneReady);

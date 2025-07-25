@@ -427,6 +427,8 @@ class WegenRaceGameLogic {
 }
 
 // --- Phaser Scene ---
+
+
 export class WegenRaceScene extends Phaser.Scene {
     private gameLogic!: WegenRaceGameLogic;
     private playerVisualContainers: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -460,14 +462,44 @@ export class WegenRaceScene extends Phaser.Scene {
     private lastStateEmit = 0;
 
     private waitingForRaceData: boolean = true;
+    
 
     // Scene/data ready flags for robust initialization
     private sceneReady = false;
     private raceDataReady = false;
     private pendingRaceData: { players: Player[], duration: number, humanChoice: Player } | null = null;
 
-    constructor() {
-        super({ key: 'WegenRaceScene' });
+    // React integration handlers
+    private stateChangeCallbacks: Array<(state: GameState) => void> = [];
+    private gameEndCallbacks: Array<(winner: Player | null, rankings: Player[]) => void> = [];
+
+    public onStateChange(cb: (state: GameState) => void) {
+        console.log("[WegenRaceScene] onStateChange registered", cb);
+        this.stateChangeCallbacks.push(cb);
+    }
+    public onGameEnd(cb: (winner: Player | null, rankings: Player[]) => void) {
+        console.log("[WegenRaceScene] onGameEnd registered", cb);
+        this.gameEndCallbacks.push(cb);
+    }
+    private emitStateChange() {
+        if (!this.gameLogic) return;
+        const state = this.gameLogic.getState();
+        for (const cb of this.stateChangeCallbacks) {
+            try { cb(state); } catch (e) { console.error("Error in onStateChange callback", e); }
+        }
+    }
+    private emitGameEnd(winner: Player | null, rankings: Player[]) {
+        for (const cb of this.gameEndCallbacks) {
+            try { cb(winner, rankings); } catch (e) { console.error("Error in onGameEnd callback", e); }
+        }
+    }
+    public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
+        console.log("[WegenRaceScene] initializeRaceWithData called", {players, durationMinutes, humanChoice});
+        this.raceDataReady = true;
+        this.pendingRaceData = { players, duration: durationMinutes, humanChoice };
+        if (this.sceneReady) {
+            this._doRaceSetup(players, durationMinutes, humanChoice);
+        }
     }
 
     preload(): void {
@@ -511,6 +543,21 @@ export class WegenRaceScene extends Phaser.Scene {
     }
 
     create(): void {
+        // DEBUG
+        console.log(
+        "WegenRaceScene PROTOTYPE methods at load:",
+        Object.getOwnPropertyNames(WegenRaceScene.prototype)
+        );
+        console.log(
+          "[WegenRaceScene:create] WegenRaceScene.prototype:",
+          Object.getOwnPropertyNames(Object.getPrototypeOf(this))
+        );
+        console.log(
+          "[WegenRaceScene:create] typeof onStateChange:", typeof (this as any).onStateChange,
+          "typeof onGameEnd:", typeof (this as any).onGameEnd,
+          "typeof initializeRaceWithData:", typeof (this as any).initializeRaceWithData
+        );
+
         this.gameLogic = new WegenRaceGameLogic();
         this.trackGraphics = this.add.graphics();
         this.sceneEventEmitter = new Phaser.Events.EventEmitter();
@@ -537,14 +584,13 @@ export class WegenRaceScene extends Phaser.Scene {
         this.tweens.add({ targets: this.raceTitleText, scale: 1.02, yoyo: true, repeat: -1, duration: 1500, ease: 'Sine.easeInOut' });
         this.tweens.add({ targets: this.overallRaceProgressText, alpha: 0.9, yoyo: true, repeat: -1, duration: 1000, ease: 'Sine.easeInOut' });
 
-        this.gameLogic.onPlayerPhaseAdvance((playerKey, phaseIndex) => this.handlePlayerPhaseAdvance(playerKey, phaseIndex));
-        this.gameLogic.onRaceFinished(() => this.handleRaceFinishedInternal());
-        this.gameLogic.onPlayerBoostEffect((playerKey, isPositive, effectDuration, stunDuration) => this.handlePlayerBoostEffect(playerKey, isPositive, effectDuration, stunDuration));
-        this.gameLogic.onPlayerBoostEffectEnd((playerKey) => this.handlePlayerBoostEffectEnd(playerKey));
+        this.gameLogic.onPlayerPhaseAdvance?.((playerKey, phaseIndex) => this.handlePlayerPhaseAdvance?.(playerKey, phaseIndex));
+        this.gameLogic.onRaceFinished?.(() => this.handleRaceFinishedInternal?.());
+        this.gameLogic.onPlayerBoostEffect?.((playerKey, isPositive, effectDuration, stunDuration) => this.handlePlayerBoostEffect?.(playerKey, isPositive, effectDuration, stunDuration));
+        this.gameLogic.onPlayerBoostEffectEnd?.((playerKey) => this.handlePlayerBoostEffectEnd?.(playerKey));
 
         this.sceneReady = true;
 
-        // Robust data/scene ready
         if (this.raceDataReady && this.pendingRaceData) {
             this._doRaceSetup(this.pendingRaceData.players, this.pendingRaceData.duration, this.pendingRaceData.humanChoice);
         }
@@ -613,21 +659,13 @@ export class WegenRaceScene extends Phaser.Scene {
         }
     }
 
-    public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
-        this.raceDataReady = true;
-        this.pendingRaceData = { players, duration: durationMinutes, humanChoice };
-        if (this.sceneReady) {
-            this._doRaceSetup(players, durationMinutes, humanChoice);
-        }
-    }
-
     update(): void {
         if (!this.raceDataReady) return;
         if (!this.gameLogic) return;
         this.gameLogic.update(this.sys.game.loop.delta);
 
-        this.updatePlayerVisuals();
-        this.updateOverallRaceProgressUI();
+        this.updatePlayerVisuals?.();
+        this.updateOverallRaceProgressUI?.();
 
         const now = Date.now();
         if (now - this.lastStateEmit > 100) {
@@ -660,7 +698,7 @@ export class WegenRaceScene extends Phaser.Scene {
         this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
     }
 
-    // ... all other methods (createTrack, createPlayerVisualContainer, etc.) remain unchanged ...
+    // ... all other methods (createTrack, createPlayerVisualContainer, updatePlayerVisuals, etc.) remain unchanged ...
     // ... omitted for brevity; see your previous versions ...
 }
 
@@ -693,7 +731,21 @@ export function destroyWegenRaceGame(game: Phaser.Game): void {
 }
 export function getWegenRaceScene(game: Phaser.Game): WegenRaceScene | null {
     if (!game || game.isDestroyed) return null;
-    return game.scene.getScene('WegenRaceScene') as WegenRaceScene;
+    const scene = game.scene.getScene('WegenRaceScene') as WegenRaceScene;
+    // --- DEBUG LOG: Check instance methods on scene object
+    if (scene) {
+        console.log(
+            "[getWegenRaceScene] Got scene key:",
+            (scene as any).sys?.settings?.key,
+            "Class:", scene.constructor.name,
+            "Prototype methods:",
+            Object.getOwnPropertyNames(Object.getPrototypeOf(scene))
+        );
+        console.log("[getWegenRaceScene] typeof scene.onStateChange:", typeof (scene as any).onStateChange);
+        console.log("[getWegenRaceScene] typeof scene.onGameEnd:", typeof (scene as any).onGameEnd);
+        console.log("[getWegenRaceScene] typeof scene.initializeRaceWithData:", typeof (scene as any).initializeRaceWithData);
+    }
+    return scene;
 }
 export function isGameValid(game: Phaser.Game): boolean {
     return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('WegenRaceScene');
@@ -707,8 +759,8 @@ export function enableDebugMode(game: Phaser.Game): void {
             game,
             scene,
             gameLogic: (scene as any).gameLogic,
-            getState: () => scene.getGameState(),
-            exportData: () => scene.exportRaceData()
+            getState: () => scene.getGameState && scene.getGameState(),
+            exportData: () => scene.exportRaceData && scene.exportRaceData()
         };
     }
 }
