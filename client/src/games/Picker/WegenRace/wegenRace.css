@@ -1,12 +1,12 @@
 @font-face {
-  font-family: 'SiderFont';
-  src: url('/WegenRaceAssets/sider-font.ttf') format('truetype');
+  font-family: 'WegensFont';
+  src: url('/fonts/WegensFont.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
 }
 
-/* Use SiderFont for all panels and main UI for WegenRace ONLY */
+/* Use WegensFont for all panels and main UI for WegenRace ONLY */
 .wegenrace-root,
 .wegenrace-sidebar,
 .leaderboard-panel,

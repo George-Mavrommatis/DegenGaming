@@ -640,7 +640,7 @@ export class WegenRaceScene extends Phaser.Scene {
         this.raceTitleText = this.add.text(this.scale.width / 2, 30, 'Wegen Race', {
             fontSize: '36px',
             color: '#ffd93b',
-            fontFamily: 'SiderFont, Arial',
+            fontFamily: 'WegensFont, Arial',
             shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 4, fill: true }
         }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
@@ -651,7 +651,7 @@ export class WegenRaceScene extends Phaser.Scene {
             {
                 fontSize: '18px',
                 color: '#ddd',
-                fontFamily: 'SiderFont, Arial',
+                fontFamily: 'WegensFont, Arial',
             }
         ).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
@@ -676,29 +676,42 @@ export class WegenRaceScene extends Phaser.Scene {
     /**
      * Calculates and sets up the layout dimensions for the track based on screen size.
      */
-    private setupLayout(): void {
-        const horizontalPadding = this.scale.width * 0.05;
-        const verticalPaddingTop = this.scale.height * 0.12;
-        const verticalPaddingBottom = this.scale.height * 0.05;
+ private setupLayout(): void {
+    const horizontalPadding = this.scale.width * 0.05;
+    const verticalPaddingTop = this.scale.height * 0.12;
+    const verticalPaddingBottom = this.scale.height * 0.05;
 
-        if (this.raceTitleText) {
+    // Guard: Fallback for text
+    if (this.raceTitleText) {
+        try {
             this.raceTitleText.y = verticalPaddingTop / 3;
-            this.raceTitleText.setStyle({ fontSize: '48px' });
+            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'WegensFont, Arial, sans-serif' });
+        } catch (e) {
+            console.warn('Failed to update raceTitleText style, using fallback.', e);
+            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'Arial, sans-serif' });
         }
-        if (this.overallRaceProgressText) {
-            this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
-        }
-
-        this.trackStartX = horizontalPadding;
-        this.trackStartY = verticalPaddingTop;
-        this.trackWidth = this.scale.width - (horizontalPadding * 2);
-        this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
-
-        console.log('🎯 Track layout:', {
-            width: this.trackWidth, height: this.trackHeight,
-            startX: this.trackStartX, startY: this.trackStartY
-        });
     }
+    if (this.overallRaceProgressText) {
+        try {
+            this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
+            this.overallRaceProgressText.setStyle({ fontFamily: 'WegensFont, Arial, sans-serif' });
+        } catch (e) {
+            console.warn('Failed to update overallRaceProgressText style, using fallback.', e);
+            this.overallRaceProgressText.setStyle({ fontFamily: 'Arial, sans-serif' });
+        }
+    }
+
+    this.trackStartX = horizontalPadding;
+    this.trackStartY = verticalPaddingTop;
+    this.trackWidth = this.scale.width - (horizontalPadding * 2);
+    this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
+
+    console.log('🎯 Track layout:', {
+        width: this.trackWidth, height: this.trackHeight,
+        startX: this.trackStartX, startY: this.trackStartY
+    });
+}
+
 
     /**
      * Draws the main track, including lane backgrounds, borders, and phase markers.
@@ -777,13 +790,14 @@ export class WegenRaceScene extends Phaser.Scene {
         // Start and Finish lines
         this.trackGraphics.lineStyle(3, 0xFFFFFF, 1);
         this.trackGraphics.lineBetween(this.trackStartX, this.trackStartY, this.trackStartX, this.trackStartY + totalLanesRenderHeight);
-        this.add.text(this.trackStartX + 5, this.trackStartY - 20, 'START', {
-            fontSize: '14px', color: '#FFFFFF', fontFamily: 'SiderFont, Arial', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+       this.add.text(this.trackStartX + 5, this.trackStartY - 20, 'START', {
+        fontSize: '14px', color: '#FFFFFF', fontFamily: 'WegensFont, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
         }).setOrigin(0, 0.5).setDepth(spriteDepths.overallUI);
+
 
         this.trackGraphics.lineBetween(this.trackStartX + this.trackWidth, this.trackStartY, this.trackStartX + this.trackWidth, this.trackStartY + totalLanesRenderHeight);
         this.add.text(this.trackStartX + this.trackWidth - 5, this.trackStartY - 20, 'FINISH', {
-            fontSize: '14px', color: '#FFFFFF', fontFamily: 'SiderFont, Arial', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+        fontSize: '14px', color: '#FFFFFF', fontFamily: 'WegensFont, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
         }).setOrigin(1, 0.5).setDepth(spriteDepths.overallUI);
 
         // Phase markers and labels
@@ -801,8 +815,8 @@ export class WegenRaceScene extends Phaser.Scene {
             );
             this.phaseMarkers.push(markerLine);
 
-            this.add.text(markerX - phaseSectionWidth / 2, this.trackStartY - 15, `Phase ${i}`, {
-                fontSize: '12px', color: '#aaa', fontFamily: 'SiderFont, Arial', align: 'center', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 1, fill: true }
+          this.add.text(markerX - phaseSectionWidth / 2, this.trackStartY - 15, `Phase ${i}`, {
+            fontSize: '12px', color: '#aaa', fontFamily: 'WegensFont, Arial, sans-serif', align: 'center', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 1, fill: true }
             }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
         }
 
@@ -856,49 +870,122 @@ export class WegenRaceScene extends Phaser.Scene {
      * @param player The player object.
      * @param laneIndex The index of the player's lane.
      */
+    /**
+     * Creates the visual container for a player, including their avatar, name, and border.
+     * @param player The player object.
+     * @param laneIndex The index of the player's lane.
+     */
     private createPlayerVisualContainer(player: Player, laneIndex: number): void {
         const laneYTop = this.trackStartY + (laneIndex * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
         const laneCenterY = laneYTop + (this.laneHeight / 2);
 
-        // Container's X is initially set to trackStartX. Its position will be updated based on player progress.
-        // Its Y is the center of its lane.
         const container = this.add.container(this.trackStartX, laneCenterY).setDepth(spriteDepths.playerAvatar);
         container.name = `playerContainer_${player.key}`;
         this.playerVisualContainers.set(player.key, container);
 
         const avatarSize = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO;
         const avatarRadius = avatarSize / 2;
-        const avatarLocalX = GAME_CONSTANTS.AVATAR_START_OFFSET_X; // X position of avatar's center relative to container's 0,0
-        const avatarLocalY = 0; // Y position of avatar's center relative to container's 0,0 (middle)
+        const avatarLocalX = GAME_CONSTANTS.AVATAR_START_OFFSET_X;
+        const avatarLocalY = 0;
 
-        // Create avatar sprite, using default first, then dynamically loaded one
-        const currentAvatar = this.add.sprite(avatarLocalX, avatarLocalY, 'G1small'); // Placeholder texture
+        // Choose the avatar texture: dynamic if loaded, else fallback to 'G1small'
+        const dynamicAvatarKey = `avatar_${player.key}`;
+        let avatarTextureKey = 'G1small';
+        if (this.textures.exists(dynamicAvatarKey)) {
+            avatarTextureKey = dynamicAvatarKey;
+        }
+
+        const currentAvatar = this.add.sprite(avatarLocalX, avatarLocalY, avatarTextureKey);
         currentAvatar.setDisplaySize(avatarSize, avatarSize);
-        currentAvatar.setOrigin(0.5); // Center origin for easier positioning and mask
+        currentAvatar.setOrigin(0.5);
         currentAvatar.name = `avatarSprite_${player.key}`;
         container.add(currentAvatar);
         this.playerAvatars.set(player.key, currentAvatar);
-        // console.log(`DEBUG_VISUAL: Created avatar for ${player.name} at local (${avatarLocalX}, ${avatarLocalY}), display size ${avatarSize}`);
 
-        // Create and apply the circular mask
         this.createAvatarMask(player.key, currentAvatar);
-        
-        // Thick Black Border for the Avatar
+
         const borderGraphics = this.add.graphics();
         borderGraphics.lineStyle(3, 0x000000, 1);
         borderGraphics.strokeCircle(avatarLocalX, avatarLocalY, avatarRadius);
         container.add(borderGraphics);
         borderGraphics.name = `avatarBorder_${player.key}`;
 
-        // Player Name Text
         const nameTextX = avatarLocalX - avatarRadius - GAME_CONSTANTS.PLAYER_NAME_OFFSET_X;
-        const nameText = this.add.text(nameTextX, avatarLocalY, player.name, {
-            fontSize: '15px', color: '#fff', fontFamily: 'SiderFont, Arial', align: 'right',
-            wordWrap: { width: 100, useWebFonts: true },
-            shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
-        }).setOrigin(1, 0.5);
+       const nameText = this.add.text(nameTextX, avatarLocalY, player.name, {
+        fontSize: '15px', color: '#fff', fontFamily: 'WegensFont, Arial, sans-serif', align: 'right',
+        wordWrap: { width: 100, useWebFonts: true },
+        shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+          }).setOrigin(1, 0.5);
         nameText.name = `nameText_${player.key}`;
         container.add(nameText);
+    }
+
+        /**
+     * Initializes the race data in the Phaser scene, queues avatar loading,
+     * sets up the layout, and creates the track and player visuals.
+     * @param players Array of players.
+     * @param durationMinutes Race duration in minutes.
+     * @param humanChoice The human player's chosen participant.
+     */
+   public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
+    console.log('Phaser: initializeRaceWithData called');
+    let avatarsToLoad = 0;
+    players.forEach(player => {
+        const dynamicAvatarKey = `avatar_${player.key}`;
+        if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
+            this.load.image(dynamicAvatarKey, player.avatarUrl);
+            avatarsToLoad++;
+        }
+    });
+
+        const continueSetup = () => {
+            console.log("Phaser: All avatars loaded (or none), continuing with setupLayout/createTrack");
+            this.gameLogic.initializeRace(players, durationMinutes);
+            this.raceData = { players, duration: durationMinutes, humanChoice };
+            this.setupLayout();
+            this.createTrack();
+
+            // Player visuals/avatars
+            players.forEach((player, index) => {
+                this.createPlayerVisualContainer(player, index);
+                const avatarSprite = this.playerAvatars.get(player.key);
+                const dynamicAvatarKey = `avatar_${player.key}`;
+                // Check if the dynamic avatar texture exists before setting it
+                if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
+                    avatarSprite.setTexture(dynamicAvatarKey);
+                    avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
+                    this.updateAvatarMask(player.key, avatarSprite);
+                }
+            });
+
+            if (typeof this.startRaceExternally === "function") {
+                console.log("Phaser: About to start race externally (countdown should show!)");
+                this.startRaceExternally();
+            } else {
+                console.error("Phaser: startRaceExternally is not a function!");
+            }
+            console.log('✅ Race initialized with', players.length, 'players in scene.');
+        };
+
+        if (avatarsToLoad > 0) {
+            let avatarLoadTimedOut = false;
+            const timeout = setTimeout(() => {
+                avatarLoadTimedOut = true;
+                console.warn("Phaser: Avatar load timeout, continuing setup anyway.");
+                continueSetup();
+            }, 5000); // 5 seconds fallback
+
+            this.load.once('complete', () => {
+                if (!avatarLoadTimedOut) clearTimeout(timeout);
+                continueSetup();
+            });
+            this.load.once('loaderror', (file: any) => {
+                console.warn('Avatar load error for', file.key, 'using fallback.');
+            });
+            this.load.start();
+        } else {
+            continueSetup();
+        }
     }
 
     update(): void {
@@ -1210,23 +1297,7 @@ export class WegenRaceScene extends Phaser.Scene {
         else console.warn('⚠️ Celebration sound not loaded.');
     }
 
-    /**
-     * Initializes the race data in the Phaser scene, queues avatar loading,
-     * sets up the layout, and creates the track and player visuals.
-     * @param players Array of players.
-     * @param durationMinutes Race duration in minutes.
-     * @param humanChoice The human player's chosen participant.
-     */
-   public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
-    console.log('Phaser: initializeRaceWithData called');
-    let avatarsToLoad = 0;
-    players.forEach(player => {
-        const dynamicAvatarKey = `avatar_${player.key}`;
-        if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
-            this.load.image(dynamicAvatarKey, player.avatarUrl);
-            avatarsToLoad++;
-        }
-    });
+
 
     const continueSetup = () => {
         console.log("Phaser: All avatars loaded (or none), continuing with setupLayout/createTrack");
@@ -1295,9 +1366,9 @@ export class WegenRaceScene extends Phaser.Scene {
         const centerY = this.scale.height / 2;
 
         this.countdownText = this.add.text(centerX, centerY, '3', {
-            fontSize: '96px', color: '#ffd93b', fontFamily: 'SiderFont, Arial', fontStyle: 'bold',
-            shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 5, fill: true }
-        }).setOrigin(0.5).setDepth(spriteDepths.countdown);
+        fontSize: '96px', color: '#ffd93b', fontFamily: 'WegensFont, Arial, sans-serif', fontStyle: 'bold',
+        shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 5, fill: true }
+         }).setOrigin(0.5).setDepth(spriteDepths.countdown);
 
         const tickSound = this.sound.get('countdown_tick');
         const startSound = this.sound.get('race_start_horn');

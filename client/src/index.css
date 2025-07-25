@@ -19,17 +19,16 @@
 }
 
 @font-face {
-  font-family: 'SiderFont';
-  src: url('/mnt/data/file-ngwyeoEN29l1M3O1QpdxCwkj-sider-font.ttf') format('truetype');
-  /* 
-     IMPORTANT: If you see 'OTS parsing error' or 'Failed to decode', replace this URL with a valid, non-corrupt TTF file.
-     Example: src: url('/fonts/roboto-regular.ttf') format('truetype');
-     Download from https://fonts.google.com/ and place in public/fonts/.
-     Verify the file in a tool like FontForge.
-  */
+  font-family: 'WegensFont';
+  src: url('/fonts/WegensFont.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
-  font-display: swap; /* Fallback to system fonts while loading to prevent invisible text */
+  font-display: swap;
+}
+
+:root {
+  font-family: 'WegensFont', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* ...other vars */
 }
 
 /* Remove the default link styles that might interfere */
