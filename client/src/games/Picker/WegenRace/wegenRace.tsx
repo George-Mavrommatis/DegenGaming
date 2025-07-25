@@ -14,7 +14,7 @@ import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
-import FontFaceObserver from "fontfaceobserver"; // Font loader
+import FontFaceObserver from "fontfaceobserver";
 
 interface WegenRaceConfig {
     players: Player[];
@@ -28,7 +28,6 @@ interface WegenRaceConfig {
     authToken?: string;
     gameEntryTokenId?: string;
 }
-
 type WegenRaceState = GameState & {
     raceEndTime?: number | null;
     leaderboard?: Player[];
@@ -37,8 +36,6 @@ type WegenRaceState = GameState & {
 export default function WegenRace() {
     const location = useLocation();
     const navigate = useNavigate();
-
-    // To avoid double token consumption
     const freeTokenConsumedRef = useRef(false);
 
     const [showGameOverModal, setShowGameOverModal] = useState(false);
@@ -63,12 +60,11 @@ export default function WegenRace() {
         eventLog: []
     });
     const [eventLog, setEventLog] = useState<GameEvent[]>([]);
-
     const gameContainerRef = useRef<HTMLDivElement>(null);
     const phaserGameRef = useRef<Phaser.Game | null>(null);
     const { refreshProfile } = useProfile();
 
-    // Handle state changes from Phaser game
+    // State change handler
     const handleGameStateChange = useCallback((state: GameState) => {
         setGameState(prevState => ({
             ...prevState,
@@ -86,8 +82,6 @@ export default function WegenRace() {
         }));
         setEventLog(state.eventLog || []);
         setConnectionStatus('connected');
-
-        // Only consume freeEntryToken on status === "running"
         if (
             loadedGameConfig &&
             loadedGameConfig.currency === "FREE" &&
@@ -117,12 +111,10 @@ export default function WegenRace() {
             leaderboard: rankings,
             raceEndTime: Date.now()
         }));
-        setTimeout(() => {
-            setShowGameOverModal(true);
-        }, 1500);
+        setTimeout(() => setShowGameOverModal(true), 1500);
     }, []);
 
-    // Load game config from router location.state
+    // Game config load
     useEffect(() => {
         setLoadingMessage("Validating game configuration...");
         const config: WegenRaceConfig | undefined = (location.state as { gameConfig?: WegenRaceConfig })?.gameConfig;
@@ -147,9 +139,7 @@ export default function WegenRace() {
             isSessionAuthenticated &&
             !isPhaserGameRunning &&
             (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
-
         if (!canInitializePhaser) return;
-
         const gameContainer = gameContainerRef.current;
         if (!gameContainer) {
             setConnectionStatus('disconnected');
@@ -159,14 +149,11 @@ export default function WegenRace() {
             destroyWegenRaceGame(phaserGameRef.current);
             phaserGameRef.current = null;
         }
-
         let cancelled = false;
         async function loadFontAndStartGame() {
             const font = new FontFaceObserver('WegensFont');
             try {
                 await font.load();
-
-                // PREWARM: trick browser to rasterize font in advance
                 const span = document.createElement('span');
                 span.innerText = "WegensFontPrewarm";
                 span.style.fontFamily = 'WegensFont, Comic Sans MS, cursive';
@@ -175,19 +162,19 @@ export default function WegenRace() {
                 span.style.pointerEvents = 'none';
                 span.style.zIndex = '-9999';
                 document.body.appendChild(span);
-
                 await new Promise(res => setTimeout(res, 150));
                 document.body.removeChild(span);
-
                 if (cancelled) return;
                 gameContainer.innerHTML = '';
                 const game = createWegenRaceGame(gameContainer);
                 phaserGameRef.current = game;
 
-                // Listen for custom global event 'scene-ready'
                 const onSceneReady = () => {
                     const scene = getWegenRaceScene(game);
-                    // Robust: check custom methods exist before use!
+                    // Extra debug!
+                    if (scene) {
+                        console.log("[WegenRace.tsx] scene found:", scene.constructor.name, scene);
+                    }
                     if (
                         scene &&
                         typeof scene.onStateChange === 'function' &&
@@ -206,14 +193,17 @@ export default function WegenRace() {
                         setConnectionStatus('connected');
                         setIsPhaserGameRunning(true);
                         setLoadingMessage("Game is running!");
-                        // Remove event handler after first fire
                         game.events.off('scene-ready', onSceneReady);
                     } else {
                         toast.error("Game engine error: Core scene not ready (custom methods missing).");
                         setConnectionStatus('disconnected');
+                        // Print prototype debug:
+                        if (scene) {
+                            console.error("Scene prototype:", Object.getPrototypeOf(scene));
+                            console.error("Scene own props:", Object.getOwnPropertyNames(scene));
+                        }
                     }
                 };
-
                 game.events.on('scene-ready', onSceneReady);
             } catch (e) {
                 toast.error('Failed to load WegensFont, cannot start game.');
@@ -247,7 +237,7 @@ export default function WegenRace() {
         handleGameEnd
     ]);
 
-    // Fullscreen toggling
+    // Fullscreen toggling (unchanged)
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {
             destroyWegenRaceGame(phaserGameRef.current);
@@ -255,36 +245,21 @@ export default function WegenRace() {
         }
         navigate("/games");
     }, [navigate]);
-
-    const handlePlayAgain = useCallback(() => {
-        handleBackToGames();
-    }, [handleBackToGames]);
-
+    const handlePlayAgain = useCallback(() => { handleBackToGames(); }, [handleBackToGames]);
     const toggleFullscreen = useCallback(() => {
         const element = document.documentElement;
         if (!isFullscreen) {
-            if (element.requestFullscreen) {
-                element.requestFullscreen();
-            } else if ((element as any).webkitRequestFullscreen) {
-                (element as any).webkitRequestFullscreen();
-            } else if ((element as any).mozRequestFullScreen) {
-                (element as any).mozRequestFullScreen();
-            } else if ((element as any).msRequestFullscreen) {
-                (element as any).msRequestFullscreen();
-            }
+            if (element.requestFullscreen) element.requestFullscreen();
+            else if ((element as any).webkitRequestFullscreen) (element as any).webkitRequestFullscreen();
+            else if ((element as any).mozRequestFullScreen) (element as any).mozRequestFullScreen();
+            else if ((element as any).msRequestFullscreen) (element as any).msRequestFullscreen();
         } else {
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            } else if ((document as any).webkitExitFullscreen) {
-                (document as any).webkitExitFullscreen();
-            } else if ((document as any).mozCancelFullScreen) {
-                (document as any).mozCancelFullScreen();
-            } else if ((document as any).msExitFullscreen) {
-                (document as any).msExitFullscreen();
-            }
+            if (document.exitFullscreen) document.exitFullscreen();
+            else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
+            else if ((document as any).mozCancelFullScreen) (document as any).mozCancelFullScreen();
+            else if ((document as any).msExitFullscreen) (document as any).msExitFullscreen();
         }
     }, [isFullscreen]);
-
     useEffect(() => {
         const handleFullscreenChange = () => { setIsFullscreen(!!document.fullscreenElement); };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -298,7 +273,6 @@ export default function WegenRace() {
             document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
         };
     }, []);
-
     const formatTimeRemaining = useCallback(() => {
         if (typeof gameState.timeRemaining !== 'number' || isNaN(gameState.timeRemaining)) return "Loading...";
         const seconds = Math.ceil(gameState.timeRemaining / 1000);
@@ -307,6 +281,7 @@ export default function WegenRace() {
         const remainingSeconds = seconds % 60;
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     }, [gameState.timeRemaining]);
+
 
     // UI
 

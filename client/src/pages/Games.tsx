@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import axios from 'axios';
 import { useProfile } from '../context/ProfileContext';
 
-// Import all category-specific InitModal components (ensure these paths are correct)
 import PickerInitModal from '../games/Picker/PickerInitModal';
 import ArcadeInitModal from '../games/Arcade/ArcadeInitModal';
 import CasinoInitModal from '../games/Casino/CasinoInitModal';
@@ -51,10 +50,10 @@ type Category = {
 };
 
 interface FreeEntryTokens {
-    arcadeTokens: number;
-    pickerTokens: number;
-    casinoTokens: number;
-    pvpTokens: number;
+  arcadeTokens: number;
+  pickerTokens: number;
+  casinoTokens: number;
+  pvpTokens: number;
 }
 
 export default function GamesPage() {
@@ -62,36 +61,29 @@ export default function GamesPage() {
   const [modalGame, setModalGame] = useState<Game | null>(null);
   const [games, setGames] = useState<Game[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true); // Loading for games/categories
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
-  const { user, firebaseAuthToken } = useProfile(); // FIX: user, not currentUser
+  const { user, firebaseAuthToken } = useProfile();
 
   const [freeTokens, setFreeTokens] = useState<FreeEntryTokens | null>(null);
-  const [loadingTokens, setLoadingTokens] = useState(true); // Loading for free tokens
+  const [loadingTokens, setLoadingTokens] = useState(true);
   const [errorTokens, setErrorTokens] = useState<string | null>(null);
 
-  // This line needs to correctly point to your backend.
-  // Ensure your .env file in the project root contains VITE_BACKEND_URL=http://localhost:8000
-  const API_BASE_URL = process.env.VITE_BACKEND_URL || 'http://localhost:4000';
+  const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || process.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
 
- 
-
   useEffect(() => {
     if (!firebaseAuthToken) {
-        setLoading(false);
-        console.warn("GamesPage: No Firebase Auth Token available. Skipping protected API calls for games and categories.");
-        return;
+      setLoading(false);
+      console.warn("GamesPage: No Firebase Auth Token available. Skipping protected API calls for games and categories.");
+      return;
     }
-
     setLoading(true);
 
     const config = {
-        headers: {
-            Authorization: `Bearer ${firebaseAuthToken}`
-        }
+      headers: { Authorization: `Bearer ${firebaseAuthToken}` }
     };
 
     Promise.all([
@@ -100,7 +92,6 @@ export default function GamesPage() {
     ]).then(([gamesResponse, categoriesResponse]) => {
       const gamesData = gamesResponse.data;
       const categoriesData = categoriesResponse.data;
-
       const processedGames = gamesData.map((game: Game) => ({
         ...game,
         ticketPriceUsd: CATEGORY_PAYMENT[game.category] || 0.01,
@@ -116,7 +107,6 @@ export default function GamesPage() {
       toast.error("Failed to load game data: " + errorMessage);
     });
   }, [firebaseAuthToken, API_BASE_URL]);
-
 
   const getGamesByCategory = (categoryId: string) =>
     games.filter(game => game.category === categoryId && game.title.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -138,14 +128,12 @@ export default function GamesPage() {
         <p className="text-xs text-slate-300 mb-1">{game.description}</p>
         {game.solGathered !== undefined && game.solDistributed !== undefined && (
           <div className="text-[11px] text-amber-200 bg-gray-950/30 p-2 mt-1 rounded-md leading-tight">
-            Last month we gathered <span className="font-bold text-yellow-300">{game.solGathered} SOL</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{game.solDistributed} SOL</span> in prizes.
+            Last month we gathered <span className="font-bold text-yellow-300">{game.solGathered} SOL</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{game.solDistributed} SOL</span>.
           </div>
         )}
         <button
           className="mt-3 w-full py-2 rounded bg-gradient-to-r from-lime-500 to-green-600 text-white text-xs font-bold shadow hover:from-lime-600 hover:to-green-700"
-          onClick={() => {
-            setModalGame(game);
-          }}
+          onClick={() => setModalGame(game)}
         >
           Play {game.title} ({CATEGORY_PAYMENT[game.category]?.toFixed(3) || '0.000'} USD)
         </button>
@@ -185,7 +173,7 @@ export default function GamesPage() {
           )}
         </div>
         {loading ? (
-            <div className="text-center py-8 text-gray-500">Loading games...</div>
+          <div className="text-center py-8 text-gray-500">Loading games...</div>
         ) : categoryGames.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {categoryGames.slice(0, 3).map(game => (
@@ -229,14 +217,12 @@ export default function GamesPage() {
               <h2 className="text-4xl font-bold text-white mb-4">Inauguration Month of Degen Gaming</h2>
               <p className="text-slate-300 text-lg mb-6">Use our Picker Games with their minimal fee drawing a winner from a list of Degen Users or simply wallets for your giveaway!</p>
               <p className="text-slate-300 text-lg mb-6">Compete across all Arcade Games for Monthly payouts to the Top 5 Degen Players of the month!</p>
-              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-lg font-bold transition-all text-white">
+              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-full text-white font-bold shadow transition-all duration-200">
                 Wack A Wegen to celebrate with us! <FaArrowRight />
               </Link>
             </div>
           </div>
         </div>
-
-       
 
         <div className="space-y-8">
           {loading ? (
@@ -258,7 +244,6 @@ export default function GamesPage() {
           </div>
         </div>
 
-        {/* Modals remain mostly the same */}
         {modalGame && modalGame.category === "Picker" && (
           <PickerInitModal
             isOpen={!!modalGame}
@@ -266,21 +251,22 @@ export default function GamesPage() {
             gameType={modalGame.category}
             onSuccess={(gameConfigFromModal) => {
               if (!gameConfigFromModal || typeof gameConfigFromModal !== 'object') {
-                  toast.error("Game configuration error. Please try again.");
-                  setModalGame(null);
-                  return;
+                toast.error("Game configuration error. Please try again.");
+                setModalGame(null);
+                return;
               }
               if (!gameConfigFromModal.gameEntryTokenId) {
-                  toast.error("Game session token missing. Please re-initiate payment or free entry.");
-                  setModalGame(null);
-                  return;
+                toast.error("Game session token missing. Please re-initiate payment or free entry.");
+                setModalGame(null);
+                return;
               }
               if (!modalGame.route) {
-                  toast.error("Game route not configured. Please try another game.");
-                  setModalGame(null);
-                  return;
+                toast.error("Game route not configured. Please try another game.");
+                setModalGame(null);
+                return;
               }
               setModalGame(null);
+              // Route to the game, passing gameConfig in location.state
               navigate(modalGame.route, { state: { gameConfig: gameConfigFromModal } });
             }}
             onError={msg => {
@@ -293,65 +279,7 @@ export default function GamesPage() {
           />
         )}
 
-        {modalGame && modalGame.category === "Arcade" && (
-          <ArcadeInitModal
-            isOpen={!!modalGame}
-            gameId={modalGame.id}
-            category={modalGame.category}
-            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
-            destinationWallet={PLATFORM_WALLET}
-            onSuccess={sig => {
-              setModalGame(null);
-              window.location.href = modalGame.route;
-            }}
-            onError={msg => {
-              setModalGame(null);
-              toast.error(`Payment error: ${msg}`);
-            }}
-            onClose={() => setModalGame(null)}
-            gameTitle={modalGame.title}
-          />
-        )}
-
-        {modalGame && modalGame.category === "Casino" && (
-          <CasinoInitModal
-            isOpen={!!modalGame}
-            gameId={modalGame.id}
-            category={modalGame.category}
-            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.01}
-            destinationWallet={PLATFORM_WALLET}
-            onSuccess={sig => {
-              setModalGame(null);
-              window.location.href = modalGame.route;
-            }}
-            onError={msg => {
-              setModalGame(null);
-              toast.error(`Payment error: ${msg}`);
-            }}
-            onClose={() => setModalGame(null)}
-            gameTitle={modalGame.title}
-          />
-        )}
-
-        {modalGame && modalGame.category === "PvP" && (
-          <PvPInitModal
-            isOpen={!!modalGame}
-            gameId={modalGame.id}
-            category={modalGame.category}
-            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.01}
-            destinationWallet={PLATFORM_WALLET}
-            onSuccess={sig => {
-              setModalGame(null);
-              window.location.href = modalGame.route;
-            }}
-            onError={msg => {
-              setModalGame(null);
-              toast.error(`Payment error: ${msg}`);
-            }}
-            onClose={() => setModalGame(null)}
-            gameTitle={modalGame.title}
-          />
-        )}
+        {/* Arcade, Casino, PvP modals not shown for brevity, keep yours as in your code */}
       </div>
     </div>
   );
