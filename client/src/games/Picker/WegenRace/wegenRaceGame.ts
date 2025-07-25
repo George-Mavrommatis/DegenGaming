@@ -132,92 +132,6 @@ class WegenRaceGameLogic {
     }
 
     /**
-     * Initializes a new race with the given players and duration.
-     * Resets all internal game states for a fresh start.
-     * @param players Array of Player objects participating in the race.
-     * @param durationMinutes Total duration of the race in minutes.
-     */
-    initializeRace(players: Player[], durationMinutes: number): void {
-        this.players = [...players];
-        this.gameState.players = [...players];
-        this.gameState.raceDuration = durationMinutes * 60 * 1000; // Convert to milliseconds
-        this.gameState.timeRemaining = this.gameState.raceDuration;
-        this.currentPhaseIndex = 0;
-        this.gameState.currentPhase = this.phases[0];
-
-        this.playerProgress = {};
-        this.playerLastPhase = {};
-        this.playerBoosts = {};
-        this.eventLog = [];
-        this.gameState.winner = null;
-        this.gameState.rankings = [];
-        this.finishedPlayersCount = 0;
-
-        // Calculate dynamic finish threshold: Race ends when 40% of players finish, minimum 1.
-        this.finishThreshold = Math.max(1, Math.ceil(players.length * 0.4));
-        console.log(`DEBUG: GameLogic: Race will end when ${this.finishThreshold} players finish.`);
-
-
-        this.players.forEach(player => {
-            this.playerProgress[player.key] = 0;
-            this.playerLastPhase[player.key] = -1; // -1 ensures first phase advance triggers
-        });
-
-        this.addEvent('system', 'race_initialized', `Race initialized with ${players.length} players for ${durationMinutes} minutes.`);
-        console.log('🏁 Race initialized with players:', players.map(p => p.name));
-    }
-
-    /**
-     * Starts the race countdown and then transitions to the 'racing' state.
-     * Only callable if the game is in 'waiting' state.
-     */
-    startRace(): void {
-        if (this.gameState.status !== 'waiting') return;
-
-        this.gameState.status = 'countdown';
-        setTimeout(() => {
-            this.gameState.status = 'racing';
-            this.raceStartTime = Date.now();
-            this.addEvent('system', 'race_start', 'Race has begun!');
-        }, 3000); // 3-second countdown
-    }
-
-    /**
-     * Main update loop for the game logic.
-     * Called by Phaser's update method.
-     * @param deltaTime Time elapsed since the last frame (in milliseconds).
-     */
-    update(deltaTime: number): void {
-        if (this.gameState.status !== 'racing') return;
-
-        const currentTime = Date.now();
-        const elapsedTime = currentTime - (this.raceStartTime || currentTime);
-
-        this.gameState.raceElapsedTime = elapsedTime;
-        this.gameState.timeRemaining = Math.max(0, this.gameState.raceDuration - elapsedTime);
-
-        this.updatePhase(elapsedTime);
-        this.updatePlayerProgress(deltaTime, currentTime);
-        this.updatePositions();
-        this.regulateRaceDuration();
-
-        // Check race end conditions: enough players finished OR time ran out.
-        if (this.finishedPlayersCount >= this.finishThreshold) {
-            console.log(`DEBUG: GameLogic: ${this.finishedPlayersCount} players finished (threshold ${this.finishThreshold}). Ending race.`);
-            this.endRace();
-        } else if (this.gameState.timeRemaining <= 0) {
-            console.log("DEBUG: GameLogic: Time remaining is 0. Ending race.");
-            // Force remaining players to 100% progress for consistent ranking if time runs out.
-            this.players.forEach(player => {
-                if (this.playerProgress[player.key] < 100) {
-                    this.playerProgress[player.key] = 100;
-                }
-            });
-            this.endRace();
-        }
-    }
-
-    /**
      * Updates the current phase of the race based on elapsed time.
      * Triggers phase-specific events like boosts/stumbles.
      * @param elapsedTime Time since race started (in milliseconds).
@@ -920,24 +834,26 @@ export class WegenRaceScene extends Phaser.Scene {
         container.add(nameText);
     }
 
-        /**
+      
+ /**
      * Initializes the race data in the Phaser scene, queues avatar loading,
      * sets up the layout, and creates the track and player visuals.
      * @param players Array of players.
      * @param durationMinutes Race duration in minutes.
      * @param humanChoice The human player's chosen participant.
      */
-   public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
-    console.log('Phaser: initializeRaceWithData called');
-    let avatarsToLoad = 0;
-    players.forEach(player => {
-        const dynamicAvatarKey = `avatar_${player.key}`;
-        if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
-            this.load.image(dynamicAvatarKey, player.avatarUrl);
-            avatarsToLoad++;
-        }
-    });
+    public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
+        console.log('Phaser: initializeRaceWithData called');
+        let avatarsToLoad = 0;
+        players.forEach(player => {
+            const dynamicAvatarKey = `avatar_${player.key}`;
+            if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
+                this.load.image(dynamicAvatarKey, player.avatarUrl);
+                avatarsToLoad++;
+            }
+        });
 
+        // This is the ONLY correct continueSetup!
         const continueSetup = () => {
             console.log("Phaser: All avatars loaded (or none), continuing with setupLayout/createTrack");
             this.gameLogic.initializeRace(players, durationMinutes);
@@ -950,7 +866,6 @@ export class WegenRaceScene extends Phaser.Scene {
                 this.createPlayerVisualContainer(player, index);
                 const avatarSprite = this.playerAvatars.get(player.key);
                 const dynamicAvatarKey = `avatar_${player.key}`;
-                // Check if the dynamic avatar texture exists before setting it
                 if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
                     avatarSprite.setTexture(dynamicAvatarKey);
                     avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
@@ -1297,58 +1212,6 @@ export class WegenRaceScene extends Phaser.Scene {
         else console.warn('⚠️ Celebration sound not loaded.');
     }
 
-
-
-    const continueSetup = () => {
-        console.log("Phaser: All avatars loaded (or none), continuing with setupLayout/createTrack");
-        this.gameLogic.initializeRace(players, durationMinutes);
-        this.raceData = { players, duration: durationMinutes, humanChoice };
-        this.setupLayout();
-        this.createTrack();
-
-        // Player visuals/avatars
-        players.forEach((player, index) => {
-            this.createPlayerVisualContainer(player, index);
-            const avatarSprite = this.playerAvatars.get(player.key);
-            const dynamicAvatarKey = `avatar_${player.key}`;
-            if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
-                avatarSprite.setTexture(dynamicAvatarKey);
-                avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
-                this.updateAvatarMask(player.key, avatarSprite);
-            }
-        });
-
-        // This is crucial! Start the countdown after setup 
-        // this is where we should consume the  picker freeEntryToken 
-        if (typeof this.startRaceExternally === "function") {
-            console.log("Phaser: About to start race externally (countdown should show!)");
-            this.startRaceExternally();
-        } else {
-            console.error("Phaser: startRaceExternally is not a function!");
-        }
-        console.log('✅ Race initialized with', players.length, 'players in scene.');
-    };
-
-    if (avatarsToLoad > 0) {
-        let avatarLoadTimedOut = false;
-        const timeout = setTimeout(() => {
-            avatarLoadTimedOut = true;
-            console.warn("Phaser: Avatar load timeout, continuing setup anyway.");
-            continueSetup();
-        }, 5000); // 5 seconds fallback
-
-        this.load.once('complete', () => {
-            if (!avatarLoadTimedOut) clearTimeout(timeout);
-            continueSetup();
-        });
-        this.load.once('loaderror', (file: any) => {
-            console.warn('Avatar load error for', file.key, 'using fallback.');
-        });
-        this.load.start();
-    } else {
-        continueSetup();
-    }
-}
 
     /**
      * Starts the race countdown logic within the scene.
