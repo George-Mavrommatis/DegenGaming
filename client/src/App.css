@@ -8,9 +8,10 @@
     /* Let the navbar span full width */
   }
 
-  @font-face {
-  font-family: 'SiderFont';
-  src: url('/WegenRaceAssets/sider-font.ttf') format('truetype');
+  
+@font-face {
+  font-family: 'WegensFont';
+  src: url('/fonts/WegensFont.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
