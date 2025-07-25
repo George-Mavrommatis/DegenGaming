@@ -14,6 +14,7 @@ import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
+import FontFaceObserver from "fontfaceobserver"; // <-- ADD THIS
 
 interface WegenRaceConfig {
     players: Player[];
@@ -139,86 +140,109 @@ export default function WegenRace() {
         setLoadingMessage("Configuration loaded. Authenticating session...");
     }, [location.state, navigate]);
 
-    // Phaser game initialization
-useEffect(() => {
+     // Phaser game initialization (now waits for font and prewarms)
+  useEffect(() => {
     const canInitializePhaser =
-        loadedGameConfig &&
-        isSessionAuthenticated &&
-        !isPhaserGameRunning &&
-        (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
+      loadedGameConfig &&
+      isSessionAuthenticated &&
+      !isPhaserGameRunning &&
+      (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
 
     if (!canInitializePhaser) return;
 
     const gameContainer = gameContainerRef.current;
     if (!gameContainer) {
-        setConnectionStatus('disconnected');
-        return;
+      setConnectionStatus('disconnected');
+      return;
     }
     if (phaserGameRef.current) {
-        destroyWegenRaceGame(phaserGameRef.current);
-        phaserGameRef.current = null;
+      destroyWegenRaceGame(phaserGameRef.current);
+      phaserGameRef.current = null;
     }
-    try {
+
+    let cancelled = false;
+    async function loadFontAndStartGame() {
+      const font = new FontFaceObserver('WegensFont');
+      try {
+        await font.load();
+
+        // --- PREWARM HIDDEN SPAN ---
+        const span = document.createElement('span');
+        span.innerText = "WegensFontPrewarm";
+        span.style.fontFamily = 'WegensFont, Comic Sans MS, cursive';
+        span.style.position = 'absolute';
+        span.style.opacity = '0';
+        span.style.pointerEvents = 'none';
+        span.style.zIndex = '-9999';
+        document.body.appendChild(span);
+
+        // Wait a short time to let the browser actually rasterize the font
+        await new Promise(res => setTimeout(res, 150));
+
+        document.body.removeChild(span);
+
+        if (cancelled) return;
         gameContainer.innerHTML = '';
         const game = createWegenRaceGame(gameContainer);
         phaserGameRef.current = game;
 
+        // ...rest of your code, unchanged...
         // Listen for custom global event 'scene-ready'
         const onSceneReady = () => {
-            const scene = getWegenRaceScene(game);
-            if (!scene) {
-                toast.error("Game engine error: Core scene not found.");
-                setConnectionStatus('disconnected');
-                return;
-            }
-            console.log("Parent: Scene 'scene-ready' event received");
-            enableDebugMode(game);
-            scene.onStateChange(handleGameStateChange);
-            scene.onGameEnd(handleGameEnd);
+          const scene = getWegenRaceScene(game);
+          if (!scene) {
+            toast.error("Game engine error: Core scene not found.");
+            setConnectionStatus('disconnected');
+            return;
+          }
+          enableDebugMode(game);
+          scene.onStateChange(handleGameStateChange);
+          scene.onGameEnd(handleGameEnd);
 
-            console.log("Parent: About to call initializeRaceWithData");
-            scene.initializeRaceWithData(
-                loadedGameConfig.players,
-                loadedGameConfig.duration,
-                loadedGameConfig.humanChoice
-            );
-            setConnectionStatus('connected');
-            setIsPhaserGameRunning(true);
-            setLoadingMessage("Game is running!");
-
-            // Remove listener after fired
-            game.events.off('scene-ready', onSceneReady);
+          scene.initializeRaceWithData(
+            loadedGameConfig.players,
+            loadedGameConfig.duration,
+            loadedGameConfig.humanChoice
+          );
+          setConnectionStatus('connected');
+          setIsPhaserGameRunning(true);
+          setLoadingMessage("Game is running!");
+          game.events.off('scene-ready', onSceneReady);
         };
 
         game.events.on('scene-ready', onSceneReady);
-    } catch (e: any) {
-        toast.error(`Failed to start game engine: ${e.message || "Unknown error."}`);
+      } catch (e) {
+        toast.error('Failed to load WegensFont, cannot start game.');
         setConnectionStatus('disconnected');
-        setIsPhaserGameRunning(false);
+      }
     }
+    loadFontAndStartGame();
+
     return () => {
-        if (phaserGameRef.current) {
-            destroyWegenRaceGame(phaserGameRef.current);
-            phaserGameRef.current = null;
-        }
-        setIsPhaserGameRunning(false);
-        setLoadedGameConfig(null);
-        setIsSessionAuthenticated(false);
-        freeTokenConsumedRef.current = false;
-        setGameState({
-            status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
-            raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',
-            timeRemaining: 0, leaderboard: [], eventLog: []
-        });
-        setEventLog([]);
+      cancelled = true;
+      if (phaserGameRef.current) {
+        destroyWegenRaceGame(phaserGameRef.current);
+        phaserGameRef.current = null;
+      }
+      setIsPhaserGameRunning(false);
+      setLoadedGameConfig(null);
+      setIsSessionAuthenticated(false);
+      freeTokenConsumedRef.current = false;
+      setGameState({
+        status: 'waiting', players: [], positions: {}, raceProgress: 0, winner: null,
+        raceElapsedTime: 0, raceDuration: 0, currentPhase: 'Initializing',
+        timeRemaining: 0, leaderboard: [], eventLog: []
+      });
+      setEventLog([]);
     };
-}, [
+  }, [
     loadedGameConfig,
     isSessionAuthenticated,
     isPhaserGameRunning,
     handleGameStateChange,
     handleGameEnd
-]);
+  ]);
+
 
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {

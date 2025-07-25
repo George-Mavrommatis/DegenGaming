@@ -1,6 +1,3 @@
-// src/main.tsx
-
-// ADD THESE TWO LINES AT THE TOP
 import { Buffer } from 'buffer';
 window.Buffer = Buffer;
 
@@ -12,16 +9,15 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 
 // --- Import Solana Wallet Adapter components ---
-
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { PhantomWalletAdapter, SolflareWalletAdapter} from '@solana/wallet-adapter-wallets';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { BackpackWalletAdapter } from '@solana/wallet-adapter-backpack';
 import { clusterApiUrl } from '@solana/web3.js';
 
 // --- Import your custom contexts and App component ---
-import { ProfileProvider } from './context/ProfileContext'; // Import your ProfileProvider
+import { ProfileProvider } from './context/ProfileContext';
 import App from './App';
 
 // --- Import Global Styles and Toastify ---
@@ -36,27 +32,21 @@ const endpoint = clusterApiUrl(network);
 
 // --- Wallets to be used in the application ---
 const wallets = [
-    new PhantomWalletAdapter(),
-    new SolflareWalletAdapter(),
-    new BackpackWalletAdapter(),
-
-    // Add other wallet adapters here
+  new PhantomWalletAdapter(),
+  new SolflareWalletAdapter(),
+  new BackpackWalletAdapter(),
+  // Add other wallet adapters here
 ];
 
+// --- Render your React app as before ---
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    {/* 1. BrowserRouter: Must wrap everything that uses Router hooks */}
     <BrowserRouter>
-      {/* 2. ConnectionProvider & WalletProvider: Provide Solana connection and wallet context */}
       <ConnectionProvider endpoint={endpoint}>
         <WalletProvider wallets={wallets} autoConnect>
-          {/* 3. WalletModalProvider: Provides the UI for wallet selection/connection */}
           <WalletModalProvider>
-            {/* 4. ProfileProvider: Your custom context that relies on Firebase Auth and Solana Wallet context */}
             <ProfileProvider>
-              {/* 5. Your main App component: Where your routes and other components reside */}
               <App />
-              {/* 6. ToastContainer: For displaying toast notifications */}
               <ToastContainer position="bottom-right" autoClose={3000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
             </ProfileProvider>
           </WalletModalProvider>
@@ -65,3 +55,6 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     </BrowserRouter>
   </React.StrictMode>
 );
+
+// --- REMOVE any setTimeout or ensureFontLoadedAndStartGame logic from here ---
+// Phaser game is now started from within the WegenRace component after font and container are ready.

@@ -617,26 +617,40 @@ export class WegenRaceScene extends Phaser.Scene {
             this.emitStateChange();
         }
     }
+private setupLayout(): void {
+    const horizontalPadding = this.scale.width * 0.05;
+    const verticalPaddingTop = this.scale.height * 0.12;
+    const verticalPaddingBottom = this.scale.height * 0.05;
 
-    private setupLayout(): void {
-        const horizontalPadding = this.scale.width * 0.05;
-        const verticalPaddingTop = this.scale.height * 0.12;
-        const verticalPaddingBottom = this.scale.height * 0.05;
-
-        if (this.raceTitleText) {
+    if (this.raceTitleText) {
+        console.log("raceTitleText exists, type:", this.raceTitleText.type, "active:", this.raceTitleText.active);
+        try {
             this.raceTitleText.y = verticalPaddingTop / 3;
-            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'WegensFont, Comic Sans MS, cursive' });
+            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'Arial, sans-serif' });
+        } catch (e) {
+            console.error("Error setting style on raceTitleText:", e);
         }
-        if (this.overallRaceProgressText) {
-            this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
-            this.overallRaceProgressText.setStyle({ fontFamily: 'WegensFont, Comic Sans MS, cursive' });
-        }
-
-        this.trackStartX = horizontalPadding;
-        this.trackStartY = verticalPaddingTop;
-        this.trackWidth = this.scale.width - (horizontalPadding * 2);
-        this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
+    } else {
+        console.warn("raceTitleText is not defined!");
     }
+    if (this.overallRaceProgressText) {
+        console.log("overallRaceProgressText exists, type:", this.overallRaceProgressText.type, "active:", this.overallRaceProgressText.active);
+        try {
+            this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
+            this.overallRaceProgressText.setStyle({ fontFamily: 'Arial, sans-serif' });
+        } catch (e) {
+            console.error("Error setting style on overallRaceProgressText:", e);
+        }
+    } else {
+        console.warn("overallRaceProgressText is not defined!");
+    }
+
+    this.trackStartX = horizontalPadding;
+    this.trackStartY = verticalPaddingTop;
+    this.trackWidth = this.scale.width - (horizontalPadding * 2);
+    this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
+}
+
 
     private createTrack(): void {
         const numPlayers = this.raceData ? this.raceData.players.length : 0;

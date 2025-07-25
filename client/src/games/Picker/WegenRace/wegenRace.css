@@ -6,16 +6,15 @@
   font-display: swap;
 }
 
-/* Use WegensFont for all panels and main UI for WegenRace ONLY */
+/* Use WegensFont for all panels and main UI for WegenRace */
 .wegenrace-root,
 .wegenrace-sidebar,
 .leaderboard-panel,
 .eventlog-panel,
 .participants-panel,
 .race-bar-panel {
-  font-family: 'SiderFont', Arial, sans-serif !important;
+  font-family: 'WegensFont', Arial, sans-serif !important;
 }
-
 
 .wegenrace-root {
   display: flex;
@@ -171,10 +170,9 @@
 .fullscreen-mode #phaser-game-container {
   flex: 1;
   margin: 10px;
-  max-height: calc(100vh - 140px); /* Account for top bar and participants panel */
+  max-height: calc(100vh - 140px);
 }
 
-/* Fix the back button in fullscreen */
 .fullscreen-mode .back-to-games-btn {
   z-index: 10000 !important;
 }

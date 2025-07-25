@@ -1,14 +1,12 @@
-  @tailwind base;
-  @tailwind components;
-  @tailwind utilities;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  /* Remove the constraining styles from #root */
-  #root {
-    /* Remove max-width, margin, padding, and text-align */
-    /* Let the navbar span full width */
-  }
+/* Remove the constraining styles from #root */
+#root {
+  /* Unset max-width, margin, padding, and text-align */
+}
 
-  
 @font-face {
   font-family: 'WegensFont';
   src: url('/fonts/WegensFont.ttf') format('truetype');
@@ -17,112 +15,110 @@
   font-display: swap;
 }
 
-  .logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-    transition: filter 300ms;
-  }
-  .logo:hover {
-    filter: drop-shadow(0 0 2em #646cffaa);
-  }
-  .logo.react:hover {
-    filter: drop-shadow(0 0 2em #61dafbaa);
-  }
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+.stats-card {
+  background: #181c24;
+  border-radius: 1rem;
+  padding: 1.2rem;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 2px 8px #0002;
+  min-height: 90px;
+}
+.stats-card .icon {
+  margin-right: 1rem;
+}
+.skeleton {
+  opacity: 0.5;
+  animation: pulse 1.5s infinite alternate;
+}
+.skeleton-box {
+  background: #222;
+  border-radius: 4px;
+}
+@keyframes pulse {
+  to { opacity: 0.8; }
+}
 
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 1rem;
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
   }
-  .stats-card {
-    background: #181c24;
-    border-radius: 1rem;
-    padding: 1.2rem;
-    display: flex;
-    align-items: center;
-    box-shadow: 0 2px 8px #0002;
-    min-height: 90px;
+  to {
+    transform: rotate(360deg);
   }
-  .stats-card .icon {
-    margin-right: 1rem;
-  }
-  .skeleton {
-    opacity: 0.5;
-    animation: pulse 1.5s infinite alternate;
-  }
-  .skeleton-box {
-    background: #222;
-    border-radius: 4px;
-  }
-  @keyframes pulse {
-    to { opacity: 0.8; }
-  }
+}
 
-  @keyframes logo-spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
   }
+}
 
-  @media (prefers-reduced-motion: no-preference) {
-    a:nth-of-type(2) .logo {
-      animation: logo-spin infinite 20s linear;
-    }
-  }
+.card {
+  padding: 2em;
+}
 
-  .card {
-    padding: 2em;
-  }
+.read-the-docs {
+  color: #888;
+}
 
-  .read-the-docs {
-    color: #888;
-  }
+.page-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+}
 
-  /* If you need centered content for specific pages, add this class */
-  .page-container {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 2rem;
-  }
+html, body {
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: #000;
+}
+#game-container, canvas {
+  width: 100vw !important;
+  height: 100vh !important;
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: #000;
+}
 
-  html, body {
-    padding: 0;
-    margin: 0;
-    height: 100%;
-    width: 100%;
-    overflow: hidden;
-    background: #000; /* or your preferred bg */
-  }
-  #game-container, canvas {
-    width: 100vw !important;
-    height: 100vh !important;
-    display: block;
-    margin: 0;
-    padding: 0;
-    background: #000;
-  }
-
-  #phaser-container > canvas {
+#phaser-container > canvas {
   width: 100% !important;
   height: 100% !important;
   object-fit: contain;
   display: block;
 }
 
+:root {
+  font-size: 16px;
+}
+@media (min-width: 1920px) {
   :root {
-    font-size: 16px;
+    font-size: clamp(16px, 2vw, 24px);
   }
-  @media (min-width: 1920px) {
-    :root {
-      font-size: clamp(16px, 2vw, 24px);
-    }
-  }
-  .stats-card h4,
-  .stats-card p {
-    font-size: 1rem;
-  }
+}
+.stats-card h4,
+.stats-card p {
+  font-size: 1rem;
+}
