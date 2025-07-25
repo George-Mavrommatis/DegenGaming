@@ -411,6 +411,114 @@ class WegenRaceGameLogic {
         this.internalEventEmitter.emit('raceFinished');
     }
 
+    // --- Public Methods ---
+    /**
+     * Initializes the race with players and duration settings.
+     * @param players Array of players participating in the race.
+     * @param durationMinutes Duration of the race in minutes.
+     */
+    public initializeRace(players: Player[], durationMinutes: number): void {
+        console.log('🎮 GameLogic: Initializing race with', players.length, 'players for', durationMinutes, 'minutes');
+        
+        // Validate inputs
+        if (players.length < GAME_CONSTANTS.MIN_PLAYERS) {
+            throw new Error(`At least ${GAME_CONSTANTS.MIN_PLAYERS} players are required`);
+        }
+        if (players.length > GAME_CONSTANTS.MAX_PLAYERS) {
+            throw new Error(`Maximum ${GAME_CONSTANTS.MAX_PLAYERS} players allowed`);
+        }
+        if (durationMinutes < GAME_CONSTANTS.MIN_RACE_DURATION || durationMinutes > GAME_CONSTANTS.MAX_RACE_DURATION) {
+            throw new Error(`Race duration must be between ${GAME_CONSTANTS.MIN_RACE_DURATION} and ${GAME_CONSTANTS.MAX_RACE_DURATION} minutes`);
+        }
+
+        // Initialize game state
+        this.players = [...players];
+        this.gameState.players = [...players];
+        this.gameState.raceDuration = durationMinutes * 60 * 1000; // Convert to milliseconds
+        this.gameState.timeRemaining = this.gameState.raceDuration;
+        this.gameState.status = 'waiting';
+        this.gameState.raceProgress = 0;
+        this.gameState.raceElapsedTime = 0;
+        this.gameState.currentPhase = this.phases[0];
+        this.gameState.winner = null;
+        this.gameState.rankings = [];
+        this.gameState.eventLog = [];
+
+        // Initialize player-specific data
+        this.playerProgress = {};
+        this.playerLastPhase = {};
+        this.playerBoosts = {};
+        this.gameState.positions = {};
+
+        this.players.forEach((player, index) => {
+            this.playerProgress[player.key] = 0;
+            this.playerLastPhase[player.key] = -1;
+            this.gameState.positions[player.key] = index + 1; // Initial positions
+        });
+
+        this.currentPhaseIndex = 0;
+        this.raceStartTime = null;
+        this.finishedPlayersCount = 0;
+        this.finishThreshold = Math.ceil(this.players.length * 0.8); // 80% of players must finish before auto-end
+
+        this.addEvent('system', 'race_initialized', `Race initialized with ${players.length} players`);
+        console.log('✅ GameLogic: Race initialization complete');
+    }
+
+    /**
+     * Starts the race countdown and begins the racing phase.
+     */
+    public startRace(): void {
+        if (this.gameState.status !== 'waiting') {
+            console.warn('GameLogic: Cannot start race - current status is', this.gameState.status);
+            return;
+        }
+
+        console.log('🏁 GameLogic: Starting race');
+        this.gameState.status = 'countdown';
+        this.raceStartTime = Date.now();
+        
+        // Start countdown phase for 3 seconds
+        setTimeout(() => {
+            if (this.gameState.status === 'countdown') {
+                this.gameState.status = 'racing';
+                this.addEvent('system', 'race_started', 'Race has begun!');
+                console.log('🏃 GameLogic: Race is now in progress');
+            }
+        }, 3000);
+    }
+
+    /**
+     * Updates the game state based on elapsed time.
+     * @param deltaTime Time elapsed since last update in milliseconds.
+     */
+    public update(deltaTime: number): void {
+        if (this.gameState.status !== 'racing' || !this.raceStartTime) {
+            return;
+        }
+
+        const currentTime = Date.now();
+        this.gameState.raceElapsedTime = currentTime - this.raceStartTime;
+        this.gameState.timeRemaining = Math.max(0, this.gameState.raceDuration - this.gameState.raceElapsedTime);
+
+        // Update race phase
+        this.updatePhase(this.gameState.raceElapsedTime);
+
+        // Update player progress
+        this.updatePlayerProgress(deltaTime, currentTime);
+
+        // Update player positions/rankings
+        this.updatePositions();
+
+        // Apply speed regulation if needed
+        this.regulateRaceDuration();
+
+        // Check for race end conditions
+        if (this.gameState.timeRemaining <= 0 || this.finishedPlayersCount >= this.finishThreshold) {
+            this.endRace();
+        }
+    }
+
     // --- Public Getters ---
     getState(): GameState {
         // Return a defensive copy to prevent external modification
@@ -554,7 +662,7 @@ export class WegenRaceScene extends Phaser.Scene {
         this.raceTitleText = this.add.text(this.scale.width / 2, 30, 'Wegen Race', {
             fontSize: '36px',
             color: '#ffd93b',
-            fontFamily: 'WegensFont, Arial',
+            fontFamily: 'Comic Sans MS, Arial, sans-serif',
             shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 4, fill: true }
         }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
@@ -565,7 +673,7 @@ export class WegenRaceScene extends Phaser.Scene {
             {
                 fontSize: '18px',
                 color: '#ddd',
-                fontFamily: 'WegensFont, Arial',
+                fontFamily: 'Comic Sans MS, Arial, sans-serif',
             }
         ).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
@@ -599,7 +707,7 @@ export class WegenRaceScene extends Phaser.Scene {
     if (this.raceTitleText) {
         try {
             this.raceTitleText.y = verticalPaddingTop / 3;
-            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'WegensFont, Arial, sans-serif' });
+            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'Comic Sans MS, Arial, sans-serif' });
         } catch (e) {
             console.warn('Failed to update raceTitleText style, using fallback.', e);
             this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'Arial, sans-serif' });
@@ -608,7 +716,7 @@ export class WegenRaceScene extends Phaser.Scene {
     if (this.overallRaceProgressText) {
         try {
             this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
-            this.overallRaceProgressText.setStyle({ fontFamily: 'WegensFont, Arial, sans-serif' });
+            this.overallRaceProgressText.setStyle({ fontFamily: 'Comic Sans MS, Arial, sans-serif' });
         } catch (e) {
             console.warn('Failed to update overallRaceProgressText style, using fallback.', e);
             this.overallRaceProgressText.setStyle({ fontFamily: 'Arial, sans-serif' });
@@ -705,13 +813,13 @@ export class WegenRaceScene extends Phaser.Scene {
         this.trackGraphics.lineStyle(3, 0xFFFFFF, 1);
         this.trackGraphics.lineBetween(this.trackStartX, this.trackStartY, this.trackStartX, this.trackStartY + totalLanesRenderHeight);
        this.add.text(this.trackStartX + 5, this.trackStartY - 20, 'START', {
-        fontSize: '14px', color: '#FFFFFF', fontFamily: 'WegensFont, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+        fontSize: '14px', color: '#FFFFFF', fontFamily: 'Comic Sans MS, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
         }).setOrigin(0, 0.5).setDepth(spriteDepths.overallUI);
 
 
         this.trackGraphics.lineBetween(this.trackStartX + this.trackWidth, this.trackStartY, this.trackStartX + this.trackWidth, this.trackStartY + totalLanesRenderHeight);
         this.add.text(this.trackStartX + this.trackWidth - 5, this.trackStartY - 20, 'FINISH', {
-        fontSize: '14px', color: '#FFFFFF', fontFamily: 'WegensFont, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+        fontSize: '14px', color: '#FFFFFF', fontFamily: 'Comic Sans MS, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
         }).setOrigin(1, 0.5).setDepth(spriteDepths.overallUI);
 
         // Phase markers and labels
@@ -730,7 +838,7 @@ export class WegenRaceScene extends Phaser.Scene {
             this.phaseMarkers.push(markerLine);
 
           this.add.text(markerX - phaseSectionWidth / 2, this.trackStartY - 15, `Phase ${i}`, {
-            fontSize: '12px', color: '#aaa', fontFamily: 'WegensFont, Arial, sans-serif', align: 'center', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 1, fill: true }
+            fontSize: '12px', color: '#aaa', fontFamily: 'Comic Sans MS, Arial, sans-serif', align: 'center', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 1, fill: true }
             }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
         }
 
@@ -826,7 +934,7 @@ export class WegenRaceScene extends Phaser.Scene {
 
         const nameTextX = avatarLocalX - avatarRadius - GAME_CONSTANTS.PLAYER_NAME_OFFSET_X;
        const nameText = this.add.text(nameTextX, avatarLocalY, player.name, {
-        fontSize: '15px', color: '#fff', fontFamily: 'WegensFont, Arial, sans-serif', align: 'right',
+        fontSize: '15px', color: '#fff', fontFamily: 'Comic Sans MS, Arial, sans-serif', align: 'right',
         wordWrap: { width: 100, useWebFonts: true },
         shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
           }).setOrigin(1, 0.5);
@@ -1229,7 +1337,7 @@ export class WegenRaceScene extends Phaser.Scene {
         const centerY = this.scale.height / 2;
 
         this.countdownText = this.add.text(centerX, centerY, '3', {
-        fontSize: '96px', color: '#ffd93b', fontFamily: 'WegensFont, Arial, sans-serif', fontStyle: 'bold',
+        fontSize: '96px', color: '#ffd93b', fontFamily: 'Comic Sans MS, Arial, sans-serif', fontStyle: 'bold',
         shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 5, fill: true }
          }).setOrigin(0.5).setDepth(spriteDepths.countdown);
 

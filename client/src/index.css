@@ -4,7 +4,7 @@
 @tailwind utilities;
 
 :root {
-  font-family: 'WegensFont', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Comic Sans MS, Arial, sans-serif', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 

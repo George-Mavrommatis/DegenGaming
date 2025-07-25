@@ -1,7 +1,7 @@
 /* @font-face {
-  font-family: 'WegensFont';
-  src: url('/fonts/WegensFont.woff2') format('woff2'),
-       url('/fonts/WegensFont.woff') format('woff');
+  font-family: 'Comic Sans MS';
+  src: url('/fonts/ComicSansMS.woff2') format('woff2'),
+       url('/fonts/ComicSansMS.woff') format('woff');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
@@ -11,14 +11,14 @@
 font-family: "Comic Sans MS", cursive, sans-serif;
  }
  
-/* Use WegensFont for all panels and main UI for WegenRace */
+/* Use Comic Sans MS for all panels and main UI for WegenRace */
 .wegenrace-root,
 .wegenrace-sidebar,
 .leaderboard-panel,
 .eventlog-panel,
 .participants-panel,
 .race-bar-panel {
-  font-family: 'WegensFont', Arial, sans-serif !important;
+  font-family: 'Comic Sans MS, Arial, sans-serif' !important;
 }
 
 .wegenrace-root {

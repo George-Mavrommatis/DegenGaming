@@ -151,11 +151,11 @@ export default function WegenRace() {
         }
         let cancelled = false;
         async function loadFontAndStartGame() {
-            // const font = new FontFaceObserver('WegensFont');
+            // const font = new FontFaceObserver('Comic Sans MS');
             try {
                 // await font.load();
                 const span = document.createElement('span');
-                // span.innerText = "WegensFontPrewarm";
+                // span.innerText = "ComicSansFontPrewarm";
                 span.style.fontFamily = ' Comic Sans MS, cursive';
                 span.style.position = 'absolute';
                 span.style.opacity = '0';
@@ -166,7 +166,7 @@ export default function WegenRace() {
                 document.body.removeChild(span);
                 if (cancelled) return;
                 gameContainer.innerHTML = '';
-                // const font = new FontFaceObserver('WegensFont');
+                // const font = new FontFaceObserver('Comic Sans MS');
                 // await font.load(); // Wait for this to finish!
                 const game = createWegenRaceGame(gameContainer);
                 phaserGameRef.current = game;
