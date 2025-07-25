@@ -14,7 +14,7 @@ import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
-import FontFaceObserver from "fontfaceobserver";
+// import FontFaceObserver from "fontfaceobserver";
 
 interface WegenRaceConfig {
     players: Player[];
@@ -151,12 +151,12 @@ export default function WegenRace() {
         }
         let cancelled = false;
         async function loadFontAndStartGame() {
-            const font = new FontFaceObserver('WegensFont');
+            // const font = new FontFaceObserver('WegensFont');
             try {
-                await font.load();
+                // await font.load();
                 const span = document.createElement('span');
-                span.innerText = "WegensFontPrewarm";
-                span.style.fontFamily = 'WegensFont, Comic Sans MS, cursive';
+                // span.innerText = "WegensFontPrewarm";
+                span.style.fontFamily = ' Comic Sans MS, cursive';
                 span.style.position = 'absolute';
                 span.style.opacity = '0';
                 span.style.pointerEvents = 'none';
@@ -165,11 +165,9 @@ export default function WegenRace() {
                 await new Promise(res => setTimeout(res, 150));
                 document.body.removeChild(span);
                 if (cancelled) return;
-                if (gameContainer) {
-                    gameContainer.innerHTML = '';
-                }
-                const font = new FontFaceObserver('WegensFont');
-                await font.load(); // Wait for this to finish!
+                gameContainer.innerHTML = '';
+                // const font = new FontFaceObserver('WegensFont');
+                // await font.load(); // Wait for this to finish!
                 const game = createWegenRaceGame(gameContainer);
                 phaserGameRef.current = game;
 
@@ -214,7 +212,7 @@ export default function WegenRace() {
                 };
                 game.events.on('scene-ready', onSceneReady);
             } catch (e) {
-                toast.error('Failed to load WegensFont, cannot start game.');
+                toast.error('Failed to load COMICSANS FONT, cannot start game.');
                 setConnectionStatus('disconnected');
             }
         }

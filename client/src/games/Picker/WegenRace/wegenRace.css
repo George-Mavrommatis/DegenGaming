@@ -7,6 +7,10 @@
   font-display: swap;
 } */
 
+ @font-face {
+font-family: "Comic Sans MS", cursive, sans-serif;
+ }
+ 
 /* Use WegensFont for all panels and main UI for WegenRace */
 .wegenrace-root,
 .wegenrace-sidebar,
