@@ -165,7 +165,11 @@ export default function WegenRace() {
                 await new Promise(res => setTimeout(res, 150));
                 document.body.removeChild(span);
                 if (cancelled) return;
-                gameContainer.innerHTML = '';
+                if (gameContainer) {
+                    gameContainer.innerHTML = '';
+                }
+                const font = new FontFaceObserver('WegensFont');
+                await font.load(); // Wait for this to finish!
                 const game = createWegenRaceGame(gameContainer);
                 phaserGameRef.current = game;
 

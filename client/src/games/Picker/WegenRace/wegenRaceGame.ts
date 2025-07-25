@@ -430,6 +430,9 @@ class WegenRaceGameLogic {
 
 
 export class WegenRaceScene extends Phaser.Scene {
+     constructor() {
+        super({ key: 'WegenRaceScene' });
+    }
     private gameLogic!: WegenRaceGameLogic;
     private playerVisualContainers: Map<string, Phaser.GameObjects.Container> = new Map();
     private playerAvatars: Map<string, Phaser.GameObjects.Sprite> = new Map();
@@ -603,7 +606,9 @@ export class WegenRaceScene extends Phaser.Scene {
             }
         });
 
-        (this.game as Phaser.Game).events.emit('scene-ready');
+        setTimeout(() => {
+            (this.game as Phaser.Game).events.emit('scene-ready');
+            }, 0);  
     }
 
     private _doRaceSetup(players: Player[], duration: number, humanChoice: Player) {
@@ -680,8 +685,8 @@ export class WegenRaceScene extends Phaser.Scene {
         const verticalPaddingBottom = this.scale.height * 0.05;
 
         if (this.raceTitleText && !this.raceTitleText.destroyed) {
-            this.raceTitleText.y = verticalPaddingTop / 3;
-            this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'WegensFont, Comic Sans MS, cursive' });
+        this.raceTitleText.y = verticalPaddingTop / 3;
+        this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'WegensFont, Comic Sans MS, cursive' });
         } else {
             console.warn("raceTitleText is not defined or destroyed!");
         }
