@@ -1,9 +1,7 @@
-// src/games/Picker/WegenRace/wegenRaceGame.ts
-
 import Phaser from 'phaser';
 
 // --- Types ---
-interface Player {
+export interface Player {
     key: string;
     name: string;
     username?: string;
@@ -13,7 +11,7 @@ interface Player {
     isGuest?: boolean;
 }
 
-interface GameState {
+export interface GameState {
     status: 'waiting' | 'countdown' | 'racing' | 'finished';
     raceProgress: number;
     raceElapsedTime: number;
@@ -27,7 +25,7 @@ interface GameState {
     eventLog: GameEvent[];
 }
 
-interface GameEvent {
+export interface GameEvent {
     id: string;
     timestamp: number;
     playerKey: string;
@@ -36,7 +34,7 @@ interface GameEvent {
     effect?: string;
 }
 
-interface VisualBoost {
+export interface VisualBoost {
     isPositive: boolean;
     multiplier: number;
     duration: number;
@@ -85,7 +83,7 @@ const enum spriteDepths {
 }
 
 // --- Game Logic Engine ---
-class WegenRaceGameLogic {
+export class WegenRaceGameLogic {
     private players: Player[] = [];
     private gameState: GameState;
     public phases: string[] = [
@@ -421,7 +419,6 @@ export class WegenRaceScene extends Phaser.Scene {
         super({ key: 'WegenRaceScene' });
     }
 
-
     preload(): void {
         this.load.image('G1small', '/WegenRaceAssets/G1small.png');
         this.load.image('boost_icon', '/WegenRaceAssets/turbo.png');
@@ -491,7 +488,8 @@ export class WegenRaceScene extends Phaser.Scene {
 
         this.safePlaySound('background_music', { loop: true, volume: 0.2 });
 
-        (this.game as Phaser.Game).events.emit('scene-ready');
+       // Now the scene is fully ready for object creation:
+    (this.game as Phaser.Game).events.emit('race-scene-fully-ready');
     }
 
     private setupLayout(): void {
@@ -629,20 +627,60 @@ export class WegenRaceScene extends Phaser.Scene {
     }
 
     
-          // --- Robust Scene Guard ---
-    private isSceneActive(): boolean {
-        return !!this.sys && !!this.sys.isActive() && !!this.sys.displayList && !!this.sys.scene && !this.sys.settings.isDestroyed;
+        private isSceneActive(): boolean {
+        return !!this.sys && !!this.sys.isActive() && !!this.sys.displayList && !!this.sys.scene && !this.sys.settings.isTransition && !this.sys.settings.isDestroyed;
     }
 
+
     private createPlayerVisualContainer(player: Player, laneIndex: number): void {
-        if (!this.isSceneActive()) {
-            console.warn('createPlayerVisualContainer: Scene not active, aborting.');
-            return;
+            if (!this.sys || !this.sys.isActive() || !this.add) {
+        console.warn('createPlayerVisualContainer: Scene not active or "add" is null, aborting.');
+        return;
+    }
+        const laneYTop = this.trackStartY + (laneIndex * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
+        const laneCenterY = laneYTop + (this.laneHeight / 2);
+        const container = this.add.container(this.trackStartX, laneCenterY).setDepth(spriteDepths.playerAvatar);
+        container.name = `playerContainer_${player.key}`;
+        this.playerVisualContainers.set(player.key, container);
+
+        const avatarSize = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO;
+        const avatarRadius = avatarSize / 2;
+        const avatarLocalX = GAME_CONSTANTS.AVATAR_START_OFFSET_X;
+        const avatarLocalY = 0;
+        const dynamicAvatarKey = `avatar_${player.key}`;
+        let avatarTextureKey = 'G1small';
+        if (this.textures.exists(dynamicAvatarKey)) {
+            avatarTextureKey = dynamicAvatarKey;
         }
-        // ... rest of your code ...
+        const currentAvatar = this.add.sprite(avatarLocalX, avatarLocalY, avatarTextureKey);
+        currentAvatar.setDisplaySize(avatarSize, avatarSize);
+        currentAvatar.setOrigin(0.5);
+        currentAvatar.name = `avatarSprite_${player.key}`;
+        container.add(currentAvatar);
+        this.playerAvatars.set(player.key, currentAvatar);
+        this.createAvatarMask(player.key, currentAvatar);
+
+        const borderGraphics = this.add.graphics();
+        borderGraphics.lineStyle(3, 0x000000, 1);
+        borderGraphics.strokeCircle(avatarLocalX, avatarLocalY, avatarRadius);
+        container.add(borderGraphics);
+        borderGraphics.name = `avatarBorder_${player.key}`;
+
+        const nameTextX = avatarLocalX - avatarRadius - GAME_CONSTANTS.PLAYER_NAME_OFFSET_X;
+        const nameText = this.add.text(nameTextX, avatarLocalY, player.name, {
+            fontSize: '15px', color: '#fff', fontFamily: 'Comic Sans MS, Arial, sans-serif', align: 'right',
+            wordWrap: { width: 100, useWebFonts: true },
+            shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
+        }).setOrigin(1, 0.5);
+        nameText.name = `nameText_${player.key}`;
+        container.add(nameText);
     }
 
     public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
+           if (!this.sys || !this.sys.isActive() || !this.add) {
+        console.warn('continueSetup: Scene not active or "add" is null, aborting.');
+        return;
+    }
         let avatarsToLoad = 0;
         players.forEach(player => {
             const dynamicAvatarKey = `avatar_${player.key}`;
@@ -653,22 +691,21 @@ export class WegenRaceScene extends Phaser.Scene {
         });
 
         const continueSetup = () => {
-            if (!this.isSceneActive()) {
-                console.warn('continueSetup: Scene not active, aborting.');
-                return;
-            }
             this.gameLogic.initializeRace(players, durationMinutes);
             this.raceData = { players, duration: durationMinutes, humanChoice };
             this.setupLayout();
             this.createTrack();
             players.forEach((player, index) => {
-                if (!this.isSceneActive()) {
-                    console.warn('player loop: Scene not active, aborting.');
-                    return;
-                }
                 this.createPlayerVisualContainer(player, index);
-                // ... etc.
+                const avatarSprite = this.playerAvatars.get(player.key);
+                const dynamicAvatarKey = `avatar_${player.key}`;
+                if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
+                    avatarSprite.setTexture(dynamicAvatarKey);
+                    avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
+                    this.updateAvatarMask(player.key, avatarSprite);
+                }
             });
+
             if (typeof this.startRaceExternally === "function") {
                 this.startRaceExternally();
             }
@@ -678,17 +715,9 @@ export class WegenRaceScene extends Phaser.Scene {
             let avatarLoadTimedOut = false;
             const timeout = setTimeout(() => {
                 avatarLoadTimedOut = true;
-                if (!this.isSceneActive()) {
-                    console.warn('avatar load timeout: Scene not active, aborting.');
-                    return;
-                }
                 continueSetup();
             }, 5000);
             this.load.once('complete', () => {
-                if (!this.isSceneActive()) {
-                    console.warn('avatar load complete: Scene not active, aborting.');
-                    return;
-                }
                 if (!avatarLoadTimedOut) clearTimeout(timeout);
                 continueSetup();
             });
@@ -698,7 +727,6 @@ export class WegenRaceScene extends Phaser.Scene {
             continueSetup();
         }
     }
-
 
     update(): void {
         if (!this.gameLogic) return;
@@ -1028,7 +1056,6 @@ export class WegenRaceScene extends Phaser.Scene {
         super.destroy();
     }
 }
-
 // --- Game Factory Functions ---
 export function createWegenRaceGame(container: HTMLElement): Phaser.Game {
     const config: Phaser.Types.Core.GameConfig = {
@@ -1063,7 +1090,7 @@ export function getWegenRaceScene(game: Phaser.Game): WegenRaceScene | null {
 export function isGameValid(game: Phaser.Game): boolean {
     return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('WegenRaceScene');
 }
-export { WegenRaceGameLogic };
+
 export type { Player, GameState, GameEvent, VisualBoost };
 export function enableDebugMode(game: Phaser.Game): void {
     const scene = getWegenRaceScene(game);

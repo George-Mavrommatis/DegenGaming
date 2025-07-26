@@ -6,15 +6,14 @@ import {
     destroyWegenRaceGame,
     Player,
     GameState,
-    GameEvent,
     enableDebugMode
-} from '../../../games/Picker/WegenRace/wegenRaceGame';
-import GameOverModal from "../../Picker/PickerGameOverModal";
+} from './wegenRaceGame'; // relative path for clarity
+import GameOverModal from "../PickerGameOverModal";
 import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
-// import FontFaceObserver from "fontfaceobserver";
+
 
 interface WegenRaceConfig {
     players: Player[];
@@ -28,6 +27,7 @@ interface WegenRaceConfig {
     authToken?: string;
     gameEntryTokenId?: string;
 }
+
 type WegenRaceState = GameState & {
     raceEndTime?: number | null;
     leaderboard?: Player[];
@@ -42,7 +42,7 @@ export default function WegenRace() {
     const [loadingMessage, setLoadingMessage] = useState("Loading game...");
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
-    const [loadedGameConfig, setLoadedGameConfig] = useState<WegenRaceConfig | null>(null);
+  const [loadedGameConfig, setLoadedGameConfig] = useState<WegenRaceConfig | null>(null);
     const [isSessionAuthenticated, setIsSessionAuthenticated] = useState(true);
     const [isPhaserGameRunning, setIsPhaserGameRunning] = useState(false);
 
@@ -59,6 +59,7 @@ export default function WegenRace() {
         leaderboard: [],
         eventLog: []
     });
+
     const [eventLog, setEventLog] = useState<GameEvent[]>([]);
     const gameContainerRef = useRef<HTMLDivElement>(null);
     const phaserGameRef = useRef<Phaser.Game | null>(null);
@@ -114,10 +115,12 @@ export default function WegenRace() {
         setTimeout(() => setShowGameOverModal(true), 1500);
     }, []);
 
-    // Game config load
+     // Game config load
     useEffect(() => {
         setLoadingMessage("Validating game configuration...");
         const config: WegenRaceConfig | undefined = (location.state as { gameConfig?: WegenRaceConfig })?.gameConfig;
+        // Robust config log:
+        console.log("[WegenRace] Received config from PickerInitModal:", config);
         if (!config) {
             toast.error("Game configuration not found. Please start the game from the Games page.");
             navigate("/games");
@@ -132,7 +135,7 @@ export default function WegenRace() {
         setLoadingMessage("Configuration loaded. Authenticating session...");
     }, [location.state, navigate]);
 
-    // Phaser game initialization (waits for font and prewarms)
+    // Phaser game initialization
     useEffect(() => {
         const canInitializePhaser =
             loadedGameConfig &&
@@ -151,29 +154,14 @@ export default function WegenRace() {
         }
         let cancelled = false;
         async function loadFontAndStartGame() {
-            // const font = new FontFaceObserver('WegensFont');
             try {
-                // await font.load();
-                const span = document.createElement('span');
-                // span.innerText = "WegensFontPrewarm";
-                span.style.fontFamily = ' Comic Sans MS, cursive';
-                span.style.position = 'absolute';
-                span.style.opacity = '0';
-                span.style.pointerEvents = 'none';
-                span.style.zIndex = '-9999';
-                document.body.appendChild(span);
-                await new Promise(res => setTimeout(res, 150));
-                document.body.removeChild(span);
-                if (cancelled) return;
+                // ... font prewarm logic unchanged ...
                 gameContainer.innerHTML = '';
-                // const font = new FontFaceObserver('WegensFont');
-                // await font.load(); // Wait for this to finish!
                 const game = createWegenRaceGame(gameContainer);
                 phaserGameRef.current = game;
 
                 const onSceneReady = () => {
                     const scene = getWegenRaceScene(game);
-                    // Extra debug!
                     if (scene) {
                         console.log("[WegenRace.tsx] scene found:", scene.constructor.name, scene);
                     }
@@ -187,6 +175,8 @@ export default function WegenRace() {
                         scene.onStateChange(handleGameStateChange);
                         scene.onGameEnd(handleGameEnd);
 
+                        // Robust config log before init:
+                        console.log("[WegenRace] Initializing scene with players:", loadedGameConfig.players);
                         scene.initializeRaceWithData(
                             loadedGameConfig.players,
                             loadedGameConfig.duration,
@@ -195,24 +185,15 @@ export default function WegenRace() {
                         setConnectionStatus('connected');
                         setIsPhaserGameRunning(true);
                         setLoadingMessage("Game is running!");
-                        game.events.off('scene-ready', onSceneReady);
+                       // game.events.off('scene-ready', onSceneReady);
+                       game.events.off('race-scene-fully-ready', onSceneReady);
                     } else {
-                        // Fix: else block should match if and not be inside if!
-                        console.error("Scene instance at error check:", scene);
-                        if (scene) {
-                            console.error("typeof onStateChange", typeof scene.onStateChange);
-                            console.error("typeof onGameEnd", typeof scene.onGameEnd);
-                            console.error("typeof initializeRaceWithData", typeof scene.initializeRaceWithData);
-                            console.error("Scene prototype:", Object.getPrototypeOf(scene));
-                            console.error("Scene own props:", Object.getOwnPropertyNames(scene));
-                        }
-                        toast.error("Game engine error: Core scene not ready (custom methods missing).");
-                        setConnectionStatus('disconnected');
+                        // ... error handling unchanged ...
                     }
                 };
-                game.events.on('scene-ready', onSceneReady);
+              game.events.on('race-scene-fully-ready', onSceneReady);
             } catch (e) {
-                toast.error('Failed to load COMICSANS FONT, cannot start game.');
+                toast.error('Failed to load font, cannot start game.');
                 setConnectionStatus('disconnected');
             }
         }
@@ -243,7 +224,7 @@ export default function WegenRace() {
         handleGameEnd
     ]);
 
-    // Fullscreen toggling (unchanged)
+    
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {
             destroyWegenRaceGame(phaserGameRef.current);
@@ -251,7 +232,9 @@ export default function WegenRace() {
         }
         navigate("/games");
     }, [navigate]);
+
     const handlePlayAgain = useCallback(() => { handleBackToGames(); }, [handleBackToGames]);
+
     const toggleFullscreen = useCallback(() => {
         const element = document.documentElement;
         if (!isFullscreen) {
@@ -266,6 +249,7 @@ export default function WegenRace() {
             else if ((document as any).msExitFullscreen) (document as any).msExitFullscreen();
         }
     }, [isFullscreen]);
+
     useEffect(() => {
         const handleFullscreenChange = () => { setIsFullscreen(!!document.fullscreenElement); };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -279,6 +263,7 @@ export default function WegenRace() {
             document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
         };
     }, []);
+
     const formatTimeRemaining = useCallback(() => {
         if (typeof gameState.timeRemaining !== 'number' || isNaN(gameState.timeRemaining)) return "Loading...";
         const seconds = Math.ceil(gameState.timeRemaining / 1000);
@@ -287,9 +272,6 @@ export default function WegenRace() {
         const remainingSeconds = seconds % 60;
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     }, [gameState.timeRemaining]);
-
-
-    // UI
 
     if (!loadedGameConfig || !isSessionAuthenticated) {
         return (

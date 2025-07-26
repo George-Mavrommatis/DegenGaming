@@ -21,7 +21,9 @@ const modalStyles = {
     top: "50%", left: "50%", right: "auto", bottom: "auto",
     marginRight: "-50%",
     transform: "translate(-50%, -50%)",
-    minWidth: 320, maxWidth: 420, minHeight: 200, maxHeight: "95vh",
+    minWidth: 420, // Wider modal
+    maxWidth: 600,
+    minHeight: 240, maxHeight: "95vh",
     boxShadow: "0 4px 48px 0 rgba(0,0,0,0.7)",
   },
 };
@@ -72,8 +74,23 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         { value: 15, label: "15 Mins" }, { value: 30, label: "30 Mins" }
     ];
 
-    // Add current user as default/human pick
- 
+    // Add current user as default/human pick (improvement: always include as first suggestion)
+    useEffect(() => {
+        if (user && selectedUsers.length === 0) {
+            const userPlayer: PickerPlayer = {
+                key: user.uid || user.wallet || `user_${Date.now()}`,
+                name: user.username || user.name || "You",
+                username: user.username || user.name || "You",
+                avatarUrl: user.avatarUrl || '/WegenRaceAssets/G1small.png',
+                wallet: user.wallet,
+                isHumanPlayer: true,
+                isGuest: false,
+            };
+            setSelectedUsers([userPlayer]);
+            setHumanPlayerChoice(userPlayer);
+        }
+    // eslint-disable-next-line
+    }, [user]);
 
     const filteredLedger = useMemo(() => {
         const query = search.trim().toLowerCase();
@@ -141,9 +158,10 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
 
     const canStartRace = selectedUsers.length >= minPlayers && raceDuration > 0 && humanPlayerChoice !== null;
 
+    // Make the panel wider and more modern
     return (
-        <div className="max-w-md w-full m-auto text-white">
-            <h2 className="text-yellow-300 text-center font-bold text-xl mb-4">Set Up The Race</h2>
+        <div className="w-full max-w-2xl mx-auto text-white p-6 bg-black/80 rounded-2xl shadow-2xl" style={{ minWidth: 420 }}>
+            <h2 className="text-yellow-300 text-center font-bold text-2xl mb-4">Set Up The Race</h2>
             <div className="mb-4 relative">
                 <input
                     className="w-full bg-gray-800 text-yellow-200 text-center font-bold rounded px-3 py-2 mb-1 border-2 border-gray-700 focus:border-yellow-400 outline-none"
@@ -185,7 +203,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                     ) : (
                         selectedUsers.map((u, idx) => (
                             <li key={u.key}
-                                className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all duration-200 ${humanPlayerChoice?.key === u.key ? 'bg-yellow-400 text-black scale-105 shadow-lg' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all duration-200 ${humanPlayerChoice?.key === u.key ? 'bg-yellow-400 text-black scale-105 shadow-lg' : 'hover:bg-gray-800/70'}`}
                                 onClick={() => setHumanPlayerChoice(u)}
                             >
                                 <div className="font-bold text-lg w-6 text-center">{idx + 1}.</div>
@@ -299,6 +317,8 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         </div>
     );
 }
+
+// --- PickerInitModal Component ---
 
 export default function PickerInitModal(props: any) {
     const {
@@ -511,7 +531,7 @@ export default function PickerInitModal(props: any) {
             contentLabel="Init Game Modal"
             shouldCloseOnOverlayClick={step !== "paying"}
         >
-            <div className="w-full mx-auto px-6 py-6 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[320px] border-2 border-yellow-500">
+            <div className="w-full mx-auto px-6 py-6 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[420px] border-2 border-yellow-400">
                 {step !== "paying" && (
                     <button className="absolute right-4 top-4 text-gray-400 text-2xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
                 )}
@@ -531,14 +551,14 @@ export default function PickerInitModal(props: any) {
                         {paymentError && <div className="bg-red-800 w-full rounded py-2 px-3 mb-1 text-center text-red-200 text-xs font-semibold shadow">{paymentError}</div>}
                         <div className="w-full space-y-3">
                             <button
-                                className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform"
                                 onClick={() => handlePay('SOL')}
                                 disabled={step === "paying" || FIXED_SOL_ENTRY_FEE <= 0}
                             >
                                 Pay {FIXED_SOL_ENTRY_FEE.toFixed(2)} SOL
                             </button>
                             <button
-                                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount > 0 && step !== "paying" ? 'hover:scale-105' : 'opacity-50 cursor-not-allowed'}`}
+                                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${freeEntryTokensCount <= 0 ? "opacity-60 cursor-not-allowed" : "hover:scale-105"}`}
                                 onClick={() => handlePay('FREE')}
                                 disabled={step === "paying" || freeEntryTokensCount <= 0}
                             >
