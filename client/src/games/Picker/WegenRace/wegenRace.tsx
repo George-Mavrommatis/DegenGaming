@@ -133,6 +133,7 @@ export default function WegenRace() {
       const game = createWegenRaceGame(gameContainer, loadedGameConfig.players, loadedGameConfig.duration);
         phaserGameRef.current = game;
 
+
         game.events.once('create', (sceneInstance: any) => {
              console.log("sceneInstance:", sceneInstance); // <--- ADD THIS LINE
             if (sceneInstance.scene && sceneInstance.scene.key === 'WegenRaceScene') {
@@ -255,20 +256,19 @@ export default function WegenRace() {
 
     return (
         <div className={`wegenrace-root ${isFullscreen ? "fullscreen-mode" : ""}`}>
-            <div
+                <div
                 className="phaser-game-container"
                 id="phaser-game-container"
                 ref={gameContainerRef}
                 style={{
-                    position: 'absolute',
-                    width: '100%',
-                    height: '100%',
-                    top: 0,
-                    left: 0,
-                    visibility: isPhaserGameRunning ? 'visible' : 'hidden',
-                    zIndex: isPhaserGameRunning ? 1 : -1,
+                    position: 'relative',
+                    width: '900px',
+                    height: '600px',
+                    background: '#111',
+                    zIndex: 1,
+                    visibility: isPhaserGameRunning ? 'visible' : 'hidden'
                 }}
-            />
+                />
             {!isPhaserGameRunning && (
                 <div style={{
                     position: "fixed", inset: 0, background: "#000000cc", display: "flex",

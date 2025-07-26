@@ -558,7 +558,7 @@ export class WegenRaceScene extends Phaser.Scene {
             const nameText = this.add.text(
                 avatarRadius + 12, 0,
                 player.name,
-                { fontSize: Math.floor(this.laneHeight * 0.37) + 'px', color: '#fff', fontFamily: 'Orbitron,Arial', fontWeight: 'bold' }
+                { fontSize: Math.floor(this.laneHeight * 0.37) + 'px', color: '#fff', fontFamily: 'Orbitron,Arial' }
             ).setOrigin(0, 0.5).setAlpha(0.96);
             container.add(nameText);
 
@@ -643,16 +643,7 @@ private drawLaneBackground(g: Phaser.GameObjects.Graphics, player: Player, idx: 
     (g as any).__playerKey = player.key;
 }
 
-    // --- Dynamic layout from PickerInitModal/player onboarding ---
-    private getPlayersFromPickerInit(): Player[] {
-        // This should be replaced with real onboarding data:
-        // For now, create placeholders for demo testing
-        return [
-            { key: "p1", name: "Alice", color: 0x8888ff },
-            { key: "p2", name: "Bob", color: 0xff8888 },
-            { key: "p3", name: "Carol", color: 0x88ff88 }
-        ];
-    }
+
 
 update(): void {
     if (!this.gameLogic) return;
