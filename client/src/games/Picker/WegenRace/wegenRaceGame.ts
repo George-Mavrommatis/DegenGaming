@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 
-// --- Types ---
+// ==== TYPES ====
+
 export interface Player {
     key: string;
     name: string;
@@ -9,6 +10,7 @@ export interface Player {
     avatarUrl?: string;
     isHumanPlayer?: boolean;
     isGuest?: boolean;
+    color?: number; // Used for track tint
 }
 
 export interface GameState {
@@ -23,6 +25,7 @@ export interface GameState {
     winner: Player | null;
     rankings: Player[];
     eventLog: GameEvent[];
+    phase: number;
 }
 
 export interface GameEvent {
@@ -31,6 +34,7 @@ export interface GameEvent {
     playerKey: string;
     eventType: string;
     description: string;
+    phase: number;
     effect?: string;
 }
 
@@ -43,38 +47,53 @@ export interface VisualBoost {
     stunEndTime?: number;
 }
 
-// --- Constants for Game Configuration and Visuals ---
+export interface RaceReplayData {
+    settings: {
+        duration: number;
+        phaseTitles: string[];
+        playerKeys: string[];
+    };
+    players: Player[];
+    eventLog: GameEvent[];
+    perPhaseBoosts: { phase: number; boosted: string[]; stumbled: string[] }[];
+}
+
+// ==== CONSTANTS ====
+
 export const GAME_CONSTANTS = {
     PHASES_COUNT: 10,
+    PHASE_TITLES: [
+        'Starting Grid', 'Acceleration', 'Tight Corner', 'Mid-Race Push', 'Strategic Maneuver',
+        'Power Lap', 'Challenge Zone', 'Final Stretch', 'Clash Ahead', 'Photo Finish'
+    ],
     MIN_RACE_DURATION: 1,
     MAX_RACE_DURATION: 60,
     MAX_PLAYERS: 50,
     MIN_PLAYERS: 2,
     REGULATION_TOLERANCE: 0.20,
-    BOOST_DURATION_MIN: 2500,
-    BOOST_DURATION_MAX: 7000,
-    BOOST_MULTIPLIER_MIN: 1.5,
-    BOOST_MULTIPLIER_MAX: 2.5,
-    STUMBLE_DURATION_MIN: 2500,
-    STUMBLE_DURATION_MAX: 7000,
+    BOOST_DURATION_MIN: 1800,
+    BOOST_DURATION_MAX: 5000,
+    BOOST_MULTIPLIER_MIN: 1.35,
+    BOOST_MULTIPLIER_MAX: 2.1,
     STUN_DURATION_MIN: 400,
-    STUN_DURATION_MAX: 1000,
-    LANE_HEIGHT_MIN: 60,
-    LANE_HEIGHT_MAX: 100,
-    LANE_PADDING: 5,
+    STUN_DURATION_MAX: 1200,
+    LANE_HEIGHT_MIN: 40,
+    LANE_HEIGHT_MAX: 90,
+    LANE_PADDING: 3,
     AVATAR_SIZE_RATIO: 0.7,
     AVATAR_START_OFFSET_X: 30,
     PLAYER_NAME_OFFSET_X: 10,
-    PROGRESS_BAR_HEIGHT_RATIO: 0.2,
-    PROGRESS_BAR_ROUND_RADIUS: 5
+    PROGRESS_BAR_HEIGHT_RATIO: 0.25,
+    PROGRESS_BAR_ROUND_RADIUS: 5,
+    PHASE_BOOST_RATIO: 0.35 // 35% of players get a boost/stumble per phase
 } as const;
 
 const enum spriteDepths {
-    trackOutline = 0,
-    trackBackground = 1,
-    playerProgressBar = 2,
-    laneHighlight = 3,
-    phaseMarkers = 4,
+    trackBackground = 0,
+    lane = 2,
+    playerProgressBar = 3,
+    laneHighlight = 4,
+    phaseMarkers = 5,
     playerAvatar = 10,
     particles = 12,
     countdown = 100,
@@ -82,14 +101,11 @@ const enum spriteDepths {
     overallUI = 250
 }
 
-// --- Game Logic Engine ---
+// ==== GAME LOGIC ====
+
 export class WegenRaceGameLogic {
     private players: Player[] = [];
     private gameState: GameState;
-    public phases: string[] = [
-        'Starting Grid', 'Acceleration', 'Tight Corner', 'Mid-Race Push', 'Strategic Maneuver',
-        'Power Lap', 'Challenge Zone', 'Final Stretch', 'Clash Ahead', 'Photo Finish'
-    ];
     private currentPhaseIndex = 0;
     private raceStartTime: number | null = null;
     private playerProgress: Record<string, number> = {};
@@ -101,6 +117,12 @@ export class WegenRaceGameLogic {
     private finishedPlayersCount = 0;
     private finishThreshold: number = 0;
     private internalEventEmitter: Phaser.Events.EventEmitter;
+    private phaseTitles: string[] = GAME_CONSTANTS.PHASE_TITLES;
+    private leadPlayerKey: string | null = null;
+    private positions: Record<string, number> = {};
+    private globalSpeedMultiplier: number = 1;
+    private globalSpeedResetTimeout?: number;
+    private perPhaseBoosts: { phase: number; boosted: string[]; stumbled: string[] }[] = [];
 
     constructor() {
         this.internalEventEmitter = new Phaser.Events.EventEmitter();
@@ -109,13 +131,14 @@ export class WegenRaceGameLogic {
             raceProgress: 0,
             raceElapsedTime: 0,
             raceDuration: 300000,
-            currentPhase: this.phases[0],
+            currentPhase: this.phaseTitles[0],
             timeRemaining: 300000,
             players: [],
             positions: {},
             winner: null,
             rankings: [],
-            eventLog: []
+            eventLog: [],
+            phase: 0
         };
     }
 
@@ -133,13 +156,19 @@ export class WegenRaceGameLogic {
         this.raceStartTime = null;
         this.gameState.rankings = [];
         this.gameState.positions = {};
+        this.positions = {};
         this.gameState.status = 'countdown';
-        this.gameState.currentPhase = this.phases[0];
+        this.gameState.currentPhase = this.phaseTitles[0];
         this.gameState.raceElapsedTime = 0;
         this.gameState.raceProgress = 0;
         this.gameState.timeRemaining = durationMinutes * 60 * 1000;
         this.gameState.raceDuration = durationMinutes * 60 * 1000;
         this.gameState.eventLog = [];
+        this.gameState.phase = 0;
+        this.leadPlayerKey = null;
+        this.globalSpeedMultiplier = 1;
+        this.perPhaseBoosts = [];
+        if (this.globalSpeedResetTimeout) clearTimeout(this.globalSpeedResetTimeout);
     }
 
     public update(delta: number): void {
@@ -151,9 +180,9 @@ export class WegenRaceGameLogic {
         }
         this.gameState.raceElapsedTime = now - this.raceStartTime;
         this.gameState.timeRemaining = Math.max(0, this.gameState.raceDuration - this.gameState.raceElapsedTime);
-        this.updatePhase(this.gameState.raceElapsedTime);
+        this.updatePhase(this.gameState.raceElapsedTime, now);
         this.updatePlayerProgress(delta, now);
-        this.updatePositions();
+        this.updatePositions(now);
         this.regulateRaceDuration();
         if (
             this.finishedPlayersCount >= this.finishThreshold ||
@@ -163,14 +192,17 @@ export class WegenRaceGameLogic {
         }
     }
 
-    private updatePhase(elapsedTime: number): void {
-        const phaseDuration = this.gameState.raceDuration / this.phases.length;
-        const targetPhaseIndex = Math.min(Math.floor(elapsedTime / phaseDuration), this.phases.length - 1);
+    private updatePhase(elapsedTime: number, now: number): void {
+        const phaseDuration = this.gameState.raceDuration / this.phaseTitles.length;
+        const targetPhaseIndex = Math.min(Math.floor(elapsedTime / phaseDuration), this.phaseTitles.length - 1);
 
         if (targetPhaseIndex !== this.currentPhaseIndex) {
             this.currentPhaseIndex = targetPhaseIndex;
-            this.gameState.currentPhase = this.phases[this.currentPhaseIndex];
-            this.addEvent('system', 'phase_change', `Entering ${this.gameState.currentPhase}`);
+            this.gameState.currentPhase = this.phaseTitles[this.currentPhaseIndex];
+            this.gameState.phase = this.currentPhaseIndex;
+            this.addEvent('system', 'phase_change', `Entering ${this.gameState.currentPhase}`, this.currentPhaseIndex);
+
+            // Per-phase: 35% of players get a random boost or stumble
             this.triggerPhaseBoosts();
         }
 
@@ -179,20 +211,25 @@ export class WegenRaceGameLogic {
     }
 
     private triggerPhaseBoosts(): void {
-        const numPlayersToAffect = Math.max(1, Math.ceil(this.players.length * 0.5));
-        const shuffledPlayers = [...this.players].sort(() => 0.5 - Math.random());
-        for (let i = 0; i < numPlayersToAffect && i < shuffledPlayers.length; i++) {
-            const player = shuffledPlayers[i];
-            const isPositive = Math.random() < 0.6;
+        const numPlayersToAffect = Math.max(1, Math.ceil(this.players.length * GAME_CONSTANTS.PHASE_BOOST_RATIO));
+        const shuffled = [...this.players].sort(() => 0.5 - Math.random());
+        let boosted: string[] = [];
+        let stumbled: string[] = [];
+        for (let i = 0; i < numPlayersToAffect && i < shuffled.length; i++) {
+            const player = shuffled[i];
+            const isPositive = Math.random() < 0.55;
             const duration = Phaser.Math.Between(GAME_CONSTANTS.BOOST_DURATION_MIN, GAME_CONSTANTS.BOOST_DURATION_MAX);
             if (isPositive) {
-                const multiplier = Phaser.Math.Between(GAME_CONSTANTS.BOOST_MULTIPLIER_MIN * 100, GAME_CONSTANTS.BOOST_MULTIPLIER_MAX * 100) / 100;
+                const multiplier = Phaser.Math.FloatBetween(GAME_CONSTANTS.BOOST_MULTIPLIER_MIN, GAME_CONSTANTS.BOOST_MULTIPLIER_MAX);
                 this.applyBoost(player, true, multiplier, duration);
+                boosted.push(player.key);
             } else {
                 const stunDuration = Phaser.Math.Between(GAME_CONSTANTS.STUN_DURATION_MIN, GAME_CONSTANTS.STUN_DURATION_MAX);
                 this.applyStumble(player, duration, stunDuration);
+                stumbled.push(player.key);
             }
         }
+        this.perPhaseBoosts.push({ phase: this.currentPhaseIndex, boosted, stumbled });
     }
 
     private applyBoost(player: Player, isPositive: boolean, multiplier: number, duration: number): void {
@@ -202,10 +239,14 @@ export class WegenRaceGameLogic {
             duration,
             startTime: Date.now()
         };
-        const effectDescription = `+${Math.round((multiplier - 1) * 100)}% speed`;
-        const eventDescription = `${player.name} gains a burst of speed!`;
-        this.addEvent(player.key, 'boost_speed', eventDescription, effectDescription);
-        this.internalEventEmitter.emit('playerBoostEffect', player.key, true, duration);
+        const effectDescription = isPositive
+            ? `+${Math.round((multiplier - 1) * 100)}% speed`
+            : `-${Math.round((1 - multiplier) * 100)}% speed`;
+        const eventDescription = isPositive
+            ? `${player.name} gains a burst of speed!`
+            : `${player.name} is slowed down!`;
+        this.addEvent(player.key, isPositive ? 'boost_speed' : 'slow_speed', eventDescription, this.currentPhaseIndex, effectDescription);
+        this.internalEventEmitter.emit('playerBoostEffect', player.key, isPositive, duration);
     }
 
     private applyStumble(player: Player, effectDuration: number, stunDuration: number): void {
@@ -219,7 +260,7 @@ export class WegenRaceGameLogic {
             stunEndTime: currentTime + stunDuration
         };
         const eventDescription = `${player.name} stumbles and halts!`;
-        this.addEvent(player.key, 'stumble', eventDescription, `Stunned for ${stunDuration / 1000}s`);
+        this.addEvent(player.key, 'stumble', eventDescription, this.currentPhaseIndex, `Stunned for ${stunDuration / 1000}s`);
         this.internalEventEmitter.emit('playerBoostEffect', player.key, false, effectDuration, stunDuration);
     }
 
@@ -235,8 +276,8 @@ export class WegenRaceGameLogic {
             if (boost && boost.isStun && boost.stunEndTime && currentTime < boost.stunEndTime) {
                 progressChange = 0;
             } else {
-                const individualSpeedFactor = 0.4 + (Math.random() * 1.2);
-                let baseSpeed = averageRequiredSpeed * individualSpeedFactor;
+                const individualSpeedFactor = 0.67 + (Math.random() * 0.93);
+                let baseSpeed = averageRequiredSpeed * individualSpeedFactor * this.globalSpeedMultiplier;
                 if (player.isHumanPlayer) {
                     baseSpeed *= 1.05;
                 }
@@ -252,26 +293,33 @@ export class WegenRaceGameLogic {
             const newProgress = Math.min(100, Math.max(0, currentProgress + progressChange));
             if (newProgress >= 100 && this.playerProgress[player.key] < 100) {
                 this.finishedPlayersCount++;
-                this.addEvent(player.key, 'player_finished', `${player.name} has crossed the finish line!`);
+                this.addEvent(player.key, 'player_finished', `${player.name} has crossed the finish line!`, this.currentPhaseIndex);
             }
             this.playerProgress[player.key] = newProgress;
-            const playerCurrentPhase = Math.floor(this.playerProgress[player.key] / (100 / this.phases.length));
+            const playerCurrentPhase = Math.floor(this.playerProgress[player.key] / (100 / this.phaseTitles.length));
             if (this.playerLastPhase[player.key] === undefined) {
                 this.playerLastPhase[player.key] = -1;
             }
-            if (playerCurrentPhase > this.playerLastPhase[player.key] && playerCurrentPhase < this.phases.length) {
+            if (playerCurrentPhase > this.playerLastPhase[player.key] && playerCurrentPhase < this.phaseTitles.length) {
                 this.playerLastPhase[player.key] = playerCurrentPhase;
                 this.internalEventEmitter.emit('playerPhaseAdvance', player.key, playerCurrentPhase);
             }
         });
     }
 
-    private updatePositions(): void {
+    private updatePositions(now: number): void {
         const sortedPlayers = this.players
             .map(player => ({ player, progress: this.playerProgress[player.key] || 0 }))
             .sort((a, b) => b.progress - a.progress);
+
+        let newLeadKey = sortedPlayers[0]?.player.key;
+        if (newLeadKey && newLeadKey !== this.leadPlayerKey) {
+            this.leadPlayerKey = newLeadKey;
+        }
+
         sortedPlayers.forEach(({ player }, index) => {
             this.gameState.positions[player.key] = index + 1;
+            this.positions[player.key] = index + 1;
         });
         this.gameState.rankings = sortedPlayers.map(sp => sp.player);
     }
@@ -283,7 +331,7 @@ export class WegenRaceGameLogic {
             this.players.forEach(player => {
                 const currentBoost = this.playerBoosts[player.key];
                 if (!currentBoost || (currentBoost.isPositive && !currentBoost.isStun)) {
-                    this.applyBoost(player, true, 1.002, 100);
+                    this.applyBoost(player, true, 1.012, 140);
                 }
             });
         } else if (actualOverallRaceProgressRatio > expectedProgressRatio + this.regulationTolerance) {
@@ -296,21 +344,23 @@ export class WegenRaceGameLogic {
         }
     }
 
-    private addEvent(playerKey: string, eventType: string, description: string, effect?: string): void {
+    private addEvent(playerKey: string, eventType: string, description: string, phase: number, effect?: string): void {
         const event: GameEvent = {
             id: `event_${this.eventCounter++}`,
             timestamp: Date.now(),
             playerKey,
             eventType,
             description,
+            phase,
             effect
         };
         this.eventLog.push(event);
-        if (this.eventLog.length > 500) {
+        if (this.eventLog.length > 800) {
             this.eventLog.shift();
         }
         const filteredEvents = this.eventLog.filter(e =>
             e.eventType === 'boost_speed' ||
+            e.eventType === 'slow_speed' ||
             e.eventType === 'stumble' ||
             e.eventType === 'phase_change' ||
             e.eventType === 'player_finished' ||
@@ -343,7 +393,7 @@ export class WegenRaceGameLogic {
             .map(({ player }) => player);
         this.gameState.winner = sortedPlayersForRanking[0] || null;
         this.gameState.rankings = sortedPlayersForRanking;
-        this.addEvent('system', 'race_end', `Race finished! Winner: ${this.gameState.winner?.name || 'N/A'}`);
+        this.addEvent('system', 'race_end', `Race finished! Winner: ${this.gameState.winner?.name || 'N/A'}`, this.currentPhaseIndex);
         this.internalEventEmitter.emit('raceFinished');
     }
 
@@ -365,7 +415,7 @@ export class WegenRaceGameLogic {
     }
 
     getVisualBoost(playerKey: string): VisualBoost | null {
-        return this.playerBoosts[playerKey] || null;
+        return this.playerBoosts[player.key] || null;
     }
 
     onPlayerPhaseAdvance(callback: (playerKey: string, phaseIndex: number) => void): void {
@@ -385,392 +435,274 @@ export class WegenRaceGameLogic {
         this.gameState.status = 'racing';
         this.raceStartTime = Date.now();
     }
+
+    // --- Export replay ---
+    exportRaceReplay(): RaceReplayData {
+        return {
+            settings: {
+                duration: this.gameState.raceDuration,
+                phaseTitles: [...this.phaseTitles],
+                playerKeys: this.players.map(p => p.key)
+            },
+            players: [...this.players],
+            eventLog: [...this.eventLog],
+            perPhaseBoosts: [...this.perPhaseBoosts]
+        };
+    }
+
+    // --- Replay import (not full time-based playback, but for API completeness) ---
+    importRaceReplay(replay: RaceReplayData): void {
+        this.initializeRace(replay.players, replay.settings.duration / 60000);
+        this.eventLog = [...replay.eventLog];
+    }
 }
 
-// --- Phaser Scene ---
+// ... previous code ...
+
+/**
+ * WegenRaceScene - Phaser visual engine for dynamic racing game.
+ * - Dynamic track gradient, responsive layout for any player count, no external track PNGs.
+ * - Per-player boost/stumble visuals and replay/export support.
+ * - Advanced: programmatic boost/obstacle VFX, emotes, debug API.
+ */
 export class WegenRaceScene extends Phaser.Scene {
-    private gameLogic!: WegenRaceGameLogic;
-    private playerVisualContainers: Map<string, Phaser.GameObjects.Container> = new Map();
-    private playerAvatars: Map<string, Phaser.GameObjects.Sprite> = new Map();
-    private playerAvatarMasks: Map<string, Phaser.Display.Masks.GeometryMask> = new Map();
-    private playerAvatarMaskGraphics: Map<string, Phaser.GameObjects.Graphics> = new Map();
+    public gameLogic!: WegenRaceGameLogic;
+
+    // Layout
     private trackGraphics!: Phaser.GameObjects.Graphics;
-    private playerProgressBars: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private playerLaneBackgrounds: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private backgroundMusic?: Phaser.Sound.BaseSound;
-    private sceneEventEmitter?: Phaser.Events.EventEmitter;
-    private raceData?: { players: Player[]; duration: number; humanChoice: Player; };
-    private countdownText?: Phaser.GameObjects.Text;
-    private overallRaceProgressText?: Phaser.GameObjects.Text;
-    private raceTitleText?: Phaser.GameObjects.Text;
-    private phaseMarkers: Phaser.GameObjects.Graphics[] = [];
-    private playerEffectAuras: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private playerEffectIcons: Map<string, Phaser.GameObjects.Sprite> = new Map();
-    private playerAuraLaneMasks: Map<string, Phaser.Display.Masks.GeometryMask> = new Map();
-    private playerAuraLaneMaskGraphics: Map<string, Phaser.GameObjects.Graphics> = new Map();
+    private laneGraphics: Phaser.GameObjects.Graphics[] = [];
     private trackStartX = 0;
     private trackStartY = 0;
     private trackWidth = 0;
     private trackHeight = 0;
     private laneHeight = 0;
-    private lastStateEmit = 0;
+
+    // Avatars, player visuals
+    private playerVisualContainers: Map<string, Phaser.GameObjects.Container> = new Map();
+    private playerAvatars: Map<string, Phaser.GameObjects.Arc> = new Map();
+    private playerBoostIcons: Map<string, Phaser.GameObjects.Image> = new Map();
+    private playerProgressBars: Map<string, Phaser.GameObjects.Graphics> = new Map();
+
+    // Advanced VFX/Replay
+    private playerBoostTrails: Map<string, Phaser.GameObjects.Particles.ParticleEmitterManager> = new Map();
+    private playerEmoteTexts: Map<string, Phaser.GameObjects.Text> = new Map();
+
+    // UI
+    private raceTitleText?: Phaser.GameObjects.Text;
+    private overallRaceProgressText?: Phaser.GameObjects.Text;
+    private countdownText?: Phaser.GameObjects.Text;
 
     constructor() {
         super({ key: 'WegenRaceScene' });
+          console.log("Phaser Scene Constructor");
     }
 
     preload(): void {
-        this.load.image('G1small', '/WegenRaceAssets/G1small.png');
+        console.log("Phaser Scene Preload");
+        // Only critical assets (obstacle/boost icons, SFX)
         this.load.image('boost_icon', '/WegenRaceAssets/turbo.png');
         this.load.image('stumble_icon', '/WegenRaceAssets/obstacle.png');
-        this.load.audio('background_music', '/WegenRaceAssets/bg_music.mp3');
+        this.load.audio('bg_music', '/WegenRaceAssets/bg_music.mp3');
         this.load.audio('countdown_tick', '/WegenRaceAssets/beep.wav');
         this.load.audio('race_start_horn', '/WegenRaceAssets/whack.wav');
         this.load.audio('victory_music', '/WegenRaceAssets/finish.wav');
         this.load.audio('celebration_sound', '/WegenRaceAssets/applause.wav');
-        this.load.audio('phase_advance_effect', '/WegenRaceAssets/boost1.wav');
-        this.load.on('loaderror', (key: string, file: Phaser.Loader.File) => {
-            console.error(`⚠️ Failed to load asset: ${key} at ${file.src}`);
-        });
-        this.load.on('filecomplete', (key: string, type: string) => {
-            if (type === 'image' && key.startsWith('avatar_')) {
-                const playerKey = key.substring('avatar_'.length);
-                const avatarSprite = this.playerAvatars.get(playerKey);
-                if (avatarSprite && this.textures.exists(key)) {
-                    avatarSprite.setTexture(key);
-                    const avatarSize = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO;
-                    avatarSprite.setDisplaySize(avatarSize, avatarSize);
-                    this.updateAvatarMask(playerKey, avatarSprite);
-                }
-            }
-        });
-    }
-
-    private safePlaySound(key: string, opts?: Phaser.Types.Sound.SoundConfig) {
-        if (!this.sound) return;
-        const snd = this.sound.get(key);
-        if (snd) { try { return snd.play(opts); } catch (e) { } }
-        else if (this.cache.audio.exists(key)) { try { return this.sound.add(key).play(opts); } catch (e) { } }
-        return undefined;
     }
 
     create(): void {
-        this.gameLogic = new WegenRaceGameLogic();
-        this.trackGraphics = this.add.graphics();
-        this.sceneEventEmitter = new Phaser.Events.EventEmitter();
+          console.log("Phaser Scene Create");
+        // === Responsive layout calculation ===
+        const players: Player[] = this.game.registry.get('players') || [];
+         const duration: number = this.game.registry.get('duration') || 2;
+        const { width, height } = this.sys.game.canvas;
+        this.laneHeight = Math.max(
+            Math.min(
+                (height - 120) / players.length - GAME_CONSTANTS.LANE_PADDING,
+                GAME_CONSTANTS.LANE_HEIGHT_MAX
+            ),
+            GAME_CONSTANTS.LANE_HEIGHT_MIN
+        );
+        this.trackHeight = this.laneHeight * players.length + GAME_CONSTANTS.LANE_PADDING * (players.length - 1);
+        this.trackWidth = Math.max(width - 120, 400);
+        this.trackStartX = 60;
+        this.trackStartY = (height - this.trackHeight) / 2;
 
-        this.cameras.main.setBackgroundColor('#1a1a2e');
-        this.raceTitleText = this.add.text(this.scale.width / 2, 30, 'Wegen Race', {
+        // === Track background gradient ===
+        this.trackGraphics = this.add.graphics().setDepth(spriteDepths.trackBackground);
+        this.drawDynamicTrackGradient(players);
+
+        // === Lane backgrounds (subtle avatar color tint) ===
+        this.laneGraphics = [];
+        players.forEach((player, idx) => {
+            const g = this.add.graphics().setDepth(spriteDepths.lane);
+            this.drawLaneBackground(g, player, idx);
+            this.laneGraphics.push(g);
+        });
+
+        // === Player visuals: avatars, progress bars, boost/stumble ===
+        this.playerVisualContainers.clear();
+        this.playerAvatars.clear();
+        this.playerBoostIcons.clear();
+        this.playerProgressBars.clear();
+
+        players.forEach((player, idx) => {
+            const container = this.add.container(0, 0);
+            // Avatar: circle with color, fallback letter if no avatarUrl
+            const avatarColor = player.color ?? Phaser.Display.Color.RandomRGB().color;
+            const avatarRadius = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO / 2;
+            const avatarArc = this.add.circle(0, 0, avatarRadius, avatarColor).setDepth(spriteDepths.playerAvatar);
+            this.playerAvatars.set(player.key, avatarArc);
+            container.add(avatarArc);
+
+            // Player name
+            const nameText = this.add.text(
+                avatarRadius + 12, 0,
+                player.name,
+                { fontSize: Math.floor(this.laneHeight * 0.37) + 'px', color: '#fff', fontFamily: 'Orbitron,Arial', fontWeight: 'bold' }
+            ).setOrigin(0, 0.5).setAlpha(0.96);
+            container.add(nameText);
+
+            // Progress bar
+            const progressBar = this.add.graphics().setDepth(spriteDepths.playerProgressBar);
+            this.playerProgressBars.set(player.key, progressBar);
+
+            this.playerVisualContainers.set(player.key, container);
+        });
+
+        // === Top UI ===
+        this.raceTitleText = this.add.text(width / 2, 30, 'Wegen Race', {
             fontSize: '36px',
             color: '#ffd93b',
-            fontFamily: 'Comic Sans MS, Arial, sans-serif',
+            fontFamily: 'Orbitron,Arial',
             shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 4, fill: true }
         }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
         this.overallRaceProgressText = this.add.text(
-            this.scale.width / 2,
-            this.scale.height - 40,
+            width / 2,
+            height - 40,
             'Overall Progress: 0%  |  Time Left: 00:00',
             {
                 fontSize: '18px',
                 color: '#ddd',
-                fontFamily: 'Comic Sans MS, Arial, sans-serif',
+                fontFamily: 'Orbitron,Arial',
             }
         ).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
-        this.tweens.add({ targets: this.raceTitleText, scale: 1.02, yoyo: true, repeat: -1, duration: 1500, ease: 'Sine.easeInOut' });
-        this.tweens.add({ targets: this.overallRaceProgressText, alpha: 0.9, yoyo: true, repeat: -1, duration: 1000, ease: 'Sine.easeInOut' });
+        // === Game Logic ===
+        this.gameLogic = new WegenRaceGameLogic();
+       this.gameLogic.initializeRace(players, duration);  // VERY IMPORTANT // Initialize with players and duration
 
+        // === Race event hooks ===
         this.gameLogic.onPlayerPhaseAdvance((playerKey, phaseIndex) => this.handlePlayerPhaseAdvance(playerKey, phaseIndex));
         this.gameLogic.onRaceFinished(() => this.handleRaceFinishedInternal());
         this.gameLogic.onPlayerBoostEffect((playerKey, isPositive, effectDuration, stunDuration) => this.handlePlayerBoostEffect(playerKey, isPositive, effectDuration, stunDuration));
         this.gameLogic.onPlayerBoostEffectEnd((playerKey) => this.handlePlayerBoostEffectEnd(playerKey));
 
-        this.safePlaySound('background_music', { loop: true, volume: 0.2 });
+        this.sound.stopAll();
+        const music = this.sound.add('bg_music', { loop: true, volume: 0.23 });
+        music.play();
 
-       // Now the scene is fully ready for object creation:
-    (this.game as Phaser.Game).events.emit('race-scene-fully-ready');
-    }
-
-    private setupLayout(): void {
-        if (!this.sys || !this.sys.isActive() || !this.sys.displayList || !this.sys.game) return;
-        const horizontalPadding = this.scale.width * 0.05;
-        const verticalPaddingTop = this.scale.height * 0.12;
-        const verticalPaddingBottom = this.scale.height * 0.05;
-
-        if (this.raceTitleText && !this.raceTitleText.destroyed) {
-            try {
-                this.raceTitleText.y = verticalPaddingTop / 3;
-                this.raceTitleText.setStyle({ fontSize: '48px', fontFamily: 'Comic Sans MS, Arial, sans-serif' });
-            } catch (e) {
-                console.warn('Failed to update raceTitleText style:', e);
-            }
-        }
-        if (this.overallRaceProgressText && !this.overallRaceProgressText.destroyed) {
-            try {
-                this.overallRaceProgressText.y = this.scale.height - verticalPaddingBottom / 2;
-                this.overallRaceProgressText.setStyle({ fontFamily: 'Comic Sans MS, Arial, sans-serif' });
-            } catch (e) {
-                console.warn('Failed to update overallRaceProgressText style:', e);
-            }
-        }
-
-        this.trackStartX = horizontalPadding;
-        this.trackStartY = verticalPaddingTop;
-        this.trackWidth = this.scale.width - (horizontalPadding * 2);
-        this.trackHeight = this.scale.height - verticalPaddingTop - verticalPaddingBottom;
-    }
-
-    private createTrack(): void {
-        if (!this.sys || !this.sys.isActive() || !this.sys.displayList || !this.sys.game) return;
-        const numPlayers = this.raceData ? this.raceData.players.length : 0;
-        if (numPlayers === 0) return;
-        this.trackGraphics.clear();
-        this.phaseMarkers.forEach(m => m.destroy()); this.phaseMarkers = [];
-        this.playerVisualContainers.forEach(container => container.destroy()); this.playerVisualContainers.clear();
-        this.playerAvatars.clear();
-        this.playerAvatarMasks.forEach(mask => mask.destroy()); this.playerAvatarMasks.clear();
-        this.playerAvatarMaskGraphics.forEach(graphics => graphics.destroy()); this.playerAvatarMaskGraphics.clear();
-        this.playerEffectAuras.forEach(aura => aura.destroy()); this.playerEffectAuras.clear();
-        this.playerEffectIcons.forEach(icon => icon.destroy()); this.playerEffectIcons.clear();
-        this.playerProgressBars.forEach(bar => bar.destroy()); this.playerProgressBars.clear();
-        this.playerLaneBackgrounds.forEach(bg => bg.destroy()); this.playerLaneBackgrounds.clear();
-        this.playerAuraLaneMasks.forEach(mask => mask.destroy()); this.playerAuraLaneMasks.clear();
-        this.playerAuraLaneMaskGraphics.forEach(graphics => graphics.destroy()); this.playerAuraLaneMaskGraphics.clear();
-
-        // --- DYNAMIC LANE HEIGHT calculation for up to 50+ players ---
-        const maxSingleLaneHeight = this.trackHeight / 1.5;
-        this.laneHeight = Math.min(
-            GAME_CONSTANTS.LANE_HEIGHT_MAX,
-            Math.max(GAME_CONSTANTS.LANE_HEIGHT_MIN, (this.trackHeight - (numPlayers - 1) * GAME_CONSTANTS.LANE_PADDING) / numPlayers),
-            maxSingleLaneHeight
-        );
-        const totalLanesRenderHeight = numPlayers * this.laneHeight + (numPlayers > 1 ? (numPlayers - 1) * GAME_CONSTANTS.LANE_PADDING : 0);
-
-        this.trackGraphics.lineStyle(3, 0x4a4a6e, 0.8);
-        this.trackGraphics.strokeRoundedRect(this.trackStartX, this.trackStartY, this.trackWidth, totalLanesRenderHeight, 10);
-        this.trackGraphics.setDepth(spriteDepths.trackOutline);
-
-        this.raceData?.players.forEach((player, index) => {
-            const laneY = this.trackStartY + (index * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
-            const laneGraphics = this.add.graphics().setDepth(spriteDepths.trackBackground);
-            this.playerLaneBackgrounds.set(player.key, laneGraphics);
-            laneGraphics.name = `laneBackground_${player.key}`;
-            laneGraphics.fillStyle(0x00FF00, 0.1);
-            laneGraphics.fillRoundedRect(this.trackStartX + 2, laneY + 2, this.trackWidth - 4, this.laneHeight - 4, 10);
-            laneGraphics.lineStyle(1.5, 0x309930, 0.6);
-            laneGraphics.strokeRoundedRect(this.trackStartX + 2, laneY + 2, this.trackWidth - 4, this.laneHeight - 4, 10);
-
-            const progressBar = this.add.graphics().setDepth(spriteDepths.playerProgressBar);
-            this.playerProgressBars.set(player.key, progressBar);
-            progressBar.name = `progressBar_${player.key}`;
-            const laneMaskGraphics = this.make.graphics({ add: false });
-            laneMaskGraphics.name = `auraLaneMaskGraphics_${player.key}`;
-            laneMaskGraphics.fillStyle(0xffffff);
-            laneMaskGraphics.fillRoundedRect(this.trackStartX, laneY, this.trackWidth, this.laneHeight, 10);
-            const laneMask = laneMaskGraphics.createGeometryMask();
-            this.playerAuraLaneMasks.set(player.key, laneMask);
-            this.playerAuraLaneMaskGraphics.set(player.key, laneMaskGraphics);
-            this.add.existing(laneMaskGraphics);
-            laneMaskGraphics.setVisible(false);
-        });
-
-        this.trackGraphics.lineStyle(3, 0xFFFFFF, 1);
-        this.trackGraphics.lineBetween(this.trackStartX, this.trackStartY, this.trackStartX, this.trackStartY + totalLanesRenderHeight);
-        this.add.text(this.trackStartX + 5, this.trackStartY - 20, 'START', {
-            fontSize: '14px', color: '#FFFFFF', fontFamily: 'Comic Sans MS, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
-        }).setOrigin(0, 0.5).setDepth(spriteDepths.overallUI);
-
-        this.trackGraphics.lineBetween(this.trackStartX + this.trackWidth, this.trackStartY, this.trackStartX + this.trackWidth, this.trackStartY + totalLanesRenderHeight);
-        this.add.text(this.trackStartX + this.trackWidth - 5, this.trackStartY - 20, 'FINISH', {
-            fontSize: '14px', color: '#FFFFFF', fontFamily: 'Comic Sans MS, Arial, sans-serif', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
-        }).setOrigin(1, 0.5).setDepth(spriteDepths.overallUI);
-
-        // --- PHASE MARKERS ---
-        const numPhases = this.gameLogic.phases.length;
-        const phaseSectionWidth = this.trackWidth / numPhases;
-        for (let i = 1; i < numPhases; i++) {
-            const markerX = this.trackStartX + (phaseSectionWidth * i);
-            const markerLine = this.add.graphics().setDepth(spriteDepths.phaseMarkers);
-            markerLine.name = `phaseMarkerLine_${i}`;
-            markerLine.lineStyle(2, 0x6a6a6a, 0.5);
-            markerLine.lineBetween(markerX, this.trackStartY, markerX, this.trackStartY + totalLanesRenderHeight);
-            this.phaseMarkers.push(markerLine);
-            this.add.text(markerX - phaseSectionWidth / 2, this.trackStartY - 15, `Phase ${i}`, {
-                fontSize: '12px', color: '#aaa', fontFamily: 'Comic Sans MS, Arial, sans-serif', align: 'center', shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 1, fill: true }
-            }).setOrigin(0.5).setDepth(spriteDepths.overallUI);
-        }
-    }
-
-
-    private createAvatarMask(playerKey: string, avatarSprite: Phaser.GameObjects.Sprite) {
-        const maskGraphics = this.make.graphics({ add: true, visible: false });
-        maskGraphics.name = `avatarMaskGraphics_${playerKey}`;
-        this.playerAvatarMaskGraphics.set(playerKey, maskGraphics);
-        const radius = avatarSprite.displayWidth / 2;
-        maskGraphics.fillCircle(avatarSprite.x, avatarSprite.y, radius);
-        const mask = maskGraphics.createGeometryMask();
-        avatarSprite.setMask(mask);
-        this.playerAvatarMasks.set(playerKey, mask);
-    }
-
-    private updateAvatarMask(playerKey: string, avatarSprite: Phaser.GameObjects.Sprite) {
-        let maskGraphics = this.playerAvatarMaskGraphics.get(playerKey);
-        if (!maskGraphics) {
-            this.createAvatarMask(playerKey, avatarSprite);
-            maskGraphics = this.playerAvatarMaskGraphics.get(playerKey);
-            if (!maskGraphics) return;
-        }
-        maskGraphics.clear();
-        const radius = avatarSprite.displayWidth / 2;
-        maskGraphics.fillCircle(avatarSprite.x, avatarSprite.y, radius);
-    }
-
+        // Countdown and start
+        this.startCountdown();
     
-        private isSceneActive(): boolean {
-        return !!this.sys && !!this.sys.isActive() && !!this.sys.displayList && !!this.sys.scene && !this.sys.settings.isTransition && !this.sys.settings.isDestroyed;
-    }
-
-
-    private createPlayerVisualContainer(player: Player, laneIndex: number): void {
-            if (!this.sys || !this.sys.isActive() || !this.add) {
-        console.warn('createPlayerVisualContainer: Scene not active or "add" is null, aborting.');
-        return;
-    }
-        const laneYTop = this.trackStartY + (laneIndex * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
-        const laneCenterY = laneYTop + (this.laneHeight / 2);
-        const container = this.add.container(this.trackStartX, laneCenterY).setDepth(spriteDepths.playerAvatar);
-        container.name = `playerContainer_${player.key}`;
-        this.playerVisualContainers.set(player.key, container);
-
-        const avatarSize = this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO;
-        const avatarRadius = avatarSize / 2;
-        const avatarLocalX = GAME_CONSTANTS.AVATAR_START_OFFSET_X;
-        const avatarLocalY = 0;
-        const dynamicAvatarKey = `avatar_${player.key}`;
-        let avatarTextureKey = 'G1small';
-        if (this.textures.exists(dynamicAvatarKey)) {
-            avatarTextureKey = dynamicAvatarKey;
-        }
-        const currentAvatar = this.add.sprite(avatarLocalX, avatarLocalY, avatarTextureKey);
-        currentAvatar.setDisplaySize(avatarSize, avatarSize);
-        currentAvatar.setOrigin(0.5);
-        currentAvatar.name = `avatarSprite_${player.key}`;
-        container.add(currentAvatar);
-        this.playerAvatars.set(player.key, currentAvatar);
-        this.createAvatarMask(player.key, currentAvatar);
-
-        const borderGraphics = this.add.graphics();
-        borderGraphics.lineStyle(3, 0x000000, 1);
-        borderGraphics.strokeCircle(avatarLocalX, avatarLocalY, avatarRadius);
-        container.add(borderGraphics);
-        borderGraphics.name = `avatarBorder_${player.key}`;
-
-        const nameTextX = avatarLocalX - avatarRadius - GAME_CONSTANTS.PLAYER_NAME_OFFSET_X;
-        const nameText = this.add.text(nameTextX, avatarLocalY, player.name, {
-            fontSize: '15px', color: '#fff', fontFamily: 'Comic Sans MS, Arial, sans-serif', align: 'right',
-            wordWrap: { width: 100, useWebFonts: true },
-            shadow: { offsetX: 1, offsetY: 1, color: '#000', blur: 2, fill: true }
-        }).setOrigin(1, 0.5);
-        nameText.name = `nameText_${player.key}`;
-        container.add(nameText);
-    }
-
-    public initializeRaceWithData(players: Player[], durationMinutes: number, humanChoice: Player): void {
-           if (!this.sys || !this.sys.isActive() || !this.add) {
-        console.warn('continueSetup: Scene not active or "add" is null, aborting.');
-        return;
-    }
-        let avatarsToLoad = 0;
-        players.forEach(player => {
-            const dynamicAvatarKey = `avatar_${player.key}`;
-            if (player.avatarUrl && !this.textures.exists(dynamicAvatarKey)) {
-                this.load.image(dynamicAvatarKey, player.avatarUrl);
-                avatarsToLoad++;
-            }
+        console.log("Phaser Scene Create: about to emit race-scene-fully-ready");
+        this.time.delayedCall(50, () => {
+        console.log("Phaser Scene: emitting race-scene-fully-ready");
+        this.events.emit('race-scene-fully-ready');
         });
 
-        const continueSetup = () => {
-            this.gameLogic.initializeRace(players, durationMinutes);
-            this.raceData = { players, duration: durationMinutes, humanChoice };
-            this.setupLayout();
-            this.createTrack();
-            players.forEach((player, index) => {
-                this.createPlayerVisualContainer(player, index);
-                const avatarSprite = this.playerAvatars.get(player.key);
-                const dynamicAvatarKey = `avatar_${player.key}`;
-                if (avatarSprite && this.textures.exists(dynamicAvatarKey)) {
-                    avatarSprite.setTexture(dynamicAvatarKey);
-                    avatarSprite.setDisplaySize(this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO, this.laneHeight * GAME_CONSTANTS.AVATAR_SIZE_RATIO);
-                    this.updateAvatarMask(player.key, avatarSprite);
-                }
-            });
-
-            if (typeof this.startRaceExternally === "function") {
-                this.startRaceExternally();
-            }
-        };
-
-        if (avatarsToLoad > 0) {
-            let avatarLoadTimedOut = false;
-            const timeout = setTimeout(() => {
-                avatarLoadTimedOut = true;
-                continueSetup();
-            }, 5000);
-            this.load.once('complete', () => {
-                if (!avatarLoadTimedOut) clearTimeout(timeout);
-                continueSetup();
-            });
-            this.load.once('loaderror', (file: any) => {});
-            this.load.start();
-        } else {
-            continueSetup();
-        }
     }
 
-    update(): void {
-        if (!this.gameLogic) return;
-        this.gameLogic.update(this.sys.game.loop.delta);
-        this.updatePlayerVisuals();
-        this.updateOverallRaceProgressUI();
-        const now = Date.now();
-        if (now - this.lastStateEmit > 100) {
-            this.lastStateEmit = now;
-            this.emitStateChange();
-        }
+private drawDynamicTrackGradient(players: Player[]) {
+    const g = this.trackGraphics;
+    g.clear();
+    const { trackStartX, trackStartY, trackWidth, trackHeight } = this;
+
+    // Draw left half gradient: blue -> white (left to middle)
+    g.fillGradientStyle(0x2257ff, 0xffffff, 0x2257ff, 0xffffff, 1);
+    g.fillRect(trackStartX, trackStartY, trackWidth / 2, trackHeight);
+
+    // Draw right half gradient: white -> yellow (middle to right)
+    g.fillGradientStyle(0xffffff, 0xffd93b, 0xffffff, 0xffd93b, 1);
+    g.fillRect(trackStartX + trackWidth / 2, trackStartY, trackWidth / 2, trackHeight);
+}
+
+// --- Lane backgrounds (with dynamic transparency animation) ---
+private drawLaneBackground(g: Phaser.GameObjects.Graphics, player: Player, idx: number) {
+    const y = this.trackStartY + idx * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING);
+    const color = player.color ?? Phaser.Display.Color.RandomRGB().color;
+    const tint = Phaser.Display.Color.IntegerToColor(color);
+    tint.saturate(0.35);
+
+    g.clear();
+    g.fillStyle(tint.color, 0.12); // base tint
+    g.fillRect(this.trackStartX, y, this.trackWidth, this.laneHeight);
+
+    // Save for animation: we'll pulse a translucent white overlay above this
+    (g as any).__laneIndex = idx;
+    (g as any).__playerKey = player.key;
+}
+
+    // --- Dynamic layout from PickerInitModal/player onboarding ---
+    private getPlayersFromPickerInit(): Player[] {
+        // This should be replaced with real onboarding data:
+        // For now, create placeholders for demo testing
+        return [
+            { key: "p1", name: "Alice", color: 0x8888ff },
+            { key: "p2", name: "Bob", color: 0xff8888 },
+            { key: "p3", name: "Carol", color: 0x88ff88 }
+        ];
     }
+
+update(): void {
+    if (!this.gameLogic) return;
+    this.gameLogic.update(this.sys.game.loop.delta);
+    this.updatePlayerVisuals();
+    this.updateOverallRaceProgressUI();
+    this.animateLaneTransparency();
+}
+
+private animateLaneTransparency() {
+    // Pulse a transparent white overlay per lane, based on progress and time
+    const players = this.gameLogic.getAllPlayers();
+    this.laneGraphics.forEach((g, idx) => {
+        const playerKey = (g as any).__playerKey;
+        const progress = this.gameLogic.getPlayerProgress(playerKey);
+        const y = this.trackStartY + idx * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING);
+
+        // Animated alpha: low when behind, max (0.20) when ahead, pulses with time
+        const baseAlpha = 0.09 + 0.12 * progress;
+        const pulse = 0.07 * Math.sin(Date.now() / 450 + idx);
+        g.save();
+        g.beginPath();
+        g.fillStyle(0xffffff, baseAlpha + pulse);
+        g.fillRect(this.trackStartX, y, this.trackWidth, this.laneHeight);
+        g.restore();
+    });
+}
+
 
     private updatePlayerVisuals(): void {
         const players = this.gameLogic.getAllPlayers();
-        players.forEach((player, index) => {
+        players.forEach((player, idx) => {
             const container = this.playerVisualContainers.get(player.key);
             const avatar = this.playerAvatars.get(player.key);
             const progressBar = this.playerProgressBars.get(player.key);
             if (!container || !avatar || !progressBar) return;
             const progress = this.gameLogic.getPlayerProgress(player.key);
-            const avatarWidth = avatar.displayWidth;
-            const trackLeft = this.trackStartX;
-            const trackRight = this.trackStartX + this.trackWidth;
-            let avatarCenterX = trackLeft + progress * this.trackWidth;
-            avatarCenterX = Math.max(trackLeft + avatarWidth / 2, Math.min(trackRight - avatarWidth / 2, avatarCenterX));
-            container.x = avatarCenterX;
-            const time = Date.now();
-            const bounceOffset = Math.sin(time / 200 + index * 0.5) * 4;
-            const laneYTop = this.trackStartY + (index * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
-            const laneCenterY = laneYTop + (this.laneHeight / 2);
-            container.y = laneCenterY + bounceOffset;
+            const avatarRadius = avatar.radius;
+            // X: progress along track, Y: lane center
+            const x = this.trackStartX + progress * this.trackWidth;
+            const y = this.trackStartY + idx * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING) + this.laneHeight / 2;
+            container.x = x;
+            container.y = y;
             progressBar.clear();
-            const progressBarX = this.trackStartX + 2;
-            const progressBarY = laneYTop + this.laneHeight - (this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO) - 2;
-            const progressBarWidth = Math.max(2, progress * this.trackWidth);
-            const progressBarHeight = this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO;
-            progressBar.fillStyle(0xFFD700, 0.8);
-            progressBar.fillRoundedRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight, GAME_CONSTANTS.PROGRESS_BAR_ROUND_RADIUS);
-            const boost = this.gameLogic.getVisualBoost(player.key);
-            if (!boost) {
-                avatar.clearTint();
-                avatar.setScale(1);
-            }
+            // Draw progress bar behind avatar
+            const barY = y + avatarRadius + 7;
+            const barWidth = Math.max(2, progress * this.trackWidth);
+            const barHeight = this.laneHeight * GAME_CONSTANTS.PROGRESS_BAR_HEIGHT_RATIO;
+            progressBar.fillStyle(0xFFD700, 0.75);
+            progressBar.fillRoundedRect(this.trackStartX, barY, barWidth, barHeight, GAME_CONSTANTS.PROGRESS_BAR_ROUND_RADIUS);
         });
     }
 
@@ -786,141 +718,115 @@ export class WegenRaceScene extends Phaser.Scene {
         }
     }
 
-    private emitStateChange(): void {
-        if (this.sceneEventEmitter) {
-            this.sceneEventEmitter.emit('stateChange', this.gameLogic.getState());
-        }
-    }
-
+    // --- Per-player boost/stumble visuals ---
     private handlePlayerPhaseAdvance(playerKey: string, phaseIndex: number): void {
         const avatar = this.playerAvatars.get(playerKey);
         if (avatar) {
             this.tweens.add({
                 targets: avatar,
-                scaleX: { from: avatar.scaleX, to: avatar.scaleX * 1.15 },
-                scaleY: { from: avatar.scaleY, to: avatar.scaleY * 1.15 },
-                duration: 150, ease: 'Power1', yoyo: true,
-                onComplete: () => {
-                    const boost = this.gameLogic.getVisualBoost(playerKey);
-                    if (!boost) avatar.setScale(1);
-                }
+                scaleX: { from: 1, to: 1.18 },
+                scaleY: { from: 1, to: 1.18 },
+                duration: 120, yoyo: true, onComplete: () => avatar.setScale(1)
             });
-            const boost = this.gameLogic.getVisualBoost(playerKey);
-            if (!boost) {
-                avatar.setTint(0xffd700);
-                this.time.delayedCall(200, () => avatar.clearTint());
-            }
         }
-        const phaseSound = this.sound.get('phase_advance_effect');
-        if (phaseSound) phaseSound.play({ volume: 0.1 });
     }
 
     private handlePlayerBoostEffect(playerKey: string, isPositive: boolean, effectDuration: number, stunDuration?: number): void {
-        const container = this.playerVisualContainers.get(playerKey);
         const avatar = this.playerAvatars.get(playerKey);
-        const laneBackground = this.playerLaneBackgrounds.get(playerKey);
-        const auraLaneMask = this.playerAuraLaneMasks.get(playerKey);
-        if (!container || !avatar || !laneBackground || !auraLaneMask) {
-            return;
-        }
-        const playerIndex = this.gameLogic.getAllPlayers().findIndex(p => p.key === playerKey);
-        const laneYTop = this.trackStartY + (playerIndex * (this.laneHeight + GAME_CONSTANTS.LANE_PADDING));
-        const laneX = this.trackStartX;
-        const laneWidth = this.trackWidth;
-        const laneHeight = this.laneHeight;
-        const originalColor = 0x00FF00;
-        const originalAlpha = 0.1;
-        const flashColor = isPositive ? 0x00AA00 : 0xAA0000;
-        const flashAlpha = 0.3;
-        laneBackground.clear();
-        laneBackground.fillStyle(flashColor, flashAlpha);
-        laneBackground.fillRoundedRect(laneX + 2, laneYTop + 2, laneWidth - 4, laneHeight - 4, 10);
-        laneBackground.lineStyle(1.5, 0x309930, 0.6);
-        laneBackground.strokeRoundedRect(laneX + 2, laneYTop + 2, laneWidth - 4, laneHeight - 4, 10);
-        this.tweens.add({
-            targets: laneBackground,
-            alpha: { from: flashAlpha, to: originalAlpha },
-            duration: 500, ease: 'Linear',
-            onComplete: () => {
-                laneBackground.alpha = 1;
-                laneBackground.clear();
-                laneBackground.fillStyle(originalColor, originalAlpha);
-                laneBackground.fillRoundedRect(laneX + 2, laneYTop + 2, laneWidth - 4, this.laneHeight - 4, 10);
-                laneBackground.lineStyle(1.5, 0x309930, 0.6);
-                laneBackground.strokeRoundedRect(laneX + 2, laneYTop + 2, laneWidth - 4, this.laneHeight - 4, 10);
+        const container = this.playerVisualContainers.get(playerKey);
+        if (!avatar || !container) return;
+
+        // --- Advanced VFX: Boost/Trail ---
+        if (isPositive) {
+            // Simple trail using Phaser's built-in particles, no PNG needed
+            let particles = this.playerBoostTrails.get(playerKey);
+            if (!particles) {
+                particles = this.add.particles(0, 0, undefined, {
+                    speed: 40, lifespan: 350, angle: { min: 160, max: 200 },
+                    scale: { start: 0.25, end: 0 }, alpha: { start: 0.9, end: 0 },
+                    tint: [0x11ff44, 0x00eedd, 0xffffff]
+                });
+                container.add(particles);
+                this.playerBoostTrails.set(playerKey, particles);
             }
-        });
-        let aura = this.playerEffectAuras.get(playerKey);
-        const auraRadius = avatar.displayWidth / 2 + 10;
-        const highlightColor = isPositive ? 0x00FF00 : 0xFF0000;
-        if (!aura) {
-            aura = this.add.graphics();
-            aura.name = `aura_${playerKey}`;
-            this.playerEffectAuras.set(playerKey, aura);
-            container.add(aura);
-            aura.setDepth(spriteDepths.laneHighlight);
-            aura.setMask(auraLaneMask);
-        }
-        aura.clear();
-        aura.fillStyle(highlightColor, 0.4);
-        aura.fillCircle(avatar.x, avatar.y, auraRadius);
-        this.tweens.killTweensOf(aura);
-        aura.alpha = 1;
-        this.tweens.add({ targets: aura, alpha: { from: 0.8, to: 0.2 }, yoyo: true, repeat: -1, duration: 500 });
-        let icon = this.playerEffectIcons.get(playerKey);
-        const iconKey = isPositive ? 'boost_icon' : 'stumble_icon';
-        const iconOffsetX = avatar.displayWidth / 2 + 5;
-        const iconOffsetY = avatar.displayHeight / 2 + 5;
-        if (icon) {
-            icon.setTexture(iconKey);
-            icon.setPosition(avatar.x + iconOffsetX, avatar.y - iconOffsetY);
-            icon.setVisible(true);
+            particles.setPosition(0, 0);
+            particles.emitParticleAt(0, 0, 6);
+            this.tweens.add({
+                targets: particles,
+                alpha: { from: 1, to: 0 },
+                duration: effectDuration,
+                onComplete: () => {
+                    particles?.destroy();
+                    this.playerBoostTrails.delete(playerKey);
+                }
+            });
         } else {
-            icon = this.add.sprite(avatar.x + iconOffsetX, avatar.y - iconOffsetY, iconKey);
-            icon.setDisplaySize(24, 24);
-            icon.setOrigin(0.5);
-            icon.setDepth(spriteDepths.playerAvatar + 2);
-            icon.name = `effectIcon_${playerKey}`;
-            container.add(icon);
-            this.playerEffectIcons.set(playerKey, icon);
+            // Negative: show a small "!" emote
+            let emote = this.playerEmoteTexts.get(playerKey);
+            if (!emote) {
+                emote = this.add.text(0, -this.laneHeight * 0.35, "😱", {
+                    fontSize: Math.floor(this.laneHeight * 0.6) + "px", color: "#ff4444", fontFamily: "Arial"
+                }).setOrigin(0.5);
+                container.add(emote);
+                this.playerEmoteTexts.set(playerKey, emote);
+            }
+            emote.alpha = 1;
+            emote.setText(stunDuration ? "😵" : "😱");
+            this.tweens.add({
+                targets: emote,
+                alpha: { from: 1, to: 0 },
+                y: emote.y - 20,
+                duration: effectDuration,
+                onComplete: () => {
+                    emote?.destroy();
+                    this.playerEmoteTexts.delete(playerKey);
+                }
+            });
         }
-        avatar.setTint(highlightColor);
-        avatar.setScale(isPositive ? 1.15 : 0.85);
+
+        // Icon and highlight
+        let icon = this.playerBoostIcons.get(playerKey);
+        const iconKey = isPositive ? 'boost_icon' : 'stumble_icon';
+        if (!icon) {
+            icon = this.add.image(avatar.x + avatar.radius + 18, avatar.y, iconKey).setOrigin(0.5).setScale(0.75);
+            container.add(icon);
+            this.playerBoostIcons.set(playerKey, icon);
+        }
+        icon.setTexture(iconKey);
+        icon.x = avatar.radius + 16;
+        icon.y = 0;
+        icon.setVisible(true);
+        avatar.setStrokeStyle(4, isPositive ? 0x11ff44 : 0xee3366, 0.9);
+        this.tweens.add({
+            targets: icon,
+            scale: { from: 0.85, to: 1.2 },
+            duration: 90, yoyo: true, repeat: 2
+        });
         if (stunDuration && !isPositive) {
             this.tweens.add({
                 targets: avatar,
-                alpha: { from: 1, to: 0.5 },
-                duration: stunDuration / 2,
-                yoyo: true,
-                repeat: Math.floor(effectDuration / (stunDuration / 2)),
-                onComplete: () => avatar.alpha = 1
+                alpha: { from: 1, to: 0.45 }, duration: stunDuration / 2, yoyo: true,
+                repeat: Math.floor(effectDuration / (stunDuration / 2)), onComplete: () => avatar.alpha = 1
             });
         }
     }
 
     private handlePlayerBoostEffectEnd(playerKey: string): void {
         const avatar = this.playerAvatars.get(playerKey);
-        const aura = this.playerEffectAuras.get(playerKey);
-        const icon = this.playerEffectIcons.get(playerKey);
+        const icon = this.playerBoostIcons.get(playerKey);
+        const trail = this.playerBoostTrails.get(playerKey);
+        const emote = this.playerEmoteTexts.get(playerKey);
         if (avatar) {
-            avatar.clearTint();
-            avatar.setScale(1);
+            avatar.setStrokeStyle(0);
             avatar.alpha = 1;
-        }
-        if (aura) {
-            this.tweens.killTweensOf(aura);
-            this.tweens.add({
-                targets: aura,
-                alpha: 0,
-                duration: 300,
-                onComplete: () => { aura.destroy(); this.playerEffectAuras.delete(playerKey); }
-            });
         }
         if (icon) {
             icon.setVisible(false);
             icon.destroy();
-            this.playerEffectIcons.delete(playerKey);
+            this.playerBoostIcons.delete(playerKey);
         }
+        if (trail) { trail.destroy(); this.playerBoostTrails.delete(playerKey); }
+        if (emote) { emote.destroy(); this.playerEmoteTexts.delete(playerKey); }
     }
 
     private handleRaceFinishedInternal(): void {
@@ -930,12 +836,11 @@ export class WegenRaceScene extends Phaser.Scene {
         this.addCelebrationEffect();
         const victorySound = this.sound.get('victory_music');
         if (victorySound) victorySound.play({ volume: 0.3 });
-        this.sceneEventEmitter.emit('gameEnd', this.gameLogic.getState().winner, this.gameLogic.getState().rankings);
     }
 
     private addCelebrationEffect(): void {
         const { width, height } = this.sys.game.canvas;
-        for (let i = 0; i < 70; i++) {
+        for (let i = 0; i < 40; i++) {
             const confetti = this.add.rectangle(
                 Phaser.Math.Between(0, width),
                 -50,
@@ -949,7 +854,7 @@ export class WegenRaceScene extends Phaser.Scene {
                 targets: confetti,
                 y: height + 50,
                 rotation: Phaser.Math.Between(0, Math.PI * 4),
-                duration: Phaser.Math.Between(2500, 4000),
+                duration: Phaser.Math.Between(1800, 3500),
                 ease: 'Power2',
                 onComplete: () => confetti.destroy()
             });
@@ -958,124 +863,56 @@ export class WegenRaceScene extends Phaser.Scene {
         if (applauseSound) applauseSound.play({ volume: 0.3 });
     }
 
-    public startRaceExternally(): void {
-        this.startCountdown();
-    }
-
+    // --- Countdown and race start ---
     private startCountdown(): void {
-        const centerX = this.scale.width / 2;
-        const centerY = this.scale.height / 2;
+        const centerX = this.sys.game.canvas.width / 2;
+        const centerY = this.sys.game.canvas.height / 2;
         this.countdownText = this.add.text(centerX, centerY, '3', {
-            fontSize: '96px', color: '#ffd93b', fontFamily: 'Comic Sans MS, Arial, sans-serif', fontStyle: 'bold',
+            fontSize: '96px', color: '#ffd93b', fontFamily: 'Orbitron,Arial', fontStyle: 'bold',
             shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 5, fill: true }
         }).setOrigin(0.5).setDepth(spriteDepths.countdown);
-        const tickSound = this.sound.get('countdown_tick');
-        const startSound = this.sound.get('race_start_horn');
-        const playTick = () => { if (tickSound) tickSound.play({ volume: 0.3 }); };
-        this.time.delayedCall(1000, () => {
-            if (this.countdownText) { this.countdownText.setText('2'); this.tweens.add({ targets: this.countdownText, scale: 1.1, duration: 200, yoyo: true }); playTick(); }
-        });
-        this.time.delayedCall(2000, () => {
-            if (this.countdownText) { this.countdownText.setText('1'); this.tweens.add({ targets: this.countdownText, scale: 1.1, duration: 200, yoyo: true }); playTick(); }
-        });
+        const playTick = () => { this.sound.play('countdown_tick', { volume: 0.3 }); };
+        this.time.delayedCall(1000, () => { this.countdownText!.setText('2'); playTick(); });
+        this.time.delayedCall(2000, () => { this.countdownText!.setText('1'); playTick(); });
         this.time.delayedCall(3000, () => {
-            if (this.countdownText) {
-                this.countdownText.setText('GO!');
-                this.tweens.add({
-                    targets: this.countdownText, scale: 1.5, alpha: 0, duration: 500,
-                    onComplete: () => { this.countdownText?.destroy(); this.countdownText = undefined; }
-                });
-                if (startSound) startSound.play({ volume: 0.3 });
-                this.gameLogic.startRace();
-            }
+            this.countdownText!.setText('GO!');
+            this.tweens.add({
+                targets: this.countdownText, scale: 1.5, alpha: 0, duration: 500,
+                onComplete: () => { this.countdownText?.destroy(); this.countdownText = undefined; }
+            });
+            this.sound.play('race_start_horn', { volume: 0.3 });
+            this.gameLogic.startRace();
         });
     }
 
-    public getGameState(): GameState {
-        if (!this.gameLogic) {
-            return {
-                status: 'waiting', raceProgress: 0, raceElapsedTime: 0, raceDuration: 0,
-                currentPhase: 'Initializing', timeRemaining: 0, players: [], positions: {},
-                winner: null, rankings: [], eventLog: []
-            };
-        }
-        return this.gameLogic.getState();
+    // --- Export replay API for outside use ---
+    exportRaceData(): RaceReplayData {
+        return this.gameLogic.exportRaceReplay();
     }
 
-    public onStateChange(callback: (state: GameState) => void): void {
-        if (this.sceneEventEmitter) {
-            this.sceneEventEmitter.on('stateChange', callback);
-        }
+    // --- Optional: Import replay API for outside use ---
+    importRaceData(replay: RaceReplayData): void {
+        this.gameLogic.importRaceReplay(replay);
+        // Could trigger a replay mode here!
     }
+}
 
-    public onGameEnd(callback: (winner: Player | null, rankings: Player[]) => void): void {
-        if (this.sceneEventEmitter) {
-            this.sceneEventEmitter.on('gameEnd', callback);
-        }
-    }
-
-    public exportRaceData(): any {
-        if (!this.gameLogic) {
-            return null;
-        }
-        const state = this.gameLogic.getState();
-        return {
-            winner: state.winner,
-            rankings: state.rankings,
-            finalProgress: state.raceProgress,
-            raceTime: state.raceElapsedTime,
-            eventLog: state.eventLog,
-            playerCount: state.players.length
+export function enableDebugMode(game: Phaser.Game): void {
+    const scene = game.scene.getScene('WegenRaceScene');
+    if (scene) {
+        // Expose for debugging in browser console
+        (window as any).wegenRaceDebug = {
+            game,
+            scene,
+            gameLogic: (scene as any).gameLogic,
+            getState: () => (scene as any).gameLogic?.getState?.(),
+            exportData: () => (scene as any).exportRaceData?.()
         };
+        // Optional: log to console
+        // console.log("Debug mode enabled for WegenRace. Use window.wegenRaceDebug in the console.");
     }
+}
 
-    destroy(): void {
-        if (this.sceneEventEmitter) { this.sceneEventEmitter.destroy(); this.sceneEventEmitter = undefined; }
-        this.playerVisualContainers.forEach(container => container.destroy()); this.playerVisualContainers.clear();
-        this.playerAvatars.clear();
-        this.playerAvatarMasks.forEach(mask => mask.destroy()); this.playerAvatarMasks.clear();
-        this.playerAvatarMaskGraphics.forEach(graphics => graphics.destroy()); this.playerAvatarMaskGraphics.clear();
-        this.phaseMarkers.forEach(m => m.destroy()); this.phaseMarkers = [];
-        this.playerEffectAuras.forEach(aura => aura.destroy()); this.playerEffectAuras.clear();
-        this.playerEffectIcons.forEach(icon => icon.destroy()); this.playerEffectIcons.clear();
-        this.playerProgressBars.forEach(bar => bar.destroy()); this.playerProgressBars.clear();
-        this.playerLaneBackgrounds.forEach(bg => bg.destroy()); this.playerLaneBackgrounds.clear();
-        this.playerAuraLaneMasks.forEach(mask => mask.destroy()); this.playerAuraLaneMasks.clear();
-        this.playerAuraLaneMaskGraphics.forEach(graphics => graphics.destroy()); this.playerAuraLaneMaskGraphics.clear();
-        if (this.trackGraphics) this.trackGraphics.destroy();
-        if (this.countdownText) this.countdownText.destroy();
-        if (this.overallRaceProgressText) this.overallRaceProgressText.destroy();
-        if (this.raceTitleText) this.raceTitleText.destroy();
-        if (this.backgroundMusic && this.backgroundMusic.isPlaying) {
-            this.backgroundMusic.stop();
-            this.backgroundMusic = undefined;
-        }
-        if ((this.gameLogic as any)?.internalEventEmitter) {
-            (this.gameLogic as any).internalEventEmitter.destroy();
-        }
-        super.destroy();
-    }
-}
-// --- Game Factory Functions ---
-export function createWegenRaceGame(container: HTMLElement): Phaser.Game {
-    const config: Phaser.Types.Core.GameConfig = {
-        type: Phaser.AUTO,
-        width: container.clientWidth || 800,
-        height: container.clientHeight || 500,
-        parent: container,
-        backgroundColor: '#1a1a2e',
-        scene: WegenRaceScene,
-        physics: { default: 'arcade', arcade: { gravity: { y: 0, x: 0 }, debug: false } },
-        audio: { disableWebAudio: false },
-        scale: {
-            mode: Phaser.Scale.FIT,
-            autoCenter: Phaser.Scale.CENTER_BOTH,
-            width: container.clientWidth || 800,
-            height: container.clientHeight || 500
-        }
-    };
-    return new Phaser.Game(config);
-}
 export function destroyWegenRaceGame(game: Phaser.Game): void {
     if (game && !game.isDestroyed) {
         game.scene.stop('WegenRaceScene');
@@ -1083,25 +920,30 @@ export function destroyWegenRaceGame(game: Phaser.Game): void {
         game.destroy(true);
     }
 }
-export function getWegenRaceScene(game: Phaser.Game): WegenRaceScene | null {
-    if (!game || game.isDestroyed) return null;
-    return game.scene.getScene('WegenRaceScene') as WegenRaceScene;
-}
-export function isGameValid(game: Phaser.Game): boolean {
-    return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('WegenRaceScene');
-}
 
-export type { Player, GameState, GameEvent, VisualBoost };
-export function enableDebugMode(game: Phaser.Game): void {
-    const scene = getWegenRaceScene(game);
-    if (scene) {
-        (window as any).wegenRaceDebug = {
-            game,
-            scene,
-            gameLogic: (scene as any).gameLogic,
-            getState: () => scene.getGameState(),
-            exportData: () => scene.exportRaceData()
-        };
-    }
+export function createWegenRaceGame(container: HTMLElement, players: Player[], duration: number): Phaser.Game {
+    const config: Phaser.Types.Core.GameConfig = {
+        type: Phaser.AUTO,
+        width: container.clientWidth || 900,
+        height: container.clientHeight || 600,
+        parent: container,
+        backgroundColor: '#191e26',
+        scene: [WegenRaceScene],
+        physics: { default: 'arcade', arcade: { gravity: { y: 0, x: 0 }, debug: false } },
+        audio: { disableWebAudio: false },
+        scale: {
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            width: container.clientWidth || 900,
+            height: container.clientHeight || 600
+        },
+        // Pass player data & duration to the scene
+        callbacks: {
+            preBoot: (game) => {
+                game.registry.set('players', players);
+                game.registry.set('duration', duration);
+            }
+        }
+    };
+    return new Phaser.Game(config);
 }
-console.log("🎮 WegenRaceGame.ts loaded successfully.");

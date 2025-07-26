@@ -2,36 +2,14 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
     createWegenRaceGame,
-    getWegenRaceScene,
     destroyWegenRaceGame,
-    Player,
-    GameState,
     enableDebugMode
-} from './wegenRaceGame'; // relative path for clarity
+} from './wegenRaceGame';
 import GameOverModal from "../PickerGameOverModal";
 import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
-
-
-interface WegenRaceConfig {
-    players: Player[];
-    duration: number;
-    humanChoice: Player;
-    betAmount?: number;
-    currency?: 'SOL' | 'FREE';
-    paymentSignature?: string;
-    gameId?: string;
-    gameTitle?: string;
-    authToken?: string;
-    gameEntryTokenId?: string;
-}
-
-type WegenRaceState = GameState & {
-    raceEndTime?: number | null;
-    leaderboard?: Player[];
-};
 
 export default function WegenRace() {
     const location = useLocation();
@@ -42,11 +20,11 @@ export default function WegenRace() {
     const [loadingMessage, setLoadingMessage] = useState("Loading game...");
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
-  const [loadedGameConfig, setLoadedGameConfig] = useState<WegenRaceConfig | null>(null);
+    const [loadedGameConfig, setLoadedGameConfig] = useState<any>(null);
     const [isSessionAuthenticated, setIsSessionAuthenticated] = useState(true);
     const [isPhaserGameRunning, setIsPhaserGameRunning] = useState(false);
 
-    const [gameState, setGameState] = useState<WegenRaceState>({
+    const [gameState, setGameState] = useState<any>({
         status: 'waiting',
         players: [],
         positions: {},
@@ -60,13 +38,13 @@ export default function WegenRace() {
         eventLog: []
     });
 
-    const [eventLog, setEventLog] = useState<GameEvent[]>([]);
+    const [eventLog, setEventLog] = useState<any[]>([]);
     const gameContainerRef = useRef<HTMLDivElement>(null);
     const phaserGameRef = useRef<Phaser.Game | null>(null);
     const { refreshProfile } = useProfile();
 
     // State change handler
-    const handleGameStateChange = useCallback((state: GameState) => {
+    const handleGameStateChange = useCallback((state: any) => {
         setGameState(prevState => ({
             ...prevState,
             status: state.status,
@@ -79,7 +57,7 @@ export default function WegenRace() {
             timeRemaining: state.timeRemaining,
             winner: state.winner,
             leaderboard: state.rankings || [],
-            eventLog: state.eventLog || []
+            eventLog: state.eventLog || [],
         }));
         setEventLog(state.eventLog || []);
         setConnectionStatus('connected');
@@ -104,7 +82,7 @@ export default function WegenRace() {
         }
     }, [loadedGameConfig, refreshProfile]);
 
-    const handleGameEnd = useCallback((winner: Player | null, rankings: Player[]) => {
+    const handleGameEnd = useCallback((winner: any, rankings: any[]) => {
         setGameState(prevState => ({
             ...prevState,
             status: 'finished',
@@ -115,12 +93,10 @@ export default function WegenRace() {
         setTimeout(() => setShowGameOverModal(true), 1500);
     }, []);
 
-     // Game config load
+    // Game config load
     useEffect(() => {
         setLoadingMessage("Validating game configuration...");
-        const config: WegenRaceConfig | undefined = (location.state as { gameConfig?: WegenRaceConfig })?.gameConfig;
-        // Robust config log:
-        console.log("[WegenRace] Received config from PickerInitModal:", config);
+        const config = (location.state as { gameConfig?: any })?.gameConfig;
         if (!config) {
             toast.error("Game configuration not found. Please start the game from the Games page.");
             navigate("/games");
@@ -135,7 +111,7 @@ export default function WegenRace() {
         setLoadingMessage("Configuration loaded. Authenticating session...");
     }, [location.state, navigate]);
 
-    // Phaser game initialization
+    // Phaser game initialization (robust scene waiting)
     useEffect(() => {
         const canInitializePhaser =
             loadedGameConfig &&
@@ -153,51 +129,31 @@ export default function WegenRace() {
             phaserGameRef.current = null;
         }
         let cancelled = false;
-        async function loadFontAndStartGame() {
-            try {
-                // ... font prewarm logic unchanged ...
-                gameContainer.innerHTML = '';
-                const game = createWegenRaceGame(gameContainer);
-                phaserGameRef.current = game;
+        gameContainer.innerHTML = '';
+      const game = createWegenRaceGame(gameContainer, loadedGameConfig.players, loadedGameConfig.duration);
+        phaserGameRef.current = game;
 
-                const onSceneReady = () => {
-                    const scene = getWegenRaceScene(game);
-                    if (scene) {
-                        console.log("[WegenRace.tsx] scene found:", scene.constructor.name, scene);
-                    }
-                    if (
-                        scene &&
-                        typeof scene.onStateChange === 'function' &&
-                        typeof scene.onGameEnd === 'function' &&
-                        typeof scene.initializeRaceWithData === 'function'
-                    ) {
-                        enableDebugMode(game);
-                        scene.onStateChange(handleGameStateChange);
-                        scene.onGameEnd(handleGameEnd);
+        game.events.once('create', (sceneInstance: any) => {
+             console.log("sceneInstance:", sceneInstance); // <--- ADD THIS LINE
+            if (sceneInstance.scene && sceneInstance.scene.key === 'WegenRaceScene') {
+                sceneInstance.events.once('race-scene-fully-ready', () => {
+                    console.log("React: received race-scene-fully-ready event");
+                    if (cancelled) return;
+                    enableDebugMode(game);
+                    sceneInstance.onStateChange(handleGameStateChange);
+                    sceneInstance.onGameEnd(handleGameEnd);
 
-                        // Robust config log before init:
-                        console.log("[WegenRace] Initializing scene with players:", loadedGameConfig.players);
-                        scene.initializeRaceWithData(
-                            loadedGameConfig.players,
-                            loadedGameConfig.duration,
-                            loadedGameConfig.humanChoice
-                        );
-                        setConnectionStatus('connected');
-                        setIsPhaserGameRunning(true);
-                        setLoadingMessage("Game is running!");
-                       // game.events.off('scene-ready', onSceneReady);
-                       game.events.off('race-scene-fully-ready', onSceneReady);
-                    } else {
-                        // ... error handling unchanged ...
-                    }
-                };
-              game.events.on('race-scene-fully-ready', onSceneReady);
-            } catch (e) {
-                toast.error('Failed to load font, cannot start game.');
-                setConnectionStatus('disconnected');
+                    sceneInstance.initializeRaceWithData(
+                        loadedGameConfig.players,
+                        loadedGameConfig.duration,
+                        loadedGameConfig.humanChoice
+                    );
+                    setConnectionStatus('connected');
+                    setIsPhaserGameRunning(true);
+                    setLoadingMessage("Game is running!");
+                });
             }
-        }
-        loadFontAndStartGame();
+        });
 
         return () => {
             cancelled = true;
@@ -224,7 +180,6 @@ export default function WegenRace() {
         handleGameEnd
     ]);
 
-    
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {
             destroyWegenRaceGame(phaserGameRef.current);
@@ -343,8 +298,8 @@ export default function WegenRace() {
                             <div className="leaderboard-scroll">
                                 {gameState.players.length > 0 &&
                                     (gameState.leaderboard || gameState.players)
-                                        .sort((a, b) => (gameState.positions[a.key] ?? 999) - (gameState.positions[b.key] ?? 999))
-                                        .map((player, idx) => (
+                                        .sort((a: any, b: any) => (gameState.positions[a.key] ?? 999) - (gameState.positions[b.key] ?? 999))
+                                        .map((player: any, idx: number) => (
                                             <div key={player.key} style={{
                                                 display: "flex", alignItems: "center", gap: 6, marginBottom: 6,
                                                 background: player.key === loadedGameConfig?.humanChoice.key ? "#2e2e7a77" : "transparent",
@@ -435,7 +390,7 @@ export default function WegenRace() {
                             </div>
                         </div>
                         <div className="participants-panel">
-                            {loadedGameConfig?.players.map((player) => (
+                            {loadedGameConfig?.players.map((player: any) => (
                                 <div
                                     key={player.key}
                                     style={{
@@ -475,10 +430,10 @@ export default function WegenRace() {
                     winner={gameState.winner}
                     rankings={
                         (gameState.leaderboard || [])
-                            .map(player => ({
+                            .map((player: any) => ({
                                 ...player,
                                 progress: phaserGameRef.current
-                                    ? (getWegenRaceScene(phaserGameRef.current)?.getPlayerProgress(player.key) * 100) || 0
+                                    ? (phaserGameRef.current.scene && phaserGameRef.current.scene.getScene('WegenRaceScene')?.getPlayerProgress(player.key) * 100) || 0
                                     : 0,
                                 finishTime: (gameState.winner && player.key === gameState.winner.key && gameState.raceElapsedTime)
                                     ? gameState.raceElapsedTime / 1000
