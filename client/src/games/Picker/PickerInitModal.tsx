@@ -9,6 +9,8 @@ import { api } from '../../services/api';
 
 // --- CONSTANTS ---
 const FIXED_SOL_ENTRY_FEE = 0.01;
+const DEFAULT_AVATAR = '/WegenRaceAssets/G1small.png';
+const FONT_FAMILY = "'WegensFont', Orbitron, Arial, sans-serif";
 
 const modalStyles = {
   overlay: { backgroundColor: "rgba(10, 10, 10, 0.90)", zIndex: 1000 },
@@ -21,10 +23,11 @@ const modalStyles = {
     top: "50%", left: "50%", right: "auto", bottom: "auto",
     marginRight: "-50%",
     transform: "translate(-50%, -50%)",
-    minWidth: 420, // Wider modal
-    maxWidth: 600,
+    minWidth: 440,
+    maxWidth: 660,
     minHeight: 240, maxHeight: "95vh",
     boxShadow: "0 4px 48px 0 rgba(0,0,0,0.7)",
+    fontFamily: FONT_FAMILY
   },
 };
 
@@ -49,7 +52,6 @@ export interface PickerGameConfig {
     gameType: string;
     paymentSignature?: string;
     gameEntryTokenId?: string;
-    // ...add new fields for future games here
 }
 
 interface OnboardingPanelProps {
@@ -59,7 +61,6 @@ interface OnboardingPanelProps {
     onCancel: () => void;
 }
 
-// --- ONBOARDING PANEL ---
 function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: OnboardingPanelProps) {
     const [selectedUsers, setSelectedUsers] = useState<PickerPlayer[]>([]);
     const [search, setSearch] = useState("");
@@ -74,14 +75,13 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
         { value: 15, label: "15 Mins" }, { value: 30, label: "30 Mins" }
     ];
 
-    // Add current user as default/human pick (improvement: always include as first suggestion)
     useEffect(() => {
         if (user && selectedUsers.length === 0) {
             const userPlayer: PickerPlayer = {
                 key: user.uid || user.wallet || `user_${Date.now()}`,
                 name: user.username || user.name || "You",
                 username: user.username || user.name || "You",
-                avatarUrl: user.avatarUrl || '/WegenRaceAssets/G1small.png',
+                avatarUrl: user.avatarUrl || DEFAULT_AVATAR,
                 wallet: user.wallet,
                 isHumanPlayer: true,
                 isGuest: false,
@@ -89,7 +89,6 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
             setSelectedUsers([userPlayer]);
             setHumanPlayerChoice(userPlayer);
         }
-    // eslint-disable-next-line
     }, [user]);
 
     const filteredLedger = useMemo(() => {
@@ -113,7 +112,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
             key: user.key || user.wallet || user.uid || `guest_${Date.now()}_${Math.random().toString(36).substring(7)}`,
             name: user.username || user.name || 'Guest Player',
             username: user.username || user.name,
-            avatarUrl: user.avatarUrl || '/WegenRaceAssets/G1small.png',
+            avatarUrl: user.avatarUrl || DEFAULT_AVATAR,
             isHumanPlayer: false,
         };
         setSelectedUsers(prev => [...prev, userWithKey]);
@@ -138,7 +137,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                 key: `guest_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                 name: trimmedVal,
                 username: trimmedVal,
-                avatarUrl: '/WegenRaceAssets/G1small.png',
+                avatarUrl: DEFAULT_AVATAR,
                 isHumanPlayer: false,
             };
             addUser(guestPlayer);
@@ -158,10 +157,9 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
 
     const canStartRace = selectedUsers.length >= minPlayers && raceDuration > 0 && humanPlayerChoice !== null;
 
-    // Make the panel wider and more modern
     return (
-        <div className="w-full max-w-2xl mx-auto text-white p-6 bg-black/80 rounded-2xl shadow-2xl" style={{ minWidth: 420 }}>
-            <h2 className="text-yellow-300 text-center font-bold text-2xl mb-4">Set Up The Race</h2>
+        <div className="w-full max-w-2xl mx-auto text-white p-6 bg-black/80 rounded-2xl shadow-2xl" style={{ minWidth: 430, fontFamily: FONT_FAMILY }}>
+            <h2 className="text-yellow-300 text-center font-bold text-2xl mb-4" style={{ fontFamily: FONT_FAMILY }}>Set Up The Race</h2>
             <div className="mb-4 relative">
                 <input
                     className="w-full bg-gray-800 text-yellow-200 text-center font-bold rounded px-3 py-2 mb-1 border-2 border-gray-700 focus:border-yellow-400 outline-none"
@@ -170,21 +168,23 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                     autoFocus
                     onChange={e => setSearch(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter") tryAdd(search); }}
+                    style={{ fontFamily: FONT_FAMILY }}
                 />
-                <p className="text-center text-xs text-gray-400 mt-1">
+                <p className="text-center text-xs text-gray-400 mt-1" style={{ fontFamily: FONT_FAMILY }}>
                     Add at least {minPlayers} players to start!
                 </p>
                 {Array.isArray(filteredLedger) && filteredLedger.length > 0 && (
-                    <div className="absolute w-full bg-slate-800 shadow rounded mt-1 max-h-48 overflow-y-auto z-20">
+                    <div className="absolute w-full bg-slate-800 shadow rounded mt-1 max-h-48 overflow-y-auto z-20" style={{ fontFamily: FONT_FAMILY }}>
                         {filteredLedger.slice(0, 8).map((u, i) => (
                             <div key={(u as any).key || (u as any).wallet || `user-${i}`}
                                 className="flex gap-2 items-center px-3 py-2 cursor-pointer hover:bg-yellow-400 hover:text-black text-zinc-200"
-                                onMouseDown={() => addUser(u)}>
+                                onMouseDown={() => addUser(u)}
+                                style={{ fontFamily: FONT_FAMILY }}>
                                 <img
-                                    src={(u as any).avatarUrl || '/WegenRaceAssets/G1small.png'}
+                                    src={(u as any).avatarUrl || DEFAULT_AVATAR}
                                     alt={(u as any).username || (u as any).name}
                                     className="w-6 h-6 rounded-full object-cover"
-                                    onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                                    onError={(e) => { e.currentTarget.src = DEFAULT_AVATAR; }}
                                 />
                                 <b className="font-semibold">{(u as any).username || (u as any).name}</b>
                                 <span className="ml-auto text-xs text-yellow-500">
@@ -196,7 +196,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                 )}
             </div>
             <div className="mb-4 p-3 bg-black bg-opacity-20 rounded-lg">
-                <div className="mb-2 text-zinc-300 font-semibold">Selected Players ({selectedUsers.length}):</div>
+                <div className="mb-2 text-zinc-300 font-semibold" style={{ fontFamily: FONT_FAMILY }}>Selected Players ({selectedUsers.length}):</div>
                 <ul className="mb-2 space-y-2 max-h-[250px] overflow-y-auto pr-2">
                     {selectedUsers.length === 0 ? (
                         <li className="text-gray-400 italic text-sm text-center py-2">No players selected.</li>
@@ -205,13 +205,13 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                             <li key={u.key}
                                 className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all duration-200 ${humanPlayerChoice?.key === u.key ? 'bg-yellow-400 text-black scale-105 shadow-lg' : 'hover:bg-gray-800/70'}`}
                                 onClick={() => setHumanPlayerChoice(u)}
-                            >
+                                style={{ fontFamily: FONT_FAMILY }}>
                                 <div className="font-bold text-lg w-6 text-center">{idx + 1}.</div>
                                 <img
-                                    src={u.avatarUrl || '/WegenRaceAssets/G1small.png'}
+                                    src={u.avatarUrl || DEFAULT_AVATAR}
                                     alt={u.username || u.name}
                                     className="w-8 h-8 rounded-full border-2 border-gray-500 object-cover"
-                                    onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                                    onError={(e) => { e.currentTarget.src = DEFAULT_AVATAR; }}
                                 />
                                 <div className="flex-grow overflow-hidden">
                                     <b className="truncate block">{u.username || u.name || "Guest Player"}</b>
@@ -220,7 +220,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                                             {(u as any).wallet.length > 8 ? `${(u as any).wallet.slice(0, 4)}...${(u as any).wallet.slice(-4)}` : (u as any).wallet}
                                         </div>
                                     )}
-                                    {(!u.avatarUrl || u.avatarUrl === '/WegenRaceAssets/G1small.png') && (
+                                    {(!u.avatarUrl || u.avatarUrl === DEFAULT_AVATAR) && (
                                         <div className="text-xs opacity-60">🦒 Default Avatar</div>
                                     )}
                                 </div>
@@ -235,24 +235,24 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                     )}
                 </ul>
                 {humanPlayerChoice && (
-                    <div className="text-center text-sm mt-3 p-2 bg-blue-900/50 border border-blue-500 rounded-md">
+                    <div className="text-center text-sm mt-3 p-2 bg-blue-900/50 border border-blue-500 rounded-md" style={{ fontFamily: FONT_FAMILY }}>
                         You are picking: <b className="text-blue-300">{humanPlayerChoice.username || humanPlayerChoice.name || 'Guest Player'}</b>
                         <div className="flex items-center justify-center gap-2 mt-1">
                             <img
-                                src={humanPlayerChoice.avatarUrl || '/WegenRaceAssets/G1small.png'}
+                                src={humanPlayerChoice.avatarUrl || DEFAULT_AVATAR}
                                 alt={humanPlayerChoice.username || humanPlayerChoice.name}
                                 className="w-6 h-6 rounded-full border border-blue-400 object-cover"
-                                onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                                onError={(e) => { e.currentTarget.src = DEFAULT_AVATAR; }}
                             />
                             <span className="text-xs text-blue-200">
-                                {(!humanPlayerChoice.avatarUrl || humanPlayerChoice.avatarUrl === '/WegenRaceAssets/G1small.png') ? '🦒 Default' : '✅ Custom'}
+                                {(!humanPlayerChoice.avatarUrl || humanPlayerChoice.avatarUrl === DEFAULT_AVATAR) ? '🦒 Default' : '✅ Custom'}
                             </span>
                         </div>
                     </div>
                 )}
             </div>
             <div className="mb-5">
-                <label className="text-zinc-300 block mb-3 font-semibold text-center">
+                <label className="text-zinc-300 block mb-3 font-semibold text-center" style={{ fontFamily: FONT_FAMILY }}>
                     Select Race Duration
                     <span className="block text-yellow-300 text-sm mt-1">
                         Selected: {raceDuration} minute{raceDuration !== 1 ? 's' : ''}
@@ -267,6 +267,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                                 ? `bg-gradient-to-r from-green-500 to-green-600 text-white scale-105 shadow-lg`
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                                 }`}
+                            style={{ fontFamily: FONT_FAMILY }}
                         >
                             {option.label}
                         </button>
@@ -281,6 +282,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                                 ? `bg-gradient-to-r from-green-500 to-green-600 text-white scale-105 shadow-lg`
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                                 }`}
+                            style={{ fontFamily: FONT_FAMILY }}
                         >
                             {option.label}
                         </button>
@@ -294,6 +296,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
                     }`}
                 disabled={!canStartRace}
                 onClick={() => onComplete(selectedUsers, raceDuration, humanPlayerChoice!)}
+                style={{ fontFamily: FONT_FAMILY }}
             >
                 {canStartRace ? (
                     <>🏁 Start {raceDuration}min Race!</>
@@ -311,7 +314,7 @@ function OnboardingPanel({ ledger, minPlayers, onComplete, onCancel }: Onboardin
             <button
                 className="w-full mt-3 py-2 rounded-lg bg-gray-700 text-white font-bold shadow hover:bg-gray-800 transition-colors"
                 onClick={onCancel}
-            >
+                style={{ fontFamily: FONT_FAMILY }}>
                 Cancel
             </button>
         </div>

@@ -1,98 +1,168 @@
-/* @font-face {
+@font-face {
   font-family: 'WegensFont';
   src: url('/fonts/WegensFont.woff2') format('woff2'),
        url('/fonts/WegensFont.woff') format('woff');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
-} */
-
- @font-face {
-font-family: "Comic Sans MS", cursive, sans-serif;
- }
- 
-/* Use WegensFont for all panels and main UI for WegenRace */
-.wegenrace-root,
-.wegenrace-sidebar,
-.leaderboard-panel,
-.eventlog-panel,
-.participants-panel,
-.race-bar-panel {
-  font-family: 'WegensFont', Arial, sans-serif !important;
 }
-
+body, html {
+  font-family: 'WegensFont', Orbitron, Arial, sans-serif !important;
+  background: #181828;
+  color: #ffd93b;
+  margin: 0; padding: 0; min-height: 100vh;
+}
 .wegenrace-root {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
-  background: #1a1a2e;
+  width: 100vw;
+  background: #181828;
+}
+.wegenrace-topbar {
+  width: 100vw;
+  min-height: 62px;
+  background: linear-gradient(90deg, #2666ff 0%, #23233e 55%, #ffd93b 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  font-size: 1.25rem;
+  font-family: 'WegensFont', Orbitron, Arial, sans-serif !important;
+  padding: 0 0 0 0;
+  box-shadow: 0 2px 18px #000a;
+  border-bottom: 2px solid #ffd93b;
+  z-index: 200;
+}
+.wegenrace-topbar-content {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2.8rem 0 2.8rem;
+  gap: 2.5rem;
+}
+.wegenrace-topbar .race-title {
+  font-size: 2.2rem;
+  color: #ffd93b;
+  font-weight: bold;
+  letter-spacing: 2px;
+}
+.wegenrace-topbar .race-details {
+  font-size: 1rem;
+  color: #ffd400;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+.wegenrace-topbar .race-phase {
+  font-size: 1.13rem;
+  color: #52e2ff;
+  font-weight: bold;
+  margin-left: 18px;
+  font-family: 'WegensFont', Orbitron, Arial, sans-serif !important;
+}
+.wegenrace-topbar .race-bar-controls {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+.wegenrace-topbar .race-bar-controls button {
+  background: #23233e;
+  color: #ffd93b;
+  border: none;
+  border-radius: 13px;
+  font-size: 1.05rem;
+  padding: 9px 18px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background .2s;
+  box-shadow: 0px 2px 8px #0002;
+}
+.wegenrace-topbar .race-bar-controls button:hover {
+  background: #ffe36e;
+  color: #23233e;
+}
+.wegenrace-topbar .race-bar-controls .mute-on {
+  background: #ff4757 !important;
+  color: #fff !important;
+}
+.wegenrace-topbar .race-bar-controls .fullscreen-btn {
+  background: #ffd93b !important;
+  color: #23233e !important;
 }
 
-/* Sidebar (left) */
+.wegenrace-content {
+  display: flex;
+  flex: 1 1 0px;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+}
 .wegenrace-sidebar {
   display: flex;
   flex-direction: column;
-  width: 300px;
+  width: 320px;
   min-width: 220px;
-  max-width: 350px;
+  max-width: 360px;
   background: #161634;
-  padding: 16px 8px;
+  padding: 18px 12px;
   border-right: 2px solid #222260;
   gap: 18px;
+  z-index: 111;
+  min-height: 0;
 }
-
 .leaderboard-panel, .eventlog-panel {
   background: #232345;
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: 0px 2px 12px #0008;
   overflow: hidden;
   flex: none;
-  max-height: 520px;
+  min-height: 180px;
+  max-height: 420px;
   display: flex;
   flex-direction: column;
+  margin-bottom: 18px;
+}
+.leaderboard-panel h4, .eventlog-panel h4 {
+  font-family: 'WegensFont', Orbitron, Arial, sans-serif !important;
+  font-weight: bold;
+  color: #ffd93b;
+  margin: 0 0 9px 1rem;
+  font-size: 1.11rem;
+  letter-spacing: 1px;
 }
 .leaderboard-scroll, .eventlog-scroll {
   overflow-y: auto;
   flex: 1;
-  padding: 0.5rem 0.8rem;
-}
-.leaderboard-panel h4, .eventlog-panel h4 {
-  font-weight: bold;
-  color: #ffd400;
-  margin: 0 0 5px 1rem;
-  font-size: 1.07rem;
-  letter-spacing: 1px;
+  padding: 0.7rem 1rem;
 }
 
-/* Main area (right) */
-.wegenrace-main {
+.wegenrace-game-area {
   display: flex;
   flex-direction: column;
-  flex: 1 1 0px;
-  min-width: 0;
-}
-.race-bar-panel {
-  background: #171731;
-  color: #fff;
-  padding: 0.7rem 1.3rem 0.6rem 1.6rem;
-  border-bottom: 1px solid #232353;
-  font-size: 1.1rem;
-  display: flex;
-  align-items: center;
-  gap: 2.5rem;
-}
-
-#phaser-game-container {
+  flex: 1 1 0%;
   width: 100%;
-  min-height: 420px;
+  min-height: 0;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.phaser-game-container,
+#phaser-game-container {
+  flex: 1;
+  width: 100%;
+  min-height: 520px;
   background: #181828;
   border-radius: 18px;
-  margin: 1.2rem 0 0.5rem 0;
+  margin: 1.2rem 1.2rem 0.5rem 1.2rem;
   border: 2.2px solid #232353;
   position: relative;
-  flex: 1;
+  box-shadow: 0 6px 32px #000b;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
 }
 .participants-panel {
-  margin: 0.6rem 0 0 0;
+  margin: 0.6rem 1.2rem 0 1.2rem;
   background: #21215e;
   border-radius: 11px;
   min-height: 53px;
@@ -101,8 +171,15 @@ font-family: "Comic Sans MS", cursive, sans-serif;
   gap: 17px;
   align-items: center;
   overflow-x: auto;
+  font-family: 'WegensFont', Arial, sans-serif !important;
 }
-
+.participant {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 54px;
+  gap: 2px;
+}
 .participant-avatar {
   border-radius: 99px;
   border: 2px solid #ffe36e44;
@@ -113,15 +190,33 @@ font-family: "Comic Sans MS", cursive, sans-serif;
   margin-bottom: 2px;
 }
 .participant-name {
-  font-size: 12px;
+  font-size: 13px;
   color: #fafaf7;
   margin-top: 3px;
-  font-weight: 500;
+  font-weight: bold;
   white-space: nowrap;
+  font-family: 'WegensFont', Orbitron, Arial, sans-serif !important;
 }
-
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  background: #23233e;
+}
+::-webkit-scrollbar-thumb {
+  background: #181828;
+  border-radius: 8px;
+}
 @media (max-width: 900px) {
   .wegenrace-root {
+    flex-direction: column;
+  }
+  .wegenrace-topbar {
+    min-height: 60px;
+    font-size: 1rem;
+    padding: 0 0 0 0;
+    box-shadow: 0 2px 18px #000a;
+  }
+  .wegenrace-content {
     flex-direction: column;
   }
   .wegenrace-sidebar {
@@ -131,14 +226,22 @@ font-family: "Comic Sans MS", cursive, sans-serif;
     border-bottom: 2px solid #232353;
     max-width: none;
     min-width: 0;
+    min-height: 0;
   }
   .leaderboard-panel, .eventlog-panel {
     max-width: 50vw;
     min-width: 180px;
     margin-right: 8px;
   }
+  .phaser-game-container,
+  #phaser-game-container {
+    min-height: 320px;
+    margin: 1.2rem 1rem 0.5rem 1rem;
+  }
+  .participants-panel {
+    margin: 0.6rem 1rem 0 1rem;
+  }
 }
-/* Update the fullscreen mode styles */
 .fullscreen-mode {
   position: fixed;
   top: 0;
@@ -146,39 +249,51 @@ font-family: "Comic Sans MS", cursive, sans-serif;
   width: 100vw;
   height: 100vh;
   z-index: 9999;
-  background: #1a1a2e;
+  background: #181828;
 }
-
+.fullscreen-mode .wegenrace-topbar {
+  width: 100vw;
+  left: 0; right: 0; top: 0;
+  position: fixed;
+  z-index: 200;
+  min-height: 62px;
+}
+.fullscreen-mode .wegenrace-content {
+  position: fixed;
+  left: 0; right: 0; top: 62px; bottom: 0;
+  display: flex;
+  flex-direction: row;
+  height: calc(100vh - 62px);
+}
 .fullscreen-mode .wegenrace-sidebar {
   position: fixed;
   left: 0;
-  top: 0;
+  top: 62px;
   bottom: 0;
-  width: 300px;
+  width: 320px;
   z-index: 111;
   box-shadow: 7px 0 18px #03031a63;
   background: #18183cde;
-  height: 100vh;
+  height: calc(100vh - 62px);
 }
-
-.fullscreen-mode .wegenrace-main {
+.fullscreen-mode .wegenrace-game-area {
   position: fixed;
-  left: 300px;
+  left: 320px;
   right: 0;
-  top: 0;
+  top: 62px;
   bottom: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - 62px);
 }
-
 .fullscreen-mode #phaser-game-container {
   flex: 1;
   margin: 10px;
   max-height: calc(100vh - 140px);
 }
-
+.fullscreen-mode .participants-panel {
+  margin: 0.6rem 10px 0 10px;
+}
 .fullscreen-mode .back-to-games-btn {
   z-index: 10000 !important;
 }
-
