@@ -6,6 +6,7 @@ import {
     createWegenRaceGame,
     destroyWegenRaceGame,
     enableDebugMode,
+    getWegenRaceScene,
     WegenRaceScene,
     Player
 } from './wegenRaceGame';
@@ -210,6 +211,7 @@ export default function WegenRace() {
         return prepared;
     }, []);
 
+    // --- Load and validate config, only set when players exist ---
     useEffect(() => {
         setLoadingMessage("Validating game configuration...");
         const config = (location.state as { gameConfig?: any })?.gameConfig;
@@ -242,15 +244,21 @@ export default function WegenRace() {
                     config.humanChoice.wallet ? `${config.humanChoice.wallet.slice(0, 3)}...${config.humanChoice.wallet.slice(-3)}` : 'Guest'
                 );
             }
-            setLoadedGameConfig(config);
-            setLoadingMessage("Configuration loaded. Authenticating session...");
+            // Only set config if players are non-empty
+            if (config.players && config.players.length > 0) {
+                setLoadedGameConfig(config);
+                setLoadingMessage("Configuration loaded. Authenticating session...");
+            }
         })();
     }, [location.state, navigate, preparePlayersWithSafeAvatars]);
 
     // --- Phaser game initialization ---
     useEffect(() => {
+        // Only initialize Phaser if players exist
         const canInitializePhaser =
             loadedGameConfig &&
+            loadedGameConfig.players &&
+            loadedGameConfig.players.length > 0 &&
             isSessionAuthenticated &&
             !isPhaserGameRunning &&
             (loadedGameConfig.currency === 'SOL' || loadedGameConfig.currency === 'FREE');
@@ -315,7 +323,7 @@ export default function WegenRace() {
                 phaserGameRef.current = null;
             }
             setIsPhaserGameRunning(false);
-            setLoadedGameConfig(null);
+            // DO NOT reset loadedGameConfig to null here!
             setIsSessionAuthenticated(false);
             freeTokenConsumedRef.current = false;
             setGameState({
@@ -372,26 +380,22 @@ export default function WegenRace() {
         };
     }, []);
 
-    // Instead, set showClickToStart to false only *after* the game is running and the user clicked start
-        const handleClickToStart = useCallback(() => {
-            setShowClickToStart(false);
-            if (clickHandledRef.current) return; // Only allow one click!
-            clickHandledRef.current = true;
-            // unlock audio (dispatch pointer event to canvas)
-            const canvas = document.querySelector(".phaser-game-container canvas") as HTMLCanvasElement;
-            if (canvas) {
-                const evt = new window.PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window });
-                canvas.dispatchEvent(evt);
-            }
-            setTimeout(() => {
-                if (phaserGameRef.current) {
-                    const scene = phaserGameRef.current.scene.getScene('WegenRaceScene') as any;
-                    if (scene && typeof scene.startRaceExternally === "function") {
-                        scene.startRaceExternally();
-                    }
+    // Overlay only starts race after explicit user click, not before.
+    const handleClickToStart = useCallback(() => {
+        setShowClickToStart(false);
+        if (clickHandledRef.current) return;
+        clickHandledRef.current = true;
+        setTimeout(() => {
+            if (phaserGameRef.current) {
+                const scene = getWegenRaceScene(phaserGameRef.current);
+                if (scene && typeof scene.startRaceExternally === "function") {
+                    (scene as any).muteMusic = muteMusic;
+                    (scene as any).muteSfx = muteSfx;
+                    scene.startRaceExternally();
                 }
-            }, 60);
-        }, []);
+            }
+        }, 60);
+    }, [muteMusic, muteSfx]);
 
     // --- Settings Modal ---
     const settingsModal = useMemo(() => (
@@ -450,26 +454,14 @@ export default function WegenRace() {
 
     const phaseAnimClass = useMemo(() => `phase-anim-${phaseAnimKey % 2}`, [phaseAnimKey]);
 
-    if (!loadedGameConfig || !isSessionAuthenticated) {
+    // Only render overlay/Phaser after config and players are loaded
+    if (!loadedGameConfig || !loadedGameConfig.players || loadedGameConfig.players.length === 0 || !isSessionAuthenticated) {
         return (
             <div className="min-h-screen bg-black flex items-center justify-center" style={{ fontFamily: 'WegensFont, Arial, sans-serif' }}>
                 <div className="text-center text-white p-4">
                     <div className="text-4xl mb-4 animate-pulse">⏳</div>
                     <div className="text-xl font-bold mb-2">Preparing Wegen Race...</div>
                     <div className="text-sm mb-4">{loadingMessage}</div>
-                    {loadedGameConfig && (
-                        <div className="text-xs text-gray-400 mt-4">
-                            <div>Players: {loadedGameConfig.players.length}</div>
-                            <div>Duration: {loadedGameConfig.duration} minutes</div>
-                            <div>Your pick: {loadedGameConfig.humanChoice?.name}</div>
-                        </div>
-                    )}
-                    <button
-                        onClick={handleBackToGames}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-bold mt-4 transition-colors duration-200"
-                    >
-                        Go to Games
-                    </button>
                 </div>
             </div>
         );
@@ -668,9 +660,3 @@ export default function WegenRace() {
         </div>
     );
 }
-
-// --- SUGGESTIONS ---
-// 1. Overlay only starts race after explicit user click, not before.
-// 2. WebAudio unlock and Phaser scene start method are both triggered on click.
-// 3. Overlay is a centered card and not full-screen intrusive.
-// 4. Overlay is robust for all browsers.
