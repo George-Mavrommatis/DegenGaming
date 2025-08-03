@@ -180,12 +180,12 @@ export default function Profile() {
 
   // Ensure correct keys and fallback
 const tokensObj = form.freeEntryTokens || {};
-  const tokens = {
-    arcade: tokensObj.arcade ?? tokensObj.arcadeTokens ?? 0,
-    picker: tokensObj.picker ?? tokensObj.pickerTokens ?? 0,
-    casino: tokensObj.casino ?? tokensObj.casinoTokens ?? 0,
-    pvp: tokensObj.pvp ?? tokensObj.pvpTokens ?? 0,
-  };
+const tokens = {
+  arcade: Math.max(tokensObj.arcade ?? 0, tokensObj.arcadeTokens ?? 0),
+  picker: Math.max(tokensObj.picker ?? 0, tokensObj.pickerTokens ?? 0),
+  casino: Math.max(tokensObj.casino ?? 0, tokensObj.casinoTokens ?? 0),
+  pvp: Math.max(tokensObj.pvp ?? 0, tokensObj.pvpTokens ?? 0),
+};
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8">

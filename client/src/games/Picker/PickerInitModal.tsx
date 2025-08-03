@@ -338,7 +338,9 @@ export default function PickerInitModal(props: any) {
     const [loadingLedger, setLoadingLedger] = useState(false);
     const [gameEntryTokenId, setGameEntryTokenId] = useState<string | null>(null);
 
-    const freeEntryTokensCount = profile?.freeEntryTokens?.picker ?? 0;
+    const tokensObj = profile?.freeEntryTokens || {};
+    const freeEntryTokensCount = Math.max(tokensObj.picker ?? 0, tokensObj.pickerTokens ?? 0);
+    
     const destinationWallet = import.meta.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
     const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
     const connection = useMemo(() => (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed'), [rpcUrl]);

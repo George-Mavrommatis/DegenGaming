@@ -1,4 +1,6 @@
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, {
+    useRef, useState, useEffect, useCallback, useMemo, Suspense, lazy, memo,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
     createWegenRaceGame,
@@ -7,11 +9,101 @@ import {
     WegenRaceScene,
     Player
 } from './wegenRaceGame';
-import GameOverModal from "../PickerGameOverModal";
 import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
+
+// --- Lazy load GameOverModal ---
+const GameOverModal = lazy(() => import("../PickerGameOverModal"));
+
+// Utility: Convert remote avatar URLs to base64 so Phaser never breaks on CORS
+async function fetchImageAsBase64(url: string): Promise<string | null> {
+    try {
+        const response = await fetch(url, { mode: 'cors' });
+        const blob = await response.blob();
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        return null;
+    }
+}
+
+const LeaderboardPanel = memo(({ leaderboard, loadedGameConfig }: any) => (
+    <div className="leaderboard-panel animated-panel">
+        <h4>Leaderboard</h4>
+        <div className="leaderboard-scroll">
+            {(leaderboard || loadedGameConfig.players)
+                .slice(0, 50)
+                .map((player: any, idx: number) => (
+                    <div key={player.key} style={{
+                        display: "flex", alignItems: "center", gap: 6, marginBottom: 6,
+                        background: player.key === loadedGameConfig?.humanChoice.key ? "#2e2e7a77" : "transparent",
+                        borderRadius: 6, padding: "4px 6px"
+                    }}>
+                        <span style={{
+                            width: 18, textAlign: "center", fontWeight: 600,
+                            color: idx < 3 ? "#ffe36d" : "#eee"
+                        }}>
+                            {idx + 1}
+                        </span>
+                        <img
+                            src={player.avatarUrl || '/WegenRaceAssets/G1small.png'}
+                            className="participant-avatar"
+                            alt={player.name || ""}
+                            style={{ width: 28, height: 28, borderRadius: '50%' }}
+                            onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                        />
+                        <span style={{
+                            fontSize: 12,
+                            fontWeight: player.key === loadedGameConfig?.humanChoice.key ? "bold" : "normal",
+                            color: player.key === loadedGameConfig?.humanChoice.key ? '#aad0ff' : '#fafaf7'
+                        }}>
+                            {player.name || player.username || (player.wallet ? `${player.wallet.slice(0, 3)}...${player.wallet.slice(-3)}` : "Guest")}
+                        </span>
+                        {player.key === loadedGameConfig?.humanChoice.key && <span style={{ marginLeft: 3 }}>👤</span>}
+                    </div>
+                ))}
+        </div>
+    </div>
+));
+LeaderboardPanel.displayName = "LeaderboardPanel";
+
+const EventLogPanel = memo(({ eventLog }: any) => (
+    <div className="eventlog-panel animated-panel">
+        <h4>Event Log</h4>
+        <div className="eventlog-scroll">
+            {eventLog
+                .filter((event: any) =>
+                    event.eventType !== "phase_change"
+                )
+                .map((event: any) => (
+                <div key={event.id || `${event.eventType}-${event.description}-${Math.random()}`} style={{
+                    marginBottom: 4, padding: "4px 6px", borderRadius: 4,
+                    background: event.eventType.includes('boost') ? "#2d5a2d" :
+                        event.eventType.includes('stumble') ? "#5a2d2d" :
+                            event.eventType.includes('finished') ? "#2d2d5a" :
+                                event.eventType.includes('system') ? "#2d2d2d" : "#2d2d2d",
+                    fontSize: "0.75rem", lineHeight: "1.2"
+                }}>
+                    <div style={{ color: "#fff", fontWeight: 500 }}>
+                        {event.description}
+                    </div>
+                    {event.effect && (
+                        <div style={{ color: "#bbb", fontSize: "0.7rem" }}>
+                            {event.effect}
+                        </div>
+                    )}
+                </div>
+            ))}
+        </div>
+    </div>
+));
+EventLogPanel.displayName = "EventLogPanel";
 
 export default function WegenRace() {
     const location = useLocation();
@@ -25,6 +117,11 @@ export default function WegenRace() {
     const [loadedGameConfig, setLoadedGameConfig] = useState<any>(null);
     const [isSessionAuthenticated, setIsSessionAuthenticated] = useState(true);
     const [isPhaserGameRunning, setIsPhaserGameRunning] = useState(false);
+    const [showClickToStart, setShowClickToStart] = useState(true);
+    const [showSettings, setShowSettings] = useState(false);
+    const [muteMusic, setMuteMusic] = useState(false);
+    const [muteSfx, setMuteSfx] = useState(false);
+    const [phaseAnimKey, setPhaseAnimKey] = useState(0);
 
     const [gameState, setGameState] = useState<any>({
         status: 'waiting',
@@ -63,6 +160,7 @@ export default function WegenRace() {
         }));
         setEventLog(state.eventLog || []);
         setConnectionStatus('connected');
+        setPhaseAnimKey(prev => prev + 1); // Animate phase change!
         if (
             loadedGameConfig &&
             loadedGameConfig.currency &&
@@ -95,7 +193,25 @@ export default function WegenRace() {
         setTimeout(() => setShowGameOverModal(true), 1500);
     }, []);
 
-    // --- Game config load ---
+    // --- Game config load, with avatar CORS fix ---
+    const preparePlayersWithSafeAvatars = useCallback(async (players: Player[]) => {
+        const prepared = await Promise.all(players.map(async (p) => {
+            if (!p.avatarUrl || p.avatarUrl === "" || p.avatarUrl === "/WegenRaceAssets/G1small.png") {
+                return { ...p, avatarUrl: "/WegenRaceAssets/G1small.png" };
+            }
+            if (p.avatarUrl.startsWith("data:") || p.avatarUrl.startsWith(window.location.origin)) {
+                return p;
+            }
+            try {
+                const base64 = await fetchImageAsBase64(p.avatarUrl);
+                return { ...p, avatarUrl: base64 || "/WegenRaceAssets/G1small.png" };
+            } catch {
+                return { ...p, avatarUrl: "/WegenRaceAssets/G1small.png" };
+            }
+        }));
+        return prepared;
+    }, []);
+
     useEffect(() => {
         setLoadingMessage("Validating game configuration...");
         const config = (location.state as { gameConfig?: any })?.gameConfig;
@@ -109,27 +225,29 @@ export default function WegenRace() {
             navigate("/games");
             return;
         }
-        const normalizedPlayers = config.players.map((p: Player) => ({
-            ...p,
-            avatarUrl: p.avatarUrl && p.avatarUrl !== "" ? p.avatarUrl : '/WegenRaceAssets/G1small.png',
-            name: p.username && p.username !== "" ? p.username : (
-                p.wallet ? `${p.wallet.slice(0, 3)}...${p.wallet.slice(-3)}` : 'Guest'
-            )
-        }));
-        config.players = normalizedPlayers;
-        if (config.humanChoice) {
-            config.humanChoice.avatarUrl = config.humanChoice.avatarUrl && config.humanChoice.avatarUrl !== "" ? config.humanChoice.avatarUrl : '/WegenRaceAssets/G1small.png';
-            config.humanChoice.name = config.humanChoice.username && config.humanChoice.username !== "" ? config.humanChoice.username : (
-                config.humanChoice.wallet ? `${config.humanChoice.wallet.slice(0, 3)}...${config.humanChoice.wallet.slice(-3)}` : 'Guest'
-            );
-        }
-        setLoadedGameConfig(config);
-        setLoadingMessage("Configuration loaded. Authenticating session...");
-    }, [location.state, navigate]);
 
-    useEffect(() => {
-        console.log("isPhaserGameRunning:", isPhaserGameRunning);
-    }, [isPhaserGameRunning]);
+        (async () => {
+            const playersWithAvatars = await preparePlayersWithSafeAvatars(config.players);
+            config.players = playersWithAvatars.map((p: Player) => ({
+                ...p,
+                avatarUrl: p.avatarUrl && p.avatarUrl !== "" ? p.avatarUrl : '/WegenRaceAssets/G1small.png',
+                name: p.username && p.username !== "" ? p.username : (
+                    p.wallet ? `${p.wallet.slice(0, 3)}...${p.wallet.slice(-3)}` : 'Guest'
+                )
+            }));
+            if (config.humanChoice) {
+                if (config.humanChoice.avatarUrl && !config.humanChoice.avatarUrl.startsWith("data:") && !config.humanChoice.avatarUrl.startsWith(window.location.origin)) {
+                    config.humanChoice.avatarUrl = await fetchImageAsBase64(config.humanChoice.avatarUrl) || '/WegenRaceAssets/G1small.png';
+                }
+                config.humanChoice.avatarUrl = config.humanChoice.avatarUrl && config.humanChoice.avatarUrl !== "" ? config.humanChoice.avatarUrl : '/WegenRaceAssets/G1small.png';
+                config.humanChoice.name = config.humanChoice.username && config.humanChoice.username !== "" ? config.humanChoice.username : (
+                    config.humanChoice.wallet ? `${config.humanChoice.wallet.slice(0, 3)}...${config.humanChoice.wallet.slice(-3)}` : 'Guest'
+                );
+            }
+            setLoadedGameConfig(config);
+            setLoadingMessage("Configuration loaded. Authenticating session...");
+        })();
+    }, [location.state, navigate, preparePlayersWithSafeAvatars]);
 
     // --- Phaser game initialization ---
     useEffect(() => {
@@ -159,9 +277,12 @@ export default function WegenRace() {
             const scene = sceneRaw as WegenRaceScene;
             if (scene && typeof scene.onStateChange === 'function' && typeof scene.onGameEnd === 'function') {
                 scene.events.once('race-scene-fully-ready', () => {
-                    console.log("React: received race-scene-fully-ready event, setting running TRUE!");
                     if (cancelled) return;
                     enableDebugMode(game);
+
+                    // Pass mute state to scene if you want
+                    (scene as any).muteMusic = muteMusic;
+                    (scene as any).muteSfx = muteSfx;
 
                     scene.onStateChange(handleGameStateChange);
                     scene.onGameEnd(handleGameEnd);
@@ -175,8 +296,6 @@ export default function WegenRace() {
                     setIsPhaserGameRunning(true);
                     setLoadingMessage("Game is running!");
                 });
-            } else {
-                console.error("WegenRaceScene missing custom methods! Did you forget to cast or export them?");
             }
         }, 10);
 
@@ -211,7 +330,11 @@ export default function WegenRace() {
         };
     }, [
         loadedGameConfig,
-        isSessionAuthenticated
+        isSessionAuthenticated,
+        muteMusic,
+        muteSfx,
+        handleGameEnd,
+        handleGameStateChange
     ]);
 
     // --- Fullscreen handler ---
@@ -251,6 +374,63 @@ export default function WegenRace() {
         };
     }, []);
 
+    // --- Click-to-start overlay logic ---
+    useEffect(() => {
+        if (!isPhaserGameRunning && !showClickToStart) setShowClickToStart(true);
+        if (isPhaserGameRunning && showClickToStart) setShowClickToStart(false);
+    }, [isPhaserGameRunning, showClickToStart]);
+
+    const handleClickToStart = useCallback(() => {
+        setShowClickToStart(false);
+        // Optionally could trigger a method in the Phaser scene to start music, etc.
+    }, []);
+
+    // --- Settings Modal ---
+    const settingsModal = useMemo(() => (
+        <div
+            style={{
+                position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh", zIndex: 10000,
+                background: "rgba(10,10,40,0.86)", display: showSettings ? "flex" : "none",
+                alignItems: "center", justifyContent: "center",
+            }}
+            onClick={() => setShowSettings(false)}
+        >
+            <div
+                style={{
+                    background: "#23235a",
+                    borderRadius: 18,
+                    minWidth: 320,
+                    padding: 36,
+                    color: "#fff",
+                    boxShadow: "0 8px 32px #000c"
+                }}
+                onClick={e => e.stopPropagation()}
+            >
+                <h2 style={{ fontFamily: "WegensFont, Orbitron, Arial", fontSize: 26, marginBottom: 18 }}>Settings</h2>
+                <div style={{ marginBottom: 18 }}>
+                    <label style={{ display: "block", marginBottom: 8 }}>
+                        <input
+                            type="checkbox"
+                            checked={muteMusic}
+                            onChange={e => setMuteMusic(e.target.checked)}
+                        />&nbsp;Mute Music
+                    </label>
+                    <label style={{ display: "block" }}>
+                        <input
+                            type="checkbox"
+                            checked={muteSfx}
+                            onChange={e => setMuteSfx(e.target.checked)}
+                        />&nbsp;Mute Sound FX
+                    </label>
+                </div>
+                <button onClick={() => setShowSettings(false)} style={{
+                    padding: "9px 24px", borderRadius: 10, background: "#ffd93b",
+                    color: "#222", fontWeight: 700, fontSize: 17, border: "none", marginTop: 8
+                }}>Close</button>
+            </div>
+        </div>
+    ), [showSettings, muteMusic, muteSfx]);
+
     const formatTimeRemaining = useCallback(() => {
         if (typeof gameState.timeRemaining !== 'number' || isNaN(gameState.timeRemaining)) return "Loading...";
         const seconds = Math.ceil(gameState.timeRemaining / 1000);
@@ -259,6 +439,8 @@ export default function WegenRace() {
         const remainingSeconds = seconds % 60;
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     }, [gameState.timeRemaining]);
+
+    const phaseAnimClass = useMemo(() => `phase-anim-${phaseAnimKey % 2}`, [phaseAnimKey]);
 
     if (!loadedGameConfig || !isSessionAuthenticated) {
         return (
@@ -288,7 +470,7 @@ export default function WegenRace() {
     return (
         <div className={`wegenrace-root${isFullscreen ? " fullscreen-mode" : ""}`} style={{ fontFamily: 'WegensFont, Arial, sans-serif', width: "100vw", minHeight: "100vh" }}>
             {/* === TOP BAR === */}
-            <div className="wegenrace-topbar">
+            <div className={`wegenrace-topbar animated-panel ${phaseAnimClass}`}>
                 <div className="wegenrace-topbar-content">
                     <span className="race-title">{loadedGameConfig?.gameTitle || "Wegen Race"}</span>
                     <span className="race-details">
@@ -309,76 +491,19 @@ export default function WegenRace() {
                         <button className="fullscreen-btn" onClick={toggleFullscreen}>
                             {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                         </button>
+                        <button className="settings-btn" onClick={() => setShowSettings(true)} title="Settings"
+                            style={{
+                                marginLeft: 6, background: "none", border: "none", color: "#ffd93b",
+                                fontSize: 20, fontWeight: "bold", cursor: "pointer"
+                            }}>⚙️</button>
                     </div>
                 </div>
             </div>
             {/* === MAIN CONTENT === */}
             <div className="wegenrace-content">
-                <div className="wegenrace-sidebar">
-                    <div className="leaderboard-panel">
-                        <h4>Leaderboard</h4>
-                        <div className="leaderboard-scroll">
-                            {(gameState.leaderboard || loadedGameConfig.players)
-                                .slice(0, 50)
-                                .map((player: any, idx: number) => (
-                                    <div key={player.key} style={{
-                                        display: "flex", alignItems: "center", gap: 6, marginBottom: 6,
-                                        background: player.key === loadedGameConfig?.humanChoice.key ? "#2e2e7a77" : "transparent",
-                                        borderRadius: 6, padding: "4px 6px"
-                                    }}>
-                                        <span style={{
-                                            width: 18, textAlign: "center", fontWeight: 600,
-                                            color: idx < 3 ? "#ffe36d" : "#eee"
-                                        }}>
-                                            {idx + 1}
-                                        </span>
-                                        <img
-                                            src={player.avatarUrl || '/WegenRaceAssets/G1small.png'}
-                                            className="participant-avatar"
-                                            alt={player.name || ""}
-                                            style={{ width: 28, height: 28, borderRadius: '50%' }}
-                                            onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
-                                        />
-                                        <span style={{
-                                            fontSize: 12,
-                                            fontWeight: player.key === loadedGameConfig?.humanChoice.key ? "bold" : "normal",
-                                            color: player.key === loadedGameConfig?.humanChoice.key ? '#aad0ff' : '#fafaf7'
-                                        }}>
-                                            {player.name || player.username || (player.wallet ? `${player.wallet.slice(0, 3)}...${player.wallet.slice(-3)}` : "Guest")}
-                                        </span>
-                                        {player.key === loadedGameConfig?.humanChoice.key && <span style={{ marginLeft: 3 }}>👤</span>}
-                                    </div>
-                                ))}
-                        </div>
-                    </div>
-                    <div className="eventlog-panel">
-                        <h4>Event Log</h4>
-                        <div className="eventlog-scroll">
-                            {eventLog
-                                .filter((event) =>
-                                    event.eventType !== "phase_change" // Only show boosts/stumbles/finishes
-                                )
-                                .map((event) => (
-                                <div key={event.id || `${event.eventType}-${event.description}-${Math.random()}`} style={{
-                                    marginBottom: 4, padding: "4px 6px", borderRadius: 4,
-                                    background: event.eventType.includes('boost') ? "#2d5a2d" :
-                                        event.eventType.includes('stumble') ? "#5a2d2d" :
-                                            event.eventType.includes('finished') ? "#2d2d5a" :
-                                                event.eventType.includes('system') ? "#2d2d2d" : "#2d2d2d",
-                                    fontSize: "0.75rem", lineHeight: "1.2"
-                                }}>
-                                    <div style={{ color: "#fff", fontWeight: 500 }}>
-                                        {event.description}
-                                    </div>
-                                    {event.effect && (
-                                        <div style={{ color: "#bbb", fontSize: "0.7rem" }}>
-                                            {event.effect}
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                <div className="wegenrace-sidebar animated-panel">
+                    <LeaderboardPanel leaderboard={gameState.leaderboard} loadedGameConfig={loadedGameConfig} />
+                    <EventLogPanel eventLog={eventLog} />
                 </div>
                 <div className="wegenrace-game-area">
                     <div
@@ -448,30 +573,58 @@ export default function WegenRace() {
                     </div>
                 </div>
             </div>
-            {showGameOverModal && loadedGameConfig && (
-                <GameOverModal
-                    isOpen={showGameOverModal}
-                    onClose={() => setShowGameOverModal(false)}
-                    winner={gameState.winner}
-                    rankings={
-                        (gameState.leaderboard || [])
-                            .map((player: any) => ({
-                                ...player,
-                                progress: phaserGameRef.current
-                                    ? (phaserGameRef.current.scene && phaserGameRef.current.scene.getScene('WegenRaceScene')?.getPlayerProgress(player.key) * 100) || 0
-                                    : 0,
-                                finishTime: (gameState.winner && player.key === gameState.winner.key && gameState.raceElapsedTime)
-                                    ? gameState.raceElapsedTime / 1000
-                                    : undefined,
-                            }))
-                    }
-                    humanPlayerChoice={loadedGameConfig.humanChoice}
-                    gameType="wegen-race"
-                    gameTitle={loadedGameConfig.gameTitle || "Wegen Race"}
-                    onPlayAgain={handlePlayAgain}
-                    onBackToGames={handleBackToGames}
-                />
+            {showClickToStart && (
+                <div
+                    style={{
+                        position: "fixed", inset: 0, background: "rgba(20,20,64,0.95)",
+                        zIndex: 9999, display: "flex", flexDirection: "column",
+                        alignItems: "center", justifyContent: "center"
+                    }}
+                    onClick={handleClickToStart}
+                >
+                    <div style={{
+                        color: "#ffd93b", fontWeight: 800, fontSize: 38, fontFamily: "WegensFont, Orbitron",
+                        textShadow: "0 2px 8px #000b"
+                    }}>CLICK TO START RACE</div>
+                    <div style={{ fontSize: 18, color: "#fff", marginTop: 10, opacity: 0.7 }}>Enable sound and begin!</div>
+                    <div className="mt-10" />
+                </div>
             )}
+            {settingsModal}
+            <Suspense fallback={<div className="text-white text-xl p-8">Loading Results...</div>}>
+                {showGameOverModal && loadedGameConfig && (
+                    <GameOverModal
+                        isOpen={showGameOverModal}
+                        onClose={() => setShowGameOverModal(false)}
+                        winner={gameState.winner}
+                        rankings={
+                            (gameState.leaderboard || [])
+                                .map((player: any) => ({
+                                    ...player,
+                                    progress: phaserGameRef.current
+                                        ? (phaserGameRef.current.scene && phaserGameRef.current.scene.getScene('WegenRaceScene')?.getPlayerProgress(player.key) * 100) || 0
+                                        : 0,
+                                    finishTime: (gameState.winner && player.key === gameState.winner.key && gameState.raceElapsedTime)
+                                        ? gameState.raceElapsedTime / 1000
+                                        : undefined,
+                                }))
+                        }
+                        humanPlayerChoice={loadedGameConfig.humanChoice}
+                        gameType="wegen-race"
+                        gameTitle={loadedGameConfig.gameTitle || "Wegen Race"}
+                        onPlayAgain={handlePlayAgain}
+                        onBackToGames={handleBackToGames}
+                    />
+                )}
+            </Suspense>
         </div>
     );
 }
+
+// --- SUGGESTIONS IMPLEMENTED ---
+// 1. Added React.memo for leaderboard/event log panels for performance.
+// 2. Added click-to-start overlay before pointerdown for better user guidance and browser audio policy.
+// 3. Added a settings modal for mute music/sfx controls.
+// 4. Used React.lazy/Suspense for GameOverModal.
+// 5. Animated top bar/sidebar on phase change (see .animated-panel CSS and phaseAnimClass).
+// 6. (Optional) For a multiplayer or chat system, you could add a React context for in-game events/messages.
