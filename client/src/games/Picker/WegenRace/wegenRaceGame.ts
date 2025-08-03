@@ -1,17 +1,38 @@
+// src/games/Picker/WegenRace/wegenRaceGame.ts
+
 import Phaser from 'phaser';
 
 // --- Types ---
-interface Player {
+export interface Player {
     key: string;
     name: string;
     username?: string;
     wallet?: string;
     avatarUrl?: string;
+    color?: number;
     isHumanPlayer?: boolean;
     isGuest?: boolean;
 }
 
-interface GameState {
+export interface GameEvent {
+    id: string;
+    timestamp: number;
+    playerKey: string;
+    eventType: string;
+    description: string;
+    effect?: string;
+}
+
+export interface VisualBoost {
+    isPositive: boolean;
+    multiplier: number;
+    duration: number;
+    startTime: number;
+    isStun?: boolean;
+    stunEndTime?: number;
+}
+
+export interface GameState {
     status: 'waiting' | 'countdown' | 'racing' | 'finished';
     raceProgress: number;
     raceElapsedTime: number;
@@ -23,24 +44,6 @@ interface GameState {
     winner: Player | null;
     rankings: Player[];
     eventLog: GameEvent[];
-}
-
-interface GameEvent {
-    id: string;
-    timestamp: number;
-    playerKey: string;
-    eventType: string;
-    description: string;
-    effect?: string;
-}
-
-interface VisualBoost {
-    isPositive: boolean;
-    multiplier: number;
-    duration: number;
-    startTime: number;
-    isStun?: boolean;
-    stunEndTime?: number;
 }
 
 // --- Constants for Game Configuration and Visuals ---
@@ -381,6 +384,7 @@ class WegenRaceGameLogic {
         this.raceStartTime = Date.now();
     }
 }
+
 
 // --- Scene Class ---  WegenRaceScene
 
