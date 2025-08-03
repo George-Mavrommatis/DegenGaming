@@ -372,31 +372,26 @@ export default function WegenRace() {
         };
     }, []);
 
-    // --- Click-to-start overlay logic ---
-    useEffect(() => {
-        if (!isPhaserGameRunning && !showClickToStart) setShowClickToStart(true);
-        if (isPhaserGameRunning && showClickToStart) setShowClickToStart(false);
-    }, [isPhaserGameRunning, showClickToStart]);
-
-    const handleClickToStart = useCallback(() => {
-        setShowClickToStart(false);
-        if (clickHandledRef.current) return;
-        clickHandledRef.current = true;
-        // Dispatch pointerdown to canvas for WebAudio unlock
-        const canvas = document.querySelector(".phaser-game-container canvas") as HTMLCanvasElement;
-        if (canvas) {
-            const evt = new window.PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window });
-            canvas.dispatchEvent(evt);
-        }
-        setTimeout(() => {
-            if (phaserGameRef.current) {
-                const scene = phaserGameRef.current.scene.getScene('WegenRaceScene') as any;
-                if (scene && typeof scene.startRaceExternally === "function") {
-                    scene.startRaceExternally();
-                }
+    // Instead, set showClickToStart to false only *after* the game is running and the user clicked start
+        const handleClickToStart = useCallback(() => {
+            setShowClickToStart(false);
+            if (clickHandledRef.current) return; // Only allow one click!
+            clickHandledRef.current = true;
+            // unlock audio (dispatch pointer event to canvas)
+            const canvas = document.querySelector(".phaser-game-container canvas") as HTMLCanvasElement;
+            if (canvas) {
+                const evt = new window.PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window });
+                canvas.dispatchEvent(evt);
             }
-        }, 60);
-    }, []);
+            setTimeout(() => {
+                if (phaserGameRef.current) {
+                    const scene = phaserGameRef.current.scene.getScene('WegenRaceScene') as any;
+                    if (scene && typeof scene.startRaceExternally === "function") {
+                        scene.startRaceExternally();
+                    }
+                }
+            }, 60);
+        }, []);
 
     // --- Settings Modal ---
     const settingsModal = useMemo(() => (
