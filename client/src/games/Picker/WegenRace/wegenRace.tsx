@@ -14,7 +14,6 @@ import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
 
-// --- Lazy load GameOverModal ---
 const GameOverModal = lazy(() => import("../PickerGameOverModal"));
 
 // Utility: Convert remote avatar URLs to base64 so Phaser never breaks on CORS
@@ -78,9 +77,7 @@ const EventLogPanel = memo(({ eventLog }: any) => (
         <h4>Event Log</h4>
         <div className="eventlog-scroll">
             {eventLog
-                .filter((event: any) =>
-                    event.eventType !== "phase_change"
-                )
+                .filter((event: any) => event.eventType !== "phase_change")
                 .map((event: any) => (
                 <div key={event.id || `${event.eventType}-${event.description}-${Math.random()}`} style={{
                     marginBottom: 4, padding: "4px 6px", borderRadius: 4,
@@ -109,6 +106,7 @@ export default function WegenRace() {
     const location = useLocation();
     const navigate = useNavigate();
     const freeTokenConsumedRef = useRef(false);
+    const clickHandledRef = useRef(false);
 
     const [showGameOverModal, setShowGameOverModal] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState("Loading game...");
@@ -355,9 +353,9 @@ export default function WegenRace() {
             else if ((element as any).msRequestFullscreen) (element as any).msRequestFullscreen();
         } else {
             if (document.exitFullscreen) document.exitFullscreen();
-            else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
-            else if ((document as any).mozCancelFullScreen) (document as any).mozCancelFullScreen();
-            else if ((document as any).msExitFullscreen) (document as any).msExitFullscreen();
+            else if ((document as any).webkitExitFullscreen) (element as any).webkitExitFullscreen();
+            else if ((document as any).mozCancelFullScreen) (element as any).mozCancelFullScreen();
+            else if ((document as any).msExitFullscreen) (element as any).msExitFullscreen();
         }
     }, [isFullscreen]);
     useEffect(() => {
@@ -382,7 +380,22 @@ export default function WegenRace() {
 
     const handleClickToStart = useCallback(() => {
         setShowClickToStart(false);
-        // Optionally could trigger a method in the Phaser scene to start music, etc.
+        if (clickHandledRef.current) return;
+        clickHandledRef.current = true;
+        // Dispatch pointerdown to canvas for WebAudio unlock
+        const canvas = document.querySelector(".phaser-game-container canvas") as HTMLCanvasElement;
+        if (canvas) {
+            const evt = new window.PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window });
+            canvas.dispatchEvent(evt);
+        }
+        setTimeout(() => {
+            if (phaserGameRef.current) {
+                const scene = phaserGameRef.current.scene.getScene('WegenRaceScene') as any;
+                if (scene && typeof scene.startRaceExternally === "function") {
+                    scene.startRaceExternally();
+                }
+            }
+        }, 60);
     }, []);
 
     // --- Settings Modal ---
@@ -583,11 +596,51 @@ export default function WegenRace() {
                     onClick={handleClickToStart}
                 >
                     <div style={{
-                        color: "#ffd93b", fontWeight: 800, fontSize: 38, fontFamily: "WegensFont, Orbitron",
-                        textShadow: "0 2px 8px #000b"
-                    }}>CLICK TO START RACE</div>
-                    <div style={{ fontSize: 18, color: "#fff", marginTop: 10, opacity: 0.7 }}>Enable sound and begin!</div>
-                    <div className="mt-10" />
+                        background: "#23235a",
+                        borderRadius: 26,
+                        boxShadow: "0 8px 32px #000b",
+                        padding: "40px 48px",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        border: "2px solid #ffd93b"
+                    }}>
+                        <div style={{
+                            color: "#ffd93b", fontWeight: 800, fontSize: 38, fontFamily: "WegensFont, Orbitron",
+                            textShadow: "0 2px 8px #000b",
+                            marginBottom: 14
+                        }}>Ready to Race?</div>
+                        <div style={{
+                            fontSize: 18, color: "#fff", marginBottom: 28, opacity: 0.83,
+                            letterSpacing: 1
+                        }}>Click below to start, enable sound, and begin!</div>
+                        <button
+                            onClick={handleClickToStart}
+                            style={{
+                                background: "linear-gradient(90deg, #ffe36d 0%, #ffd93b 100%)",
+                                color: "#23235a",
+                                fontWeight: 800,
+                                fontSize: 25,
+                                border: "none",
+                                borderRadius: 13,
+                                boxShadow: "0 3px 22px #ffd93b77",
+                                padding: "18px 48px",
+                                letterSpacing: 1,
+                                cursor: "pointer",
+                                transition: "filter 0.2s",
+                                outline: "none"
+                            }}
+                        >Start Race 🚦</button>
+                        <div style={{
+                            marginTop: 22,
+                            color: "#fff",
+                            fontSize: 13,
+                            opacity: 0.55,
+                            textAlign: "center"
+                        }}>
+                            (This step is needed for sound/music and browser autoplay policy)
+                        </div>
+                    </div>
                 </div>
             )}
             {settingsModal}
@@ -621,10 +674,8 @@ export default function WegenRace() {
     );
 }
 
-// --- SUGGESTIONS IMPLEMENTED ---
-// 1. Added React.memo for leaderboard/event log panels for performance.
-// 2. Added click-to-start overlay before pointerdown for better user guidance and browser audio policy.
-// 3. Added a settings modal for mute music/sfx controls.
-// 4. Used React.lazy/Suspense for GameOverModal.
-// 5. Animated top bar/sidebar on phase change (see .animated-panel CSS and phaseAnimClass).
-// 6. (Optional) For a multiplayer or chat system, you could add a React context for in-game events/messages.
+// --- SUGGESTIONS ---
+// 1. Overlay only starts race after explicit user click, not before.
+// 2. WebAudio unlock and Phaser scene start method are both triggered on click.
+// 3. Overlay is a centered card and not full-screen intrusive.
+// 4. Overlay is robust for all browsers.

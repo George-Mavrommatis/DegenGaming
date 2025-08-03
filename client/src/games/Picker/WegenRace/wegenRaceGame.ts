@@ -713,7 +713,7 @@ export class WegenRaceScene extends Phaser.Scene {
         ).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
         this.gameLogic = new WegenRaceGameLogic();
-        this.gameLogic.initializeRace(players, duration);
+        // this.gameLogic.initializeRace(players, duration);
 
         this.gameLogic.onPlayerPhaseAdvance((playerKey, phaseIndex) => this.handlePlayerPhaseAdvance(playerKey, phaseIndex));
         this.gameLogic.onRaceFinished(() => this.handleRaceFinishedInternal());
@@ -770,6 +770,15 @@ export class WegenRaceScene extends Phaser.Scene {
         }
         (g as any).__laneIndex = idx;
         (g as any).__playerKey = player.key;
+    }
+
+  public startRaceExternally(): void {
+        // Resume audio context if needed
+        if (this.sound.context && this.sound.context.state === "suspended") {
+            // Try to resume; ignore errors (browser will block if user hasn't interacted)
+            this.sound.context.resume().catch(() => {});
+        }
+        this.playMusicAndCountdown();
     }
 
     private playMusicAndCountdown() {
