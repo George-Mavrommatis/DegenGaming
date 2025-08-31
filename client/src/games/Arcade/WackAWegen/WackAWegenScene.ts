@@ -1,5 +1,3 @@
-
-
 import Phaser from 'phaser';
 
 type CharacterType =
@@ -32,14 +30,10 @@ interface InstructionSlide {
   description: string;
 }
 
-
-// HAMMER
-const hammerHeadOriginX = 0.85; // (estimate, replace with yours)
-const hammerHeadOriginY = 0.8;  // (estimate, replace with yours)
-
+const hammerHeadOriginX = 0.85;
+const hammerHeadOriginY = 0.8;
 
 export class WackAWegenScene extends Phaser.Scene {
-  // ─── Game State ──────────────────────────────────────────────────────────────
   private score = 0;
   private timeLeft = 60;
   private isGameOver = false;
@@ -51,94 +45,56 @@ export class WackAWegenScene extends Phaser.Scene {
   private missCount = 0;
   private perfectHits = 0;
 
-  // ─── Layout ──────────────────────────────────────────────────────────────────
   private barHeight = 0;
   private barWidth = 0;
   private timeBar?: Phaser.GameObjects.Graphics;
   private wegens: Phaser.GameObjects.Sprite[] = [];
   private holes: Phaser.GameObjects.Image[] = [];
-  private characterScale = 0.65; // Reduced scale for characters
+  private characterScale = 0.65;
 
-  // ─── Timers & UI ─────────────────────────────────────────────────────────────
   private gameTimer?: Phaser.Time.TimerEvent;
   private popUpTimer?: Phaser.Time.TimerEvent;
   private ui?: UIType;
 
-  // ─── Pause Overlay ───────────────────────────────────────────────────────────
   private pauseOverlay?: Phaser.GameObjects.Graphics;
   private pauseText?: Phaser.GameObjects.Text;
   private pauseButton?: Phaser.GameObjects.Text;
 
-  // ─── Settings / Assets ───────────────────────────────────────────────────────
   private username = 'Guest';
   private avatarUrl = '/placeholder-avatar.png';
+  private txSig?: string;
 
-  // ─── Instruction Carousel ────────────────────────────────────────────────────
   private instructionContainer?: Phaser.GameObjects.Container;
   private instructionSlides: InstructionSlide[] = [];
   private currentSlide = 0;
+  private instrBgm?: Phaser.Sound.BaseSound;
+  private shouldConsumeFreeToken = false;
+  private onConsumeFreeToken?: () => Promise<boolean>;
+  private onReadyToStartGame?: () => void;
+  private onGameOver?: (e: { score: number }) => void;
 
-  // ─── Resize Handler Fix ──────────────────────────────────────────────────────
   private hasResizeHandler = false;
   private resizeRestartTimer?: number;
   private lastWidth = 0;
   private lastHeight = 0;
 
-  // ─── Hammer & Effects ────────────────────────────────────────────────────────
   private hammerCursor?: Phaser.GameObjects.Image;
   private clickIndicator?: Phaser.GameObjects.Graphics;
   private hasPointerListeners = false;
-  private setHammerCursorMode(enabled: boolean) {
-    if (enabled) {
-      this.input.setDefaultCursor('none');
-      this.hammerCursor?.setVisible(true);
-    } else {
-      this.input.setDefaultCursor('auto');
-      this.hammerCursor?.setVisible(false);
-    }
-  }
-  // ─── Audio ───────────────────────────────────────────────────────────────────
-  private bgm?: Phaser.Sound.BaseSound;
-  private audioEnabled = true;
-
-
 
   constructor() {
     super({ key: 'WackAWegenScene' });
   }
 
-  init(data: {
-       username: string;
-       avatarUrl: string;
-       onGameOver: (e: { score: number }) => void;
-       skipInstructions?: boolean;
-       txSig?: string; // If you want to use it
-  }) {
-    // Defensive: always use fallback
+  init(data: any) {
     this.username = data.username?.trim() || 'Guest';
     this.avatarUrl = data.avatarUrl?.trim() || '/placeholder-avatar.png';
-    this.score = 0;
-    this.timeLeft = 60;
-    this.isGameOver = false;
-    this.isPaused = false;
-    this.wegens = [];
-    this.holes = [];
-    this.skipInstructions = !!data.skipInstructions;
-    this.comboCount = 0;
-    this.lastHitTime = 0;
-    this.missCount = 0;
-    this.perfectHits = 0;
     this.txSig = data.txSig;
-
-    // ensure only one listener
-    this.game.events.off('game-over');
-    this.game.events.on('game-over', data.onGameOver, this);
-
-    console.log('[WackAWegenScene] init:', {
-      username: this.username,
-      avatarUrl: this.avatarUrl,
-      skipInstructions: this.skipInstructions,
-    });
+    this.skipInstructions = !!data.skipInstructions;
+    this.shouldConsumeFreeToken = !!data.shouldConsumeFreeToken;
+    this.onConsumeFreeToken = data.onConsumeFreeToken;
+    this.onReadyToStartGame = data.onReadyToStartGame;
+    this.onGameOver = data.onGameOver;
   }
 
   preload(): void {
@@ -165,9 +121,6 @@ export class WackAWegenScene extends Phaser.Scene {
       frameHeight: 128,
     });
 
-
-    // Load sounds with error handling
-    // Try loading WAV files first, then fallback to MP3
     const audioFiles = [
       { key: 'bgm', paths: ['../sounds/WackAWegen/grid.mp3', '/sounds/WackAWegen/grid.mp3'] },
       { key: 'sfx_whack', paths: ['../sounds/WackAWegen/whack.wav', '/sounds/WackAWegen/whack.wav'] },
@@ -179,7 +132,6 @@ export class WackAWegenScene extends Phaser.Scene {
       { key: 'sfx_combo', paths: ['../sounds/WackAWegen/combo.wav', '/sounds/WackAWegen/combo.wav'] },
     ];
 
-    // Load audio with multiple format support
     audioFiles.forEach(({ key, paths }) => {
       this.load.audio(key, paths);
     });
@@ -188,16 +140,11 @@ export class WackAWegenScene extends Phaser.Scene {
     this.load.image('userAvatar', this.avatarUrl);
     this.load.crossOrigin = null;
 
-    // Enhanced error handling
     this.load.on('loaderror', (file: any) => {
       console.error('[WackAWegenScene] Asset failed to load:', file.key, file.src);
-
-      // Handle audio load errors gracefully
       if (file.type === 'audio') {
         console.warn(`Audio file ${file.key} failed to load. Audio will be disabled.`);
-        this.audioEnabled = false;
       }
-
       if (file.key === 'userAvatar') {
         this.textures.remove('userAvatar');
         this.load.image('userAvatar', '/placeholder-avatar.png');
@@ -205,7 +152,6 @@ export class WackAWegenScene extends Phaser.Scene {
       }
     });
 
-    // Add file processing error handler
     this.load.on('filecomplete', (key: string, type: string, data: any) => {
       if (type === 'audio') {
         console.log(`[WackAWegenScene] Audio loaded successfully: ${key}`);
@@ -214,221 +160,47 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   create(): void {
-  console.log('[WackAWegenScene] create called, skipInstructions:', this.skipInstructions);
+    this.barHeight = Math.max(60, Math.round(this.scale.height * 0.11));
+    this.add.image(this.scale.width / 2, this.scale.height / 2, 'background').setDisplaySize(this.scale.width, this.scale.height);
 
-  this.barHeight = Math.max(60, Math.round(this.scale.height * 0.11));
-
-
-  this.add
-  .image(this.scale.width / 2, this.scale.height / 2, 'background')
-  .setDisplaySize(this.scale.width, this.scale.height);
-
-  if (!this.anims.exists('explode')) {
-    this.anims.create({
-      key: 'explode',
-      frames: this.anims.generateFrameNumbers('explosion', { start: 0, end: 4 }),
-      frameRate: 20,
-      hideOnComplete: true,
-    });
-  }
-
-  // Create hammer cursor (check if image loaded)
-  if (this.textures.exists('hammer')) {
-    this.hammerCursor = this.add.image(0, 0, 'hammer')
-      .setScale(0.5)
-      .setOrigin(hammerHeadOriginX, hammerHeadOriginY)
-      .setDepth(100)
-      .setVisible(true);
-
-    // Make the hammer follow the pointer
-    if (!this.hasPointerListeners) {
-      this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-        this.hammerCursor!.setPosition(pointer.x, pointer.y);
+    if (!this.anims.exists('explode')) {
+      this.anims.create({
+        key: 'explode',
+        frames: this.anims.generateFrameNumbers('explosion', { start: 0, end: 4 }),
+        frameRate: 20,
+        hideOnComplete: true,
       });
-      this.input.on('pointerover', () => {
-      if (!this.isPaused && !this.isGameOver) this.hammerCursor?.setVisible(true);
-      });
-      this.input.on('pointerout', () => {
-        this.hammerCursor?.setVisible(false);
-      });
-      this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-        this.showClickEffect(pointer.x, pointer.y);
-      });
-      this.hasPointerListeners = true;
     }
 
-
-  // Create click indicator
-  this.clickIndicator = this.add.graphics().setDepth(99);
-
-  // Hide default cursor in game area
-  this.input.setDefaultCursor('auto');
-  this.setHammerCursorMode(false);
-
-  // Listen for page unload or visibility change (do this ONCE, not every create if scene restarts)
-  if (!this.hasResizeHandler) {
-    window.addEventListener('beforeunload', this.handleUnload);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        this.handleUnload();
-      }
-    });
-    this.hasResizeHandler = true;
-  }
-
-  this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-  // Adjust UI elements here based on new gameSize.width/height
-});
-
-  // --- THIS IS THE IMPORTANT PART ---
-  if (this.skipInstructions) {
-    this.buildGame();
-    this.startGame();
-  } else {
-    this.buildInstructionSlides();
-    this.showInstructions();
-  }
-} // <--- CLOSE create() method here!
-
-}
-
-private handleUnload = () => {
-  if (!this.isGameOver) {
-    this.endGame();
-    // Save score to server (fire-and-forget)
-    if (navigator.sendBeacon) {
-      const payload = JSON.stringify({
-        username: this.username,
-        score: this.score,
-        // add more fields if needed
-          onGameOver: (e: { score: number }) => this.game.events.emit('game-over', e),
+    if (!this.hasResizeHandler) {
+      window.addEventListener('beforeunload', this.handleUnload);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this.handleUnload();
+        }
       });
-    //  navigator.sendBeacon('/api/save-score', payload);
+      this.hasResizeHandler = true;
+    }
+
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      // Adjust UI elements here if needed
+    });
+
+    if (this.skipInstructions) {
+      this.buildGame();
+      this.startGame();
     } else {
-      // fallback: maybe localStorage or fetch (not reliable on unload)
-      localStorage.setItem('lastWackAWegenScore', this.score.toString());
-    }
-  }
-}
-
-  // --- FIX: Proper debounced resize handler ---
-  private handleResize(): void {
-    // Force get current dimensions
-    const w = this.game.scale.width;
-    const h = this.game.scale.height;
-
-    // Always restart on any size change or fullscreen toggle
-    if (this.resizeRestartTimer) {
-      clearTimeout(this.resizeRestartTimer);
-    }
-
-    this.resizeRestartTimer = window.setTimeout(() => {
-      if (!this.isGameOver) {
-        // Store current game state
-        const currentScore = this.score;
-        const currentTime = this.timeLeft;
-
-        this.scene.restart({
-          username: this.username,
-          avatarUrl: this.avatarUrl,
-          onGameOver: (e: { score: number }) => this.game.events.emit('game-over', e),
-          skipInstructions: true, // Skip instructions on resize
-        });
-
-        // Restore game state after restart
-        this.time.delayedCall(100, () => {
-          this.score = currentScore;
-          this.timeLeft = currentTime;
-          this.ui?.score.setText(`Score: ${this.score}`);
-          this.ui?.timer.setText(`${this.timeLeft}`);
-          this.updateTimeBarGraphics();
-        });
-      }
-    }, 150);
-  }
-
-  // ─── HAMMER EFFECTS ──────────────────────────────────────────────────────────
-  private showClickEffect(x: number, y: number) {
-    // Hammer animation
-    if (this.hammerCursor) {
-      this.tweens.add({
-        targets: this.hammerCursor,
-        angle: -30,
-        duration: 100,
-        yoyo: true,
-        onComplete: () => {
-          this.hammerCursor?.setAngle(0);
-        }
-      });
-    }
-
-    // Click indicator
-    this.clickIndicator?.clear();
-    this.clickIndicator?.lineStyle(3, 0xffffff, 0.8);
-    this.clickIndicator?.strokeCircle(x, y, 10);
-    this.clickIndicator?.setAlpha(1);
-
-    this.tweens.add({
-      targets: this.clickIndicator,
-      alpha: 0,
-      duration: 300,
-      onUpdate: (tween) => {
-        const scale = 1 + tween.progress * 2;
-        this.clickIndicator?.clear();
-        this.clickIndicator?.lineStyle(3, 0xffffff, 0.8 * (1 - tween.progress));
-        this.clickIndicator?.strokeCircle(x, y, 10 * scale);
-      }
-    });
-
-  } // ← close the showClickEffect method
-
-  private checkNearMiss(x: number, y: number) {
-    // Check if click was near any active wegen
-    let nearMiss = false;
-    const missThreshold = 50; // pixels
-
-    for (const wegen of this.wegens) {
-      if (wegen.getData('isUp') && wegen.visible) {
-        const distance = Phaser.Math.Distance.Between(x, y, wegen.x, wegen.y);
-        if (distance > wegen.displayWidth / 2 && distance < missThreshold) {
-          nearMiss = true;
-          break;
-        }
-      }
-    }
-
-    if (nearMiss) {
-      this.missCount++;
-      if (this.cache.audio.exists('sfx_miss')) {
-        this.sound.play('sfx_miss', { volume: 0.5 });
-      }
-
-      // Show near miss text or image
-      const missText = this.add.text(x, y - 20, 'NEAR MISS!', {
-        fontSize: '24px',
-        color: '#ff6666',
-        stroke: '#000',
-        strokeThickness: 4,
-        fontStyle: 'bold'
-      }).setOrigin(0.5);
-
-      this.tweens.add({
-        targets: missText,
-        y: missText.y - 40,
-        alpha: 0,
-        scale: 1.5,
-        duration: 800,
-        onComplete: () => missText.destroy()
-      });
-
-      // Reset combo on miss
-      this.comboCount = 0;
+      this.buildInstructionSlides();
+      this.showInstructions();
     }
   }
 
+  private handleUnload = () => {
+    if (!this.isGameOver) {
+      this.endGame();
+    }
+  };
 
-
-  // ─── INSTRUCTION CAROUSEL ─────────────────────────────────────────────────────
   private buildInstructionSlides() {
     this.instructionSlides = [
       {
@@ -451,14 +223,18 @@ private handleUnload = () => {
     ];
   }
 
-  private showInstructions() {
+  private async showInstructions() {
     const w = this.scale.width;
     const h = this.scale.height;
     const overlay = this.add.graphics().fillStyle(0x000000, 0.8).fillRect(0, 0, w, h);
     const c = this.add.container(0, 0);
     this.instructionContainer = c;
+    if (this.cache.audio.exists('bgm')) {
+      this.instrBgm = this.sound.add('bgm', { loop: true, volume: 0.22 });
+      this.instrBgm.play();
+      this.events.once('destroy', () => this.instrBgm?.stop());
+    }
 
-    // placeholders
     const imgY = h * 0.35;
     const titleY = h * 0.60;
     const descY = h * 0.68;
@@ -482,13 +258,13 @@ private handleUnload = () => {
       .setOrigin(0.5)
       .setAlpha(0.6)
       .setInteractive({ useHandCursor: true });
-    const start = this.add
+    const startBtn = this.add
       .text(w / 2, btnY, 'Start Game', { fontSize: '32px', color: '#00FF00', fontStyle: 'bold' })
       .setOrigin(0.5)
       .setVisible(false)
       .setInteractive({ useHandCursor: true });
 
-    c.add([overlay, img, title, desc, back, next, start]);
+    c.add([overlay, img, title, desc, back, next, startBtn]);
 
     const render = () => {
       const slide = this.instructionSlides[this.currentSlide];
@@ -497,7 +273,7 @@ private handleUnload = () => {
       desc.setText(slide.description);
       back.setVisible(this.currentSlide > 0);
       next.setVisible(this.currentSlide < this.instructionSlides.length - 1);
-      start.setVisible(this.currentSlide === this.instructionSlides.length - 1);
+      startBtn.setVisible(this.currentSlide === this.instructionSlides.length - 1);
     };
     render();
 
@@ -509,31 +285,38 @@ private handleUnload = () => {
       this.currentSlide = Math.min(this.instructionSlides.length - 1, this.currentSlide + 1);
       render();
     });
-    start.on('pointerdown', () => {
+
+    startBtn.on('pointerdown', async () => {
+      startBtn.setAlpha(0.7);
+      if (this.shouldConsumeFreeToken && this.onConsumeFreeToken) {
+        startBtn.setText('Checking Free Token...');
+        const success = await this.onConsumeFreeToken();
+        if (!success) {
+          startBtn.setText('Start Game');
+          startBtn.setAlpha(1);
+          return;
+        }
+      }
       c.destroy(true);
+      if (this.instrBgm) this.instrBgm.stop();
+      if (this.onReadyToStartGame) this.onReadyToStartGame();
       this.buildGame();
       this.startGame();
     });
   }
 
-  // --- BUILD ACTUAL GAME ---
   private buildGame() {
-    console.log('[WackAWegenScene] buildGame');
     this.createHoleGrid();
     this.createTopBar();
     this.createPauseScreen();
   }
 
   private createHoleGrid() {
-    console.log('[WackAWegenScene] createHoleGrid');
     const rows = 4;
     const cols = 4;
-
-    // Increased padding from borders
     const topPadding = this.barHeight + 80;
     const bottomPadding = 100;
     const sidePadding = 80;
-
     const gridW = Math.min(this.scale.width - (sidePadding * 2), 850);
     const gridH = Math.min(this.scale.height - topPadding - bottomPadding, 500);
 
@@ -555,12 +338,12 @@ private handleUnload = () => {
         this.holes.push(hole);
 
         const w = this.add
-          .sprite(x, y + 10, 'wegen_normal') // Slight offset to overlap with hole
-          .setOrigin(0.5, 0.95) // Changed origin to bottom for better overlap
+          .sprite(x, y + 10, 'wegen_normal')
+          .setOrigin(0.5, 0.95)
           .setScale(this.characterScale)
           .setVisible(false)
           .setData({ isUp: false, type: 'none', hitsLeft: 0 })
-          .setInteractive({ pixelPerfect: true, useHandCursor: false }); // Use pixel perfect hit detection
+          .setInteractive({ pixelPerfect: true, useHandCursor: false });
 
         w.on('pointerdown', () => this.whack(w));
         this.wegens.push(w);
@@ -572,20 +355,14 @@ private handleUnload = () => {
     const W = this.scale.width;
     const BH = this.barHeight;
 
-    this.add
-      .graphics()
-      .fillStyle(0x2d3748, 0.85)
-      .fillRect(0, 0, W, BH)
-      .setDepth(10);
+    this.add.graphics().fillStyle(0x2d3748, 0.85).fillRect(0, 0, W, BH).setDepth(10);
 
     const scoreText = this.add
       .text(20, BH / 2, `Score: 0`, {
         fontSize: `${Math.round(BH * 0.4)}px`,
         color: '#FFFFFF',
         fontStyle: 'bold',
-      })
-      .setOrigin(0, 0.5)
-      .setDepth(11);
+      }).setOrigin(0, 0.5).setDepth(11);
 
     this.pauseButton = this.add
       .text(scoreText.getRightCenter().x + 60, BH / 2, '||', {
@@ -622,21 +399,15 @@ private handleUnload = () => {
       .setDisplaySize(BH * 0.7, BH * 0.7)
       .setOrigin(0, 0.5)
       .setDepth(11);
-    const mask = this.add
-      .graphics()
-      .fillCircle(avatar.getCenter().x, avatar.getCenter().y, BH * 0.35);
+    const mask = this.add.graphics().fillCircle(avatar.getCenter().x, avatar.getCenter().y, BH * 0.35);
     avatar.setMask(mask.createGeometryMask());
 
-    const fs = this.add
-      .text(W - 40, BH / 2, '[ ]', {
-        fontSize: `${Math.round(BH * 0.5)}px`,
-        color: '#FFFFFF',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5)
-      .setDepth(11)
-      .setInteractive({ useHandCursor: true });
-      fs.on('pointerdown', () => {
+    const fs = this.add.text(W - 40, BH / 2, '[ ]', {
+      fontSize: `${Math.round(BH * 0.5)}px`,
+      color: '#FFFFFF',
+      fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(11).setInteractive({ useHandCursor: true });
+    fs.on('pointerdown', () => {
       if (this.scale.isFullscreen) {
         this.scale.stopFullscreen();
       } else {
@@ -645,7 +416,6 @@ private handleUnload = () => {
     });
 
     this.ui = { score: scoreText, timer: timerText };
-
     this.barWidth = W - 40;
     this.timeBar = this.add.graphics().setDepth(11);
     this.updateTimeBarGraphics();
@@ -654,35 +424,27 @@ private handleUnload = () => {
   private updateTimeBarGraphics() {
     if (!this.timeBar) return;
     const ratio = Phaser.Math.Clamp(this.timeLeft / 60, 0, 1);
-    let color = 0x00ff00; // Green
-    if (ratio < 0.33) color = 0xff0000; // Red
-    else if (ratio < 0.66) color = 0xffff00; // Yellow
-
+    let color = 0x00ff00;
+    if (ratio < 0.33) color = 0xff0000;
+    else if (ratio < 0.66) color = 0xffff00;
     this.timeBar.clear();
     this.timeBar.fillStyle(color, 1);
     this.timeBar.fillRect(20, this.barHeight - 6, this.barWidth * ratio, 8);
   }
 
   private createPauseScreen() {
-    this.pauseOverlay = this.add
-      .graphics()
-      .fillStyle(0x000000, 0.7)
+    this.pauseOverlay = this.add.graphics().fillStyle(0x000000, 0.7)
       .fillRect(0, 0, this.scale.width, this.scale.height)
       .setDepth(20)
       .setVisible(false);
 
-    this.pauseText = this.add
-      .text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
-        fontSize: `${Math.round(this.barHeight * 1.2)}px`,
-        color: '#FFFFFF',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5)
-      .setDepth(21)
-      .setVisible(false);
+    this.pauseText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
+      fontSize: `${Math.round(this.barHeight * 1.2)}px`,
+      color: '#FFFFFF',
+      fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(21).setVisible(false);
   }
 
-  // ─── MAIN GAMELOOP ────────────────────────────────────────────────────────────
   private startGame() {
     this.isGameOver = false;
     this.isPaused = false;
@@ -698,10 +460,12 @@ private handleUnload = () => {
     this.ui?.timer.setText(`${this.timeLeft}`);
     this.updateTimeBarGraphics();
 
-    // Start background music
     if (this.cache.audio.exists('bgm')) {
-      this.bgm = this.sound.add('bgm', { loop: true, volume: 0.3 });
-      this.bgm.play();
+      this.instrBgm?.stop();
+      this.instrBgm = undefined;
+      const bgm = this.sound.add('bgm', { loop: true, volume: 0.3 });
+      bgm.play();
+      this.events.once('destroy', () => bgm.stop());
     }
 
     this.gameTimer?.destroy();
@@ -714,7 +478,6 @@ private handleUnload = () => {
       loop: true,
     });
 
-    // Dynamic popup timing based on difficulty
     this.popUpTimer = this.time.addEvent({
       delay: 800,
       callback: this.popUp,
@@ -729,11 +492,10 @@ private handleUnload = () => {
     this.ui?.timer.setText(`${this.timeLeft}`);
     this.updateTimeBarGraphics();
 
-    // Update popup frequency based on time left
     if (this.timeLeft < 20 && this.popUpTimer) {
       this.popUpTimer.destroy();
       this.popUpTimer = this.time.addEvent({
-        delay: 500, // Faster spawns in final seconds
+        delay: 500,
         callback: this.popUp,
         callbackScope: this,
         loop: true,
@@ -745,9 +507,8 @@ private handleUnload = () => {
 
   private getDifficultyStage() {
     const elapsed = (this.time.now - this.gameStartTime) / 1000;
-    const survivalBonus = Math.floor(this.timeLeft / 20); // Harder with more time
-
-    if (elapsed > 60 || survivalBonus > 2) return 4; // Ultra hard
+    const survivalBonus = Math.floor(this.timeLeft / 20);
+    if (elapsed > 60 || survivalBonus > 2) return 4;
     if (elapsed > 40 || survivalBonus > 1) return 3;
     if (elapsed > 20) return 2;
     return 1;
@@ -756,9 +517,7 @@ private handleUnload = () => {
   private getRandomCharacterType(): CharacterType {
     const stage = this.getDifficultyStage();
     let table: { type: CharacterType; weight: number }[] = [];
-
     if (stage === 4) {
-      // Ultra hard - more bombs, faster enemies
       table = [
         { type: 'wegen_normal', weight: 15 },
         { type: 'wegen_fast',   weight: 35 },
@@ -796,7 +555,6 @@ private handleUnload = () => {
         { type: 'mystery_box',  weight: 10 },
       ];
     }
-
     const total = table.reduce((sum, x) => sum + x.weight, 0);
     let pick = Math.random() * total;
     for (const item of table) {
@@ -808,14 +566,10 @@ private handleUnload = () => {
 
   private popUp() {
     if (this.isGameOver || this.isPaused) return;
-
     const avail = this.wegens.filter((w) => !w.getData('isUp'));
     if (!avail.length) return;
-
-    // Multiple spawns at higher difficulties
     const stage = this.getDifficultyStage();
     const spawnCount = stage >= 3 ? Phaser.Math.Between(1, 2) : 1;
-
     for (let i = 0; i < spawnCount && avail.length > i; i++) {
       const slot = Phaser.Utils.Array.RemoveRandomElement(avail);
       if (slot) {
@@ -827,9 +581,7 @@ private handleUnload = () => {
 
   private show(obj: Phaser.GameObjects.Sprite, type: CharacterType) {
     const info = CHARACTER_DATA[type];
-    const yOff = 30; // Much smaller movement for better overlap
-
-    // Dynamic hold times based on difficulty
+    const yOff = 30;
     const stage = this.getDifficultyStage();
     let hold = 650;
     let upSpeed = 200;
@@ -867,9 +619,7 @@ private handleUnload = () => {
   }
 
   private whack(obj: Phaser.GameObjects.Sprite) {
-    if (!obj.getData('isUp') || this.isGameOver || this.isPaused) {
-      return;
-    }
+    if (!obj.getData('isUp') || this.isGameOver || this.isPaused) return;
 
     const type = obj.getData('type') as CharacterType;
     const info = CHARACTER_DATA[type];
@@ -877,7 +627,6 @@ private handleUnload = () => {
     hitsLeft--;
     obj.setData('hitsLeft', hitsLeft);
 
-    // Calculate combo
     const now = this.time.now;
     if (now - this.lastHitTime < 1000) {
       this.comboCount++;
@@ -889,72 +638,50 @@ private handleUnload = () => {
     }
     this.lastHitTime = now;
 
-    // MULTI-HIT FEEDBACK
     if (hitsLeft > 0) {
-      const style: Phaser.Types.GameObjects.Text.TextStyle = {
-        fontSize: '32px',
-        color: type === 'mystery_box' ? '#ff0' : '#fff',
-        stroke: '#000',
-        strokeThickness: 4,
-      };
       if (type === 'mystery_box') {
         obj.setTint(0xffff00);
         this.time.delayedCall(100, () => obj.clearTint());
       } else if (type === 'wegen_tanky') {
-        // Flash red for tanky hits
         obj.setTint(0xff6666);
         this.time.delayedCall(100, () => obj.clearTint());
       }
-
-      const t = this.add
-        .text(obj.x, obj.y - obj.displayHeight - 4, `${hitsLeft}`, style)
-        .setOrigin(0.5);
+      const t = this.add.text(obj.x, obj.y - obj.displayHeight - 4, `${hitsLeft}`, {
+        fontSize: '32px', color: type === 'mystery_box' ? '#ff0' : '#fff', stroke: '#000', strokeThickness: 4,
+      }).setOrigin(0.5);
       this.tweens.add({
         targets: t,
         alpha: 0,
         duration: 400,
         onComplete: () => t.destroy(),
       });
-
       if (this.cache.audio.exists('sfx_whack')) {
         this.sound.play('sfx_whack', { volume: 0.7 });
       }
       return;
     }
 
-    // FINAL HIT
     obj.setData('isUp', false);
     obj.setVisible(false);
 
-    // Mystery Box
     if (type === 'mystery_box') {
       if (this.cache.audio.exists('sfx_mystery')) {
         this.sound.play('sfx_mystery', { volume: 0.8 });
       }
-
       const fx = Phaser.Math.Between(1, 4);
       if (fx === 1) {
-        // Time penalty
         this.timeLeft = Math.max(0, this.timeLeft - 10);
         this.cameras.main.shake(150, 0.02);
-        const txt = this.add
-          .text(obj.x, obj.y, '-10s', { fontSize: '32px', color: '#f00', stroke: '#000', strokeThickness: 4 })
-          .setOrigin(0.5);
+        const txt = this.add.text(obj.x, obj.y, '-10s', { fontSize: '32px', color: '#f00', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
         this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
       } else if (fx === 2) {
-        // Time bonus
         this.timeLeft += 5;
-        const txt = this.add
-          .text(obj.x, obj.y, '+5s', { fontSize: '32px', color: '#0f0', stroke: '#000', strokeThickness: 4 })
-          .setOrigin(0.5);
+        const txt = this.add.text(obj.x, obj.y, '+5s', { fontSize: '32px', color: '#0f0', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
         this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
       } else if (fx === 3) {
-        // Big points
         const bonus = 50;
         this.score += bonus;
-        const txt = this.add
-          .text(obj.x, obj.y, `+${bonus}!`, { fontSize: '36px', color: '#ffd700', stroke: '#000', strokeThickness: 4 })
-          .setOrigin(0.5);
+        const txt = this.add.text(obj.x, obj.y, `+${bonus}!`, { fontSize: '36px', color: '#ffd700', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
         this.tweens.add({
           targets: txt,
           y: txt.y - 50,
@@ -964,11 +691,8 @@ private handleUnload = () => {
           onComplete: () => txt.destroy()
         });
       } else {
-        // Small points
         this.score += 15;
-        const txt = this.add
-          .text(obj.x, obj.y, '+15', { fontSize: '32px', color: '#ffd700', stroke: '#000', strokeThickness: 4 })
-          .setOrigin(0.5);
+        const txt = this.add.text(obj.x, obj.y, '+15', { fontSize: '32px', color: '#ffd700', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
         this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
       }
       this.ui?.score.setText(`Score: ${this.score}`);
@@ -978,7 +702,6 @@ private handleUnload = () => {
       return;
     }
 
-    // Bomb
     if (type === 'bomb') {
       this.score = Math.max(0, this.score + info.points);
       this.cameras.main.shake(200, 0.025);
@@ -986,74 +709,51 @@ private handleUnload = () => {
         this.sound.play('sfx_bomb', { volume: 1 });
       }
       this.timeLeft = Math.max(0, this.timeLeft + (info.timePenalty ?? -15));
-      const explosion = this.add
-        .sprite(obj.x, obj.y - obj.displayHeight / 2, 'explosion')
-        .setScale(1.5)
-        .play('explode');
+      const explosion = this.add.sprite(obj.x, obj.y - obj.displayHeight / 2, 'explosion').setScale(1.5).play('explode');
       this.ui?.score.setText(`Score: ${this.score}`);
       this.ui?.timer.setText(`${this.timeLeft}`);
       this.updateTimeBarGraphics();
       if (this.timeLeft <= 0) this.endGame();
-      this.comboCount = 0; // Reset combo on bomb
+      this.comboCount = 0;
       return;
     }
 
-    // Clock
     if (type === 'clock') {
       this.timeLeft += info.timeBonus ?? 10;
       if (this.cache.audio.exists('sfx_clock')) {
         this.sound.play('sfx_clock', { volume: 0.8 });
       }
-      const txt = this.add
-        .text(obj.x, obj.y, `+${info.timeBonus}s`, {
-          fontSize: '32px',
-          color: '#0f0',
-          stroke: '#000',
-          strokeThickness: 4,
-        })
-        .setOrigin(0.5);
+      const txt = this.add.text(obj.x, obj.y, `+${info.timeBonus}s`, {
+        fontSize: '32px', color: '#0f0', stroke: '#000', strokeThickness: 4,
+      }).setOrigin(0.5);
       this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
       this.ui?.timer.setText(`${this.timeLeft}`);
       this.updateTimeBarGraphics();
       return;
     }
 
-    // Wegen types
     if (type.startsWith('wegen')) {
-      const w = this.add
-        .sprite(obj.x, obj.y, info.whackedSprite)
-        .setScale(obj.scaleX, obj.scaleY)
-        .setOrigin(0.5, 0.95);
+      const w = this.add.sprite(obj.x, obj.y, info.whackedSprite).setScale(obj.scaleX, obj.scaleY).setOrigin(0.5, 0.95);
       this.tweens.add({ targets: w, alpha: 0, duration: 400, onComplete: () => w.destroy() });
 
-      // Apply combo multiplier
-      const comboMultiplier = Math.min(1 + (this.comboCount * 0.1), 2); // Max 2x
+      const comboMultiplier = Math.min(1 + (this.comboCount * 0.1), 2);
       const points = Math.round(info.points * comboMultiplier);
       this.score += points;
 
-      // Perfect hit tracking
       if (type === 'wegen_fast') {
         this.perfectHits++;
       }
 
-      // Different sounds for different wegens
       if (type === 'wegen_golden' && this.cache.audio.exists('sfx_whack_golden')) {
         this.sound.play('sfx_whack_golden', { volume: 1 });
       } else if (this.cache.audio.exists('sfx_whack')) {
         this.sound.play('sfx_whack', { volume: 0.7 });
       }
 
-      // Show combo text
       if (this.comboCount > 2) {
-        const comboText = this.add
-          .text(obj.x, obj.y - 30, `COMBO x${this.comboCount}!`, {
-            fontSize: '24px',
-            color: '#ff00ff',
-            stroke: '#000',
-            strokeThickness: 4,
-            fontStyle: 'bold'
-          })
-          .setOrigin(0.5);
+        const comboText = this.add.text(obj.x, obj.y - 30, `COMBO x${this.comboCount}!`, {
+          fontSize: '24px', color: '#ff00ff', stroke: '#000', strokeThickness: 4, fontStyle: 'bold'
+        }).setOrigin(0.5);
         this.tweens.add({
           targets: comboText,
           y: comboText.y - 40,
@@ -1076,21 +776,19 @@ private handleUnload = () => {
       this.pauseButton?.setText('▶');
       this.pauseOverlay?.setVisible(true);
       this.pauseText?.setVisible(true);
-      this.setHammerCursorMode(false);
       if (this.gameTimer) this.gameTimer.paused = true;
       if (this.popUpTimer) this.popUpTimer.paused = true;
       this.tweens.pauseAll();
-      this.bgm?.pause();
+      this.sound.pauseAll();
       this.hammerCursor?.setVisible(false);
     } else {
-      this.setHammerCursorMode(true);
       this.pauseButton?.setText('||');
       this.pauseOverlay?.setVisible(false);
       this.pauseText?.setVisible(false);
       if (this.gameTimer) this.gameTimer.paused = false;
       if (this.popUpTimer) this.popUpTimer.paused = false;
       this.tweens.resumeAll();
-      this.bgm?.resume();
+      this.sound.resumeAll();
       this.hammerCursor?.setVisible(true);
     }
   }
@@ -1098,29 +796,25 @@ private handleUnload = () => {
   private endGame() {
     if (this.isGameOver) return;
     this.isGameOver = true;
-    this.setHammerCursorMode(false);
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
     this.wegens.forEach((w) => {
       this.tweens.killTweensOf(w);
       w.setVisible(false);
     });
-    this.bgm?.stop();
+    this.sound.stopAll();
     this.hammerCursor?.setVisible(false);
 
-    // Apply bonus for perfect play
     if (this.missCount === 0 && this.perfectHits > 10) {
       this.score = Math.round(this.score * 1.5);
       this.time.delayedCall(100, () => {
-        const bonusText = this.add
-          .text(this.scale.width / 2, this.scale.height / 2 - 100, 'PERFECT BONUS!', {
-            fontSize: '48px',
-            color: '#ffd700',
-            stroke: '#000',
-            strokeThickness: 6,
-            fontStyle: 'bold'
-          })
-          .setOrigin(0.5);
+        const bonusText = this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'PERFECT BONUS!', {
+          fontSize: '48px',
+          color: '#ffd700',
+          stroke: '#000',
+          strokeThickness: 6,
+          fontStyle: 'bold'
+        }).setOrigin(0.5);
         this.tweens.add({
           targets: bonusText,
           scale: 1.5,
@@ -1130,54 +824,31 @@ private handleUnload = () => {
         });
       });
     }
-
-    // emit global event once
-    setTimeout(() => this.game.events.emit('game-over', { score: this.score }), 100);
+    setTimeout(() => { if (this.onGameOver) this.onGameOver({ score: this.score }); }, 100);
   }
 
-  // --- FIX: Clean up resize handler on shutdown ---
   shutdown() {
-  // Remove event listeners
-  window.removeEventListener('beforeunload', this.handleUnload);
-  // Remove other listeners if needed
-
-  // Stop and destroy all music
-  if (this.bgm) {
-    this.bgm.stop();
-    this.bgm.destroy();
-    this.bgm = undefined;
+    window.removeEventListener('beforeunload', this.handleUnload);
+    if (this.instrBgm) { this.instrBgm.stop(); this.instrBgm.destroy(); }
+    this.sound.stopAll();
+    this.gameTimer?.destroy();
+    this.popUpTimer?.destroy();
+    this.wegens = [];
+    this.holes = [];
+    this.ui = undefined;
+    this.pauseOverlay = undefined;
+    this.pauseText = undefined;
+    this.pauseButton = undefined;
+    this.instructionContainer = undefined;
+    this.hammerCursor = undefined;
+    this.clickIndicator = undefined;
+    if (this.hasPointerListeners) {
+      this.input.off('pointermove');
+      this.input.off('pointerover');
+      this.input.off('pointerout');
+      this.input.off('pointerdown');
+      this.hasPointerListeners = false;
+    }
+    this.input.setDefaultCursor('auto');
   }
-  if (this.instrBgm) {
-    this.instrBgm.stop();
-    this.instrBgm.destroy();
-    this.instrBgm = undefined;
-  }
-
-  // Optionally stop all sounds
-  // this.sound.stopAll();
-
-  // Destroy timers
-  this.gameTimer?.destroy();
-  this.popUpTimer?.destroy();
-
-  // Clear arrays and UI
-  this.wegens = [];
-  this.holes = [];
-  this.ui = undefined;
-  this.pauseOverlay = undefined;
-  this.pauseText = undefined;
-  this.pauseButton = undefined;
-  this.instructionContainer = undefined;
-  this.hammerCursor = undefined;
-  this.clickIndicator = undefined;
-  if (this.hasPointerListeners) {
-    this.input.off('pointermove');
-    this.input.off('pointerover');
-    this.input.off('pointerout');
-    this.input.off('pointerdown');
-    this.hasPointerListeners = false;
-  }
-  // Restore cursor
-  this.input.setDefaultCursor('auto');
-}
 }

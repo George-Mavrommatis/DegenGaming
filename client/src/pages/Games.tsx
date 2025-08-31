@@ -63,8 +63,9 @@ export default function GamesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
-  const { user, firebaseAuthToken } = useProfile();
+  const { user, firebaseAuthToken, profile, refreshProfile } = useProfile();
 
+  // Free entry tokens state
   const [freeTokens, setFreeTokens] = useState<FreeEntryTokens | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true);
   const [errorTokens, setErrorTokens] = useState<string | null>(null);
@@ -73,6 +74,25 @@ export default function GamesPage() {
 
   const CATEGORY_ORDER = ['Picker', 'Arcade', 'Casino', 'PvP'];
   const sortedCategories = [...categories].sort((a, b) => CATEGORY_ORDER.indexOf(a.id) - CATEGORY_ORDER.indexOf(b.id));
+
+  // Get free entry tokens (from profile)
+  useEffect(() => {
+    if (!profile) {
+      setErrorTokens("No user profile loaded");
+      setFreeTokens(null);
+      setLoadingTokens(false);
+      return;
+    }
+    setLoadingTokens(true);
+    // Defensive: support both .arcadeTokens and .arcade
+    setFreeTokens({
+      arcadeTokens: profile.freeEntryTokens?.arcadeTokens ?? profile.freeEntryTokens?.arcade ?? 0,
+      pickerTokens: profile.freeEntryTokens?.pickerTokens ?? profile.freeEntryTokens?.picker ?? 0,
+      casinoTokens: profile.freeEntryTokens?.casinoTokens ?? profile.freeEntryTokens?.casino ?? 0,
+      pvpTokens: profile.freeEntryTokens?.pvpTokens ?? profile.freeEntryTokens?.pvp ?? 0,
+    });
+    setLoadingTokens(false);
+  }, [profile]);
 
   useEffect(() => {
     if (!firebaseAuthToken) {
@@ -128,7 +148,7 @@ export default function GamesPage() {
         <p className="text-xs text-slate-300 mb-1">{game.description}</p>
         {game.solGathered !== undefined && game.solDistributed !== undefined && (
           <div className="text-[11px] text-amber-200 bg-gray-950/30 p-2 mt-1 rounded-md leading-tight">
-            Last month we gathered <span className="font-bold text-yellow-300">{game.solGathered} SOL</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{game.solDistributed} SOL</span>.
+            Last month we gathered <span className="font-bold text-yellow-300">{game.solGathered} SOL</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{game.solDistributed} SOL</span>
           </div>
         )}
         <button
@@ -217,7 +237,7 @@ export default function GamesPage() {
               <h2 className="text-4xl font-bold text-white mb-4">Inauguration Month of Degen Gaming</h2>
               <p className="text-slate-300 text-lg mb-6">Use our Picker Games with their minimal fee drawing a winner from a list of Degen Users or simply wallets for your giveaway!</p>
               <p className="text-slate-300 text-lg mb-6">Compete across all Arcade Games for Monthly payouts to the Top 5 Degen Players of the month!</p>
-              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-full text-white font-bold shadow transition-all duration-200">
+              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-lg text-white font-bold shadow">
                 Wack A Wegen to celebrate with us! <FaArrowRight />
               </Link>
             </div>
@@ -244,6 +264,7 @@ export default function GamesPage() {
           </div>
         </div>
 
+        {/* Picker Modal */}
         {modalGame && modalGame.category === "Picker" && (
           <PickerInitModal
             isOpen={!!modalGame}
@@ -266,7 +287,6 @@ export default function GamesPage() {
                 return;
               }
               setModalGame(null);
-              // Route to the game, passing gameConfig in location.state
               navigate(modalGame.route, { state: { gameConfig: gameConfigFromModal } });
             }}
             onError={msg => {
@@ -279,7 +299,38 @@ export default function GamesPage() {
           />
         )}
 
-        {/* Arcade, Casino, PvP modals not shown for brevity, keep yours as in your code */}
+        {/* Arcade Modal */}
+        {modalGame && modalGame.category === "Arcade" && (
+          <ArcadeInitModal
+            isOpen={!!modalGame}
+            gameId={modalGame.id}
+            category={modalGame.category}
+            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
+            destinationWallet={PLATFORM_WALLET}
+            gameTitle={modalGame.title}
+            arcadeFreeEntryTokens={freeTokens?.arcadeTokens ?? 0}
+            onSuccess={(result) => {
+              setModalGame(null);
+              if (!modalGame.route) {
+                toast.error("Game route not configured. Please try another game.");
+                return;
+              }
+              // result: { txSig?, usedFreeToken? }
+              if (result && result.usedFreeToken) {
+                toast.success("Arcade Free Entry Token used!");
+                refreshProfile();
+              }
+              navigate(modalGame.route, { state: result });
+            }}
+            onError={msg => {
+              setModalGame(null);
+              toast.error(`Game initiation failed: ${msg}`);
+            }}
+            onClose={() => setModalGame(null)}
+          />
+        )}
+
+        {/* If you want to add Casino/PvP modals, follow the above pattern */}
       </div>
     </div>
   );
