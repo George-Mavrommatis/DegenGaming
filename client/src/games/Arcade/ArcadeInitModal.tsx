@@ -6,9 +6,10 @@ import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Connection } f
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createTransferInstruction } from "@solana/spl-token";
 import { useProfile } from "../../context/ProfileContext";
 import { api } from '../../services/api';
+import { getArcadeFreeEntryTokens } from "../../utilities/token";
 
 const FIXED_SOL_ENTRY_FEE = 0.005;
-const FIXED_CJT_ENTRY_FEE = 5; // You can set the CJT fee as needed
+const FIXED_CJT_ENTRY_FEE = 5; // CJT fee, adjust if needed
 const CJT_MINT_ADDRESS = "7ztGsbEkbSzeeUgm3SwCp6hkmaJe3Gwi4zgvANKSfYML";
 const FONT_FAMILY = "'WegensFont', Orbitron, Arial, sans-serif";
 
@@ -42,9 +43,7 @@ export default function ArcadeInitModal(props: any) {
   const [txSig, setTxSig] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'CJT' | 'FREE' | null>(null);
-
-  const tokensObj = profile?.freeEntryTokens || {};
-  const arcadeFreeEntryTokens = Math.max(tokensObj.arcade ?? 0, tokensObj.arcadeTokens ?? 0);
+   const arcadeFreeEntryTokens = getArcadeFreeEntryTokens(profile);
 
   const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
   const connection = (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed');
@@ -65,8 +64,8 @@ export default function ArcadeInitModal(props: any) {
 
     try {
       if (method === "FREE") {
+        // Robust: Only allow if user actually has a token in profile
         if (arcadeFreeEntryTokens <= 0) throw new Error("No Arcade Free Entry Tokens available.");
-        // Just route, do NOT consume here; parent will consume later
         setStep("done");
         onSuccess({ paid: false, useArcadeFreeEntry: true });
         return;
@@ -113,7 +112,7 @@ export default function ArcadeInitModal(props: any) {
         setTxSig(transactionSignature);
         toast.success("Payment successful on Solana!");
 
-        // Grant free arcade token as receipt
+        // Grant free arcade token as receipt & wait for profile update
         await api.post('/tokens/generate', { tokenType: "arcade" }, {
           headers: { Authorization: `Bearer ${firebaseAuthToken}` }
         });
@@ -131,7 +130,6 @@ export default function ArcadeInitModal(props: any) {
           throw new Error("Wallet not available. Please connect your wallet.");
         }
         if (!connection) throw new Error("Solana RPC connection not available.");
-        // 1. Get user's CJT associated token account
         const mint = new PublicKey(CJT_MINT_ADDRESS);
         const sourceATA = await getAssociatedTokenAddress(mint, wallet.publicKey);
         const destATA = await getAssociatedTokenAddress(mint, new PublicKey(destinationWallet));
@@ -142,13 +140,12 @@ export default function ArcadeInitModal(props: any) {
         tx.lastValidBlockHeight = lastValidBlockHeight;
         tx.feePayer = wallet.publicKey!;
 
-        // Transfer CJT
         tx.add(
           createTransferInstruction(
             sourceATA,
             destATA,
             wallet.publicKey!,
-            FIXED_CJT_ENTRY_FEE, // Amount in base units (assuming CJT has 0 decimals, adjust if needed)
+            FIXED_CJT_ENTRY_FEE, // Amount in base units (adjust if CJT has decimals)
             [],
             TOKEN_PROGRAM_ID
           )
@@ -175,7 +172,6 @@ export default function ArcadeInitModal(props: any) {
         setTxSig(transactionSignature);
         toast.success("Payment successful with CJT!");
 
-        // Grant free arcade token as receipt
         await api.post('/tokens/generate', { tokenType: "arcade" }, {
           headers: { Authorization: `Bearer ${firebaseAuthToken}` }
         });

@@ -69,6 +69,7 @@ export class WackAWegenScene extends Phaser.Scene {
   private currentSlide = 0;
   private instrBgm?: Phaser.Sound.BaseSound;
   private shouldConsumeFreeToken = false;
+  private paid = false;
   private onConsumeFreeToken?: () => Promise<boolean>;
   private onReadyToStartGame?: () => void;
   private onGameOver?: (e: { score: number }) => void;
@@ -92,6 +93,7 @@ export class WackAWegenScene extends Phaser.Scene {
     this.txSig = data.txSig;
     this.skipInstructions = !!data.skipInstructions;
     this.shouldConsumeFreeToken = !!data.shouldConsumeFreeToken;
+    this.paid = !!data.paid;
     this.onConsumeFreeToken = data.onConsumeFreeToken;
     this.onReadyToStartGame = data.onReadyToStartGame;
     this.onGameOver = data.onGameOver;
@@ -223,10 +225,10 @@ export class WackAWegenScene extends Phaser.Scene {
     ];
   }
 
-  private async showInstructions() {
+  async showInstructions() {
     const w = this.scale.width;
     const h = this.scale.height;
-    const overlay = this.add.graphics().fillStyle(0x000000, 0.8).fillRect(0, 0, w, h);
+    const overlay = this.add.graphics().fillStyle(0x011030, 0.92).fillRect(0, 0, w, h);
     const c = this.add.container(0, 0);
     this.instructionContainer = c;
     if (this.cache.audio.exists('bgm')) {
@@ -235,37 +237,78 @@ export class WackAWegenScene extends Phaser.Scene {
       this.events.once('destroy', () => this.instrBgm?.stop());
     }
 
-    const imgY = h * 0.35;
-    const titleY = h * 0.60;
-    const descY = h * 0.68;
-    const btnY = h * 0.85;
+    const imgY = h * 0.32;
+    const titleY = h * 0.53;
+    const descY = h * 0.60;
+    const btnY = h * 0.78;
 
-    const img = this.add.image(w / 2, imgY, '').setOrigin(0.5).setDisplaySize(w * 0.7, h * 0.4);
+    const img = this.add.image(w / 2, imgY, 'instr_1').setOrigin(0.5).setDisplaySize(w * 0.7, h * 0.35);
     const title = this.add
-      .text(w / 2, titleY, '', { fontSize: '32px', color: '#FFD93B', fontStyle: 'bold' })
+      .text(w / 2, titleY, '', {
+        fontSize: '44px',
+        fontStyle: 'bold',
+        color: '#FFD93B',
+        stroke: '#fff',
+        strokeThickness: 6,
+        fontFamily: 'Orbitron, Arial, sans-serif',
+        shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 16, fill: true }
+      })
       .setOrigin(0.5);
+
     const desc = this.add
-      .text(w / 2, descY, '', { fontSize: '24px', color: '#FFFFFF', align: 'center' })
+      .text(w / 2, descY, '', {
+        fontSize: '30px',
+        fontFamily: 'Orbitron, Arial, sans-serif',
+        color: '#ffffff',
+        align: 'center',
+        fontStyle: 'bold',
+        stroke: '#23235a',
+        strokeThickness: 4,
+        shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 10, fill: true }
+      })
       .setOrigin(0.5);
 
     const back = this.add
-      .text(w * 0.25, btnY, '< Back', { fontSize: '28px', color: '#FFF' })
+      .text(w * 0.23, btnY, '< Back', {
+        fontSize: '32px',
+        color: '#FFD93B',
+        fontFamily: 'Orbitron, Arial, sans-serif',
+        stroke: '#000',
+        strokeThickness: 4,
+      })
       .setOrigin(0.5)
-      .setAlpha(0.6)
+      .setAlpha(0.8)
       .setInteractive({ useHandCursor: true });
+
     const next = this.add
-      .text(w * 0.75, btnY, 'Next >', { fontSize: '28px', color: '#FFF' })
+      .text(w * 0.77, btnY, 'Next >', {
+        fontSize: '32px',
+        color: '#FFD93B',
+        fontFamily: 'Orbitron, Arial, sans-serif',
+        stroke: '#000',
+        strokeThickness: 4,
+      })
       .setOrigin(0.5)
-      .setAlpha(0.6)
+      .setAlpha(0.8)
       .setInteractive({ useHandCursor: true });
+
     const startBtn = this.add
-      .text(w / 2, btnY, 'Start Game', { fontSize: '32px', color: '#00FF00', fontStyle: 'bold' })
+      .text(w / 2, btnY + 70, 'Start Game', {
+        fontSize: '42px',
+        color: '#00FF00',
+        fontFamily: 'Orbitron, Arial, sans-serif',
+        fontStyle: 'bold',
+        stroke: '#23235a',
+        strokeThickness: 6,
+        shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 10, fill: true }
+      })
       .setOrigin(0.5)
       .setVisible(false)
       .setInteractive({ useHandCursor: true });
 
     c.add([overlay, img, title, desc, back, next, startBtn]);
 
+    this.currentSlide = 0;
     const render = () => {
       const slide = this.instructionSlides[this.currentSlide];
       img.setTexture(slide.key);
@@ -288,7 +331,8 @@ export class WackAWegenScene extends Phaser.Scene {
 
     startBtn.on('pointerdown', async () => {
       startBtn.setAlpha(0.7);
-      if (this.shouldConsumeFreeToken && this.onConsumeFreeToken) {
+      // Robust: only consume if needed, and only if user has token (frontend checks again)
+      if (this.shouldConsumeFreeToken && !this.paid && this.onConsumeFreeToken) {
         startBtn.setText('Checking Free Token...');
         const success = await this.onConsumeFreeToken();
         if (!success) {

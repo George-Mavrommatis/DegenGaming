@@ -8,6 +8,7 @@ import { useProfile } from "../../../context/ProfileContext";
 import { saveWackAWegenScore } from "../../../firebase/gamescores";
 import { WackAWegenScene } from "./WackAWegenScene";
 import { api } from '../../../services/api';
+import { getArcadeFreeEntryTokens } from "../../../utilities/token";
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
@@ -24,7 +25,7 @@ export default function WackAWegen() {
   const location = useLocation();
 
   // Extract entry type from navigation (paid or free)
-  const { txSig, useArcadeFreeEntry } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean };
+  const { txSig, useArcadeFreeEntry, paid } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean };
 
   const [showInitModal, setShowInitModal] = useState(!txSig && !useArcadeFreeEntry);
   const [gameStarted, setGameStarted] = useState(false);
@@ -34,22 +35,32 @@ export default function WackAWegen() {
   const [tokenError, setTokenError] = useState<string | null>(null);
 
   // Arcade free token consumption, handled by Phaser callback
-  const handleConsumeFreeToken = async () => {
-    try {
-      await api.post(
-        "/tokens/consume",
-        { tokenType: "arcade" },
-        { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
-      );
-      toast.success("Arcade Free Entry Token consumed!");
-      await refreshProfile();
-      return true;
-    } catch (err: any) {
-      setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
-      toast.error(tokenError || "Failed to consume Arcade Free Entry Token.");
-      return false;
-    }
-  };
+const handleConsumeFreeToken = async () => {
+  // Only attempt to consume if (useArcadeFreeEntry && !paid)
+  if (!useArcadeFreeEntry || paid) {
+    return true; // No consumption needed, just start game
+  }
+  const tokens = getArcadeFreeEntryTokens(profile);
+  if (tokens <= 0) {
+    setTokenError("You have no Arcade Free Entry Tokens to consume.");
+    toast.error("No arcade tokens available to consume.");
+    return false;
+  }
+  try {
+    await api.post(
+      "/tokens/consume",
+      { tokenType: "arcade" },
+      { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
+    );
+    toast.success("Arcade Free Entry Token consumed!");
+    await refreshProfile();
+    return true;
+  } catch (err: any) {
+    setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
+    toast.error(tokenError || "Failed to consume Arcade Free Entry Token.");
+    return false;
+  }
+};
 
   // Game Over Handler
   const handleGameOver = useCallback(async (event: { score: number }) => {
@@ -87,19 +98,20 @@ export default function WackAWegen() {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
       onGameOver: handleGameOver,
-      skipInstructions: false, // Always show instructions in scene
+      skipInstructions: false,
       txSig: txSig,
       shouldConsumeFreeToken: useArcadeFreeEntry ? true : false,
+      paid: paid,
       onConsumeFreeToken: handleConsumeFreeToken,
       onReadyToStartGame: () => setGameStarted(true),
     });
     // Cleanup
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
   // eslint-disable-next-line
-  }, [showInitModal, profile, txSig, useArcadeFreeEntry]);
+  }, [showInitModal, profile, txSig, useArcadeFreeEntry, paid]);
 
   // ArcadeInitModal handlers
-  const handleInitSuccess = async (result: { txSig?: string; useArcadeFreeEntry?: boolean }) => {
+  const handleInitSuccess = async (result: { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean }) => {
     setShowInitModal(false);
     setGameState('PLAYING');
     // If paid, update backend stats
