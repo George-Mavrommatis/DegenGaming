@@ -24,93 +24,20 @@ export default function WackAWegen() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Extract entry type from navigation (paid or free)
+  // Entry config (from navigation)
   const { txSig, useArcadeFreeEntry, paid } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean };
 
+  // State for flow
   const [showInitModal, setShowInitModal] = useState(!txSig && !useArcadeFreeEntry);
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [shouldStartGame, setShouldStartGame] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [coinsEarned, setCoinsEarned] = useState<number>(0);
   const [gameState, setGameState] = useState<'IDLE'|'PAYING'|'PLAYING'|'GAME_OVER'>('IDLE');
   const [tokenError, setTokenError] = useState<string | null>(null);
 
-  // Arcade free token consumption, handled by Phaser callback
-const handleConsumeFreeToken = async () => {
-  // Only attempt to consume if (useArcadeFreeEntry && !paid)
-  if (!useArcadeFreeEntry || paid) {
-    return true; // No consumption needed, just start game
-  }
-  const tokens = getArcadeFreeEntryTokens(profile);
-  if (tokens <= 0) {
-    setTokenError("You have no Arcade Free Entry Tokens to consume.");
-    toast.error("No arcade tokens available to consume.");
-    return false;
-  }
-  try {
-    await api.post(
-      "/tokens/consume",
-      { tokenType: "arcade" },
-      { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
-    );
-    toast.success("Arcade Free Entry Token consumed!");
-    await refreshProfile();
-    return true;
-  } catch (err: any) {
-    setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
-    toast.error(tokenError || "Failed to consume Arcade Free Entry Token.");
-    return false;
-  }
-};
-
-  // Game Over Handler
-  const handleGameOver = useCallback(async (event: { score: number }) => {
-    setFinalScore(event.score);
-    setCoinsEarned(Math.floor(event.score / 10));
-    setGameState('GAME_OVER');
-    if (!profile) {
-      toast.error("Could not save score: User profile not found.");
-      return;
-    }
-    try {
-      await saveWackAWegenScore(profile, event.score);
-      toast.success(`Score of ${event.score} saved!`);
-    } catch (error) {
-      toast.error("There was an issue saving your score.");
-    }
-  }, [profile]);
-
-  // Phaser mount: only after modal is closed and txSig/useArcadeFreeEntry is set
-  useEffect(() => {
-    if (showInitModal || !profile || !gameContainerRef.current || gameStarted) return;
-    if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
-    const config: Phaser.Types.Core.GameConfig = {
-      type: Phaser.AUTO,
-      parent: gameContainerRef.current,
-      width: GAME_WIDTH,
-      height: GAME_HEIGHT,
-      scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
-      backgroundColor: "#000000",
-      scene: [WackAWegenScene],
-    };
-    const game = new Phaser.Game(config);
-    gameRef.current = game;
-    game.scene.start("WackAWegenScene", {
-      username: profile.username,
-      avatarUrl: profile.avatarUrl,
-      onGameOver: handleGameOver,
-      skipInstructions: false,
-      txSig: txSig,
-      shouldConsumeFreeToken: useArcadeFreeEntry ? true : false,
-      paid: paid,
-      onConsumeFreeToken: handleConsumeFreeToken,
-      onReadyToStartGame: () => setGameStarted(true),
-    });
-    // Cleanup
-    return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
-  // eslint-disable-next-line
-  }, [showInitModal, profile, txSig, useArcadeFreeEntry, paid]);
-
-  // ArcadeInitModal handlers
+  // Step 1: ArcadeInitModal (payment/free entry)
   const handleInitSuccess = async (result: { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean }) => {
     setShowInitModal(false);
     setGameState('PLAYING');
@@ -131,7 +58,7 @@ const handleConsumeFreeToken = async () => {
         toast.error("Failed to update platform stats!");
       }
     }
-    // Navigation state is not required; stay on page
+    setShowInstructions(true);
   };
 
   const handleInitError = (msg: string) => {
@@ -140,15 +67,91 @@ const handleConsumeFreeToken = async () => {
     setGameState('IDLE');
   };
 
+  // Step 2: Instructions overlay
+  const handleInstructionsDone = async () => {
+    setTokenError(null); // clear any previous error
+    // If free entry, consume token
+    if (useArcadeFreeEntry && !paid) {
+      const tokens = getArcadeFreeEntryTokens(profile);
+      if (tokens <= 0) {
+        setTokenError("You have no Arcade Free Entry Tokens to consume.");
+        toast.error("No arcade tokens available to consume.");
+        return;
+      }
+      try {
+        await api.post(
+          "/tokens/consume",
+          { tokenType: "arcade" },
+          { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
+        );
+        toast.success("Arcade Free Entry Token consumed!");
+        await refreshProfile();
+      } catch (err: any) {
+        setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
+        toast.error(tokenError || "Failed to consume Arcade Free Entry Token.");
+        return;
+      }
+    }
+    setShowInstructions(false);
+    setShouldStartGame(true);
+  };
+
+  // Step 3: Mount Phaser only when shouldStartGame
+  useEffect(() => {
+    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted) return;
+    if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
+    const config: Phaser.Types.Core.GameConfig = {
+      type: Phaser.AUTO,
+      parent: gameContainerRef.current,
+      width: GAME_WIDTH,
+      height: GAME_HEIGHT,
+      scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+      backgroundColor: "#000000",
+      scene: [WackAWegenScene],
+    };
+    const game = new Phaser.Game(config);
+    gameRef.current = game;
+    game.scene.start("WackAWegenScene", {
+      username: profile.username,
+      avatarUrl: profile.avatarUrl,
+      txSig,
+      paid,
+      skipInstructions: true, // always skip, parent shows instructions
+      onGameOver: handleGameOver,
+      onReadyToStartGame: () => setGameStarted(true),
+    });
+    return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
+    // eslint-disable-next-line
+  }, [shouldStartGame, profile, txSig, paid, gameStarted]);
+
+  // Game Over Handler
+  const handleGameOver = useCallback(async (event: { score: number }) => {
+    setFinalScore(event.score);
+    setCoinsEarned(Math.floor(event.score / 10));
+    setGameState('GAME_OVER');
+    if (!profile) {
+      toast.error("Could not save score: User profile not found.");
+      return;
+    }
+    try {
+      await saveWackAWegenScore(profile, event.score);
+      toast.success(`Score of ${event.score} saved!`);
+    } catch (error) {
+      toast.error("There was an issue saving your score.");
+    }
+  }, [profile]);
+
   const restartGame = () => {
     setFinalScore(null);
     setCoinsEarned(0);
     setGameStarted(false);
     setGameState('IDLE');
     setShowInitModal(true);
+    setShowInstructions(false);
+    setShouldStartGame(false);
+    setTokenError(null);
   };
 
-  // Fullscreen handler
   const handleFullscreen = () => {
     const canvas = gameContainerRef.current?.querySelector("canvas");
     if (canvas) {
@@ -187,7 +190,7 @@ const handleConsumeFreeToken = async () => {
           <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32 }} />
         </button>
       </div>
-      {/* Game Container (Phaser mounts here after modal) */}
+      {/* Game Container (Phaser mounts here after everything is ready) */}
       <div
         ref={gameContainerRef}
         id="phaser-container"
@@ -221,10 +224,28 @@ const handleConsumeFreeToken = async () => {
           onClose={() => setShowInitModal(false)}
         />
       )}
-      {/* Show error if token consumption fails */}
-      {tokenError && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-red-800 text-white px-6 py-3 rounded-lg shadow-lg z-50 font-bold">
-          {tokenError}
+      {/* Game Instructions (parent controlled) */}
+      {showInstructions && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90">
+          <div className="w-full max-w-2xl mx-auto p-8 rounded-2xl bg-zinc-900 shadow-2xl flex flex-col items-center">
+            <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron">WackAWegen Instructions</h2>
+            <ul className="space-y-4 mb-4 text-lg text-white font-medium">
+              <li>Power-Ups & Penalties: Bombs lose time, Clock gains time, Mystery is random, Golden Wegen gives big points!</li>
+              <li>Scoring & Combos: Normal 10pts, Fast 25pts, Tanky 50pts (3 hits), Golden 150pts, Hit fast for COMBOS!</li>
+              <li>Pro Tips: Chain hits for combos, Avoid near misses, Time bonuses get harder, Watch for patterns!</li>
+            </ul>
+            {tokenError && (
+              <div className="w-full rounded py-2 px-3 mb-3 text-center text-red-200 text-xs bg-red-800 font-semibold shadow">
+                {tokenError}
+              </div>
+            )}
+            <button
+              className="w-full py-4 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-xl font-bold shadow-lg hover:scale-105 transition-transform"
+              onClick={handleInstructionsDone}
+            >
+              Start Game
+            </button>
+          </div>
         </div>
       )}
       {/* Game Over Modal */}

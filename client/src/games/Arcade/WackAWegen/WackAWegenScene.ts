@@ -24,15 +24,6 @@ interface UIType {
   timer: Phaser.GameObjects.Text;
 }
 
-interface InstructionSlide {
-  key: string;
-  title: string;
-  description: string;
-}
-
-const hammerHeadOriginX = 0.85;
-const hammerHeadOriginY = 0.8;
-
 export class WackAWegenScene extends Phaser.Scene {
   private score = 0;
   private timeLeft = 60;
@@ -64,10 +55,6 @@ export class WackAWegenScene extends Phaser.Scene {
   private avatarUrl = '/placeholder-avatar.png';
   private txSig?: string;
 
-  private instructionContainer?: Phaser.GameObjects.Container;
-  private instructionSlides: InstructionSlide[] = [];
-  private currentSlide = 0;
-  private instrBgm?: Phaser.Sound.BaseSound;
   private shouldConsumeFreeToken = false;
   private paid = false;
   private onConsumeFreeToken?: () => Promise<boolean>;
@@ -75,10 +62,6 @@ export class WackAWegenScene extends Phaser.Scene {
   private onGameOver?: (e: { score: number }) => void;
 
   private hasResizeHandler = false;
-  private resizeRestartTimer?: number;
-  private lastWidth = 0;
-  private lastHeight = 0;
-
   private hammerCursor?: Phaser.GameObjects.Image;
   private clickIndicator?: Phaser.GameObjects.Graphics;
   private hasPointerListeners = false;
@@ -113,15 +96,14 @@ export class WackAWegenScene extends Phaser.Scene {
     this.load.image('bomb', '/WackAWegenAssets/bomb.png');
     this.load.image('clock', '/WackAWegenAssets/clock.png');
     this.load.image('mystery_box', '/WackAWegenAssets/mysteryS.png');
-    this.load.image('instr_1', '/WackAWegenAssets/BG-Wack.png');
-    this.load.image('instr_2', '/WackAWegenAssets/BG-Wack.png');
-    this.load.image('instr_3', '/WackAWegenAssets/BG-Wack.png');
     this.load.image('hammer', '/WackAWegenAssets/hammer.png');
     this.load.image('near_miss', '/WackAWegenAssets/miss.png');
     this.load.spritesheet('explosion', '/WackAWegenAssets/explosionS.png', {
       frameWidth: 128,
       frameHeight: 128,
     });
+
+    this.load.image('userAvatar', this.avatarUrl);
 
     const audioFiles = [
       { key: 'bgm', paths: ['../sounds/WackAWegen/grid.mp3', '/sounds/WackAWegen/grid.mp3'] },
@@ -133,15 +115,11 @@ export class WackAWegenScene extends Phaser.Scene {
       { key: 'sfx_miss', paths: ['../sounds/WackAWegen/miss.wav', '/sounds/WackAWegen/miss.wav'] },
       { key: 'sfx_combo', paths: ['../sounds/WackAWegen/combo.wav', '/sounds/WackAWegen/combo.wav'] },
     ];
-
     audioFiles.forEach(({ key, paths }) => {
       this.load.audio(key, paths);
     });
 
     this.load.crossOrigin = 'anonymous';
-    this.load.image('userAvatar', this.avatarUrl);
-    this.load.crossOrigin = null;
-
     this.load.on('loaderror', (file: any) => {
       console.error('[WackAWegenScene] Asset failed to load:', file.key, file.src);
       if (file.type === 'audio') {
@@ -185,16 +163,13 @@ export class WackAWegenScene extends Phaser.Scene {
     }
 
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      // Adjust UI elements here if needed
+      // handle resize if needed
     });
 
-    if (this.skipInstructions) {
-      this.buildGame();
-      this.startGame();
-    } else {
-      this.buildInstructionSlides();
-      this.showInstructions();
-    }
+    // Always skip instructions for parent-driven flow
+    this.buildGame();
+    this.startGame();
+    if (this.onReadyToStartGame) this.onReadyToStartGame();
   }
 
   private handleUnload = () => {
@@ -202,152 +177,6 @@ export class WackAWegenScene extends Phaser.Scene {
       this.endGame();
     }
   };
-
-  private buildInstructionSlides() {
-    this.instructionSlides = [
-      {
-        key: 'instr_1',
-        title: 'Power-Ups & Penalties',
-        description:
-          '- Bombs: lose time & shake\n- Clock: gain time\n- Mystery: random bonus\n- Golden Wegen: big points!',
-      },
-      {
-        key: 'instr_2',
-        title: 'Scoring & Combos',
-        description: '- Normal: 10pts\n- Fast: 25pts\n- Tanky: 50pts (3 hits)\n- Golden: 150pts\n\nHit fast for COMBOS!',
-      },
-      {
-        key: 'instr_3',
-        title: 'Pro Tips',
-        description:
-          '- Chain hits for combo multipliers\n- Avoid near misses\n- Time bonuses get harder\n- Watch for patterns!',
-      },
-    ];
-  }
-
-  async showInstructions() {
-    const w = this.scale.width;
-    const h = this.scale.height;
-    const overlay = this.add.graphics().fillStyle(0x011030, 0.92).fillRect(0, 0, w, h);
-    const c = this.add.container(0, 0);
-    this.instructionContainer = c;
-    if (this.cache.audio.exists('bgm')) {
-      this.instrBgm = this.sound.add('bgm', { loop: true, volume: 0.22 });
-      this.instrBgm.play();
-      this.events.once('destroy', () => this.instrBgm?.stop());
-    }
-
-    const imgY = h * 0.32;
-    const titleY = h * 0.53;
-    const descY = h * 0.60;
-    const btnY = h * 0.78;
-
-    const img = this.add.image(w / 2, imgY, 'instr_1').setOrigin(0.5).setDisplaySize(w * 0.7, h * 0.35);
-    const title = this.add
-      .text(w / 2, titleY, '', {
-        fontSize: '44px',
-        fontStyle: 'bold',
-        color: '#FFD93B',
-        stroke: '#fff',
-        strokeThickness: 6,
-        fontFamily: 'Orbitron, Arial, sans-serif',
-        shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 16, fill: true }
-      })
-      .setOrigin(0.5);
-
-    const desc = this.add
-      .text(w / 2, descY, '', {
-        fontSize: '30px',
-        fontFamily: 'Orbitron, Arial, sans-serif',
-        color: '#ffffff',
-        align: 'center',
-        fontStyle: 'bold',
-        stroke: '#23235a',
-        strokeThickness: 4,
-        shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 10, fill: true }
-      })
-      .setOrigin(0.5);
-
-    const back = this.add
-      .text(w * 0.23, btnY, '< Back', {
-        fontSize: '32px',
-        color: '#FFD93B',
-        fontFamily: 'Orbitron, Arial, sans-serif',
-        stroke: '#000',
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.8)
-      .setInteractive({ useHandCursor: true });
-
-    const next = this.add
-      .text(w * 0.77, btnY, 'Next >', {
-        fontSize: '32px',
-        color: '#FFD93B',
-        fontFamily: 'Orbitron, Arial, sans-serif',
-        stroke: '#000',
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.8)
-      .setInteractive({ useHandCursor: true });
-
-    const startBtn = this.add
-      .text(w / 2, btnY + 70, 'Start Game', {
-        fontSize: '42px',
-        color: '#00FF00',
-        fontFamily: 'Orbitron, Arial, sans-serif',
-        fontStyle: 'bold',
-        stroke: '#23235a',
-        strokeThickness: 6,
-        shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 10, fill: true }
-      })
-      .setOrigin(0.5)
-      .setVisible(false)
-      .setInteractive({ useHandCursor: true });
-
-    c.add([overlay, img, title, desc, back, next, startBtn]);
-
-    this.currentSlide = 0;
-    const render = () => {
-      const slide = this.instructionSlides[this.currentSlide];
-      img.setTexture(slide.key);
-      title.setText(slide.title);
-      desc.setText(slide.description);
-      back.setVisible(this.currentSlide > 0);
-      next.setVisible(this.currentSlide < this.instructionSlides.length - 1);
-      startBtn.setVisible(this.currentSlide === this.instructionSlides.length - 1);
-    };
-    render();
-
-    back.on('pointerdown', () => {
-      this.currentSlide = Math.max(0, this.currentSlide - 1);
-      render();
-    });
-    next.on('pointerdown', () => {
-      this.currentSlide = Math.min(this.instructionSlides.length - 1, this.currentSlide + 1);
-      render();
-    });
-
-    startBtn.on('pointerdown', async () => {
-      startBtn.setAlpha(0.7);
-      // Robust: only consume if needed, and only if user has token (frontend checks again)
-      if (this.shouldConsumeFreeToken && !this.paid && this.onConsumeFreeToken) {
-        startBtn.setText('Checking Free Token...');
-        const success = await this.onConsumeFreeToken();
-        if (!success) {
-          startBtn.setText('Start Game');
-          startBtn.setAlpha(1);
-          return;
-        }
-      }
-      c.destroy(true);
-      if (this.instrBgm) this.instrBgm.stop();
-      if (this.onReadyToStartGame) this.onReadyToStartGame();
-      this.buildGame();
-      this.startGame();
-    });
-  }
 
   private buildGame() {
     this.createHoleGrid();
@@ -417,6 +246,7 @@ export class WackAWegenScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(11)
       .setInteractive({ useHandCursor: true });
+
     this.pauseButton.on('pointerdown', () => this.togglePause());
 
     const timerText = this.add
@@ -443,6 +273,7 @@ export class WackAWegenScene extends Phaser.Scene {
       .setDisplaySize(BH * 0.7, BH * 0.7)
       .setOrigin(0, 0.5)
       .setDepth(11);
+
     const mask = this.add.graphics().fillCircle(avatar.getCenter().x, avatar.getCenter().y, BH * 0.35);
     avatar.setMask(mask.createGeometryMask());
 
@@ -451,6 +282,7 @@ export class WackAWegenScene extends Phaser.Scene {
       color: '#FFFFFF',
       fontStyle: 'bold',
     }).setOrigin(0.5).setDepth(11).setInteractive({ useHandCursor: true });
+
     fs.on('pointerdown', () => {
       if (this.scale.isFullscreen) {
         this.scale.stopFullscreen();
@@ -505,8 +337,6 @@ export class WackAWegenScene extends Phaser.Scene {
     this.updateTimeBarGraphics();
 
     if (this.cache.audio.exists('bgm')) {
-      this.instrBgm?.stop();
-      this.instrBgm = undefined;
       const bgm = this.sound.add('bgm', { loop: true, volume: 0.3 });
       bgm.play();
       this.events.once('destroy', () => bgm.stop());
@@ -842,10 +672,12 @@ export class WackAWegenScene extends Phaser.Scene {
     this.isGameOver = true;
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
-    this.wegens.forEach((w) => {
-      this.tweens.killTweensOf(w);
-      w.setVisible(false);
-    });
+    if (Array.isArray(this.wegens)) {
+      this.wegens.forEach((w) => {
+        this.tweens.killTweensOf(w);
+        w.setVisible(false);
+      });
+    }
     this.sound.stopAll();
     this.hammerCursor?.setVisible(false);
 
@@ -873,7 +705,6 @@ export class WackAWegenScene extends Phaser.Scene {
 
   shutdown() {
     window.removeEventListener('beforeunload', this.handleUnload);
-    if (this.instrBgm) { this.instrBgm.stop(); this.instrBgm.destroy(); }
     this.sound.stopAll();
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
@@ -883,7 +714,6 @@ export class WackAWegenScene extends Phaser.Scene {
     this.pauseOverlay = undefined;
     this.pauseText = undefined;
     this.pauseButton = undefined;
-    this.instructionContainer = undefined;
     this.hammerCursor = undefined;
     this.clickIndicator = undefined;
     if (this.hasPointerListeners) {
