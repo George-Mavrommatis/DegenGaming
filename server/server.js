@@ -793,7 +793,7 @@ app.get('/api/picker/validate-session/:id', protect, async (req, res) => {
     }
 });
 
-// Update Free Entry Tokens (Generate/Consume) (Protected)
+// --- Update Free Entry Tokens (Generate) (Protected) ---
 app.post('/tokens/generate', protect, async (req, res) => {
     const userId = req.user.uid;
     const { tokenType } = req.body;
@@ -805,9 +805,10 @@ app.post('/tokens/generate', protect, async (req, res) => {
     if (!validTokenTypes.includes(tokenType)) {
         return res.status(400).json({ message: `Invalid token type: ${tokenType}. Must be one of: ${validTokenTypes.join(', ')}.` });
     }
+    const pluralKey = `${tokenType}Tokens`;
     try {
         await db.collection('users').doc(userId).update({
-            [`freeEntryTokens.${tokenType}`]: admin.firestore.FieldValue.increment(1)
+            [`freeEntryTokens.${pluralKey}`]: admin.firestore.FieldValue.increment(1)
         });
         res.status(200).json({ message: `Successfully added 1 ${tokenType} token.`, tokenType });
     } catch (error) {
@@ -816,6 +817,7 @@ app.post('/tokens/generate', protect, async (req, res) => {
     }
 });
 
+// --- Update Free Entry Tokens (Consume) (Protected) ---
 app.post('/tokens/consume', protect, async (req, res) => {
     const userId = req.user.uid;
     const { tokenType } = req.body;
@@ -827,6 +829,7 @@ app.post('/tokens/consume', protect, async (req, res) => {
     if (!validTokenTypes.includes(tokenType)) {
         return res.status(400).json({ message: `Invalid token type: ${tokenType}. Must be one of: ${validTokenTypes.join(', ')}.` });
     }
+    const pluralKey = `${tokenType}Tokens`;
     try {
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
@@ -834,11 +837,13 @@ app.post('/tokens/consume', protect, async (req, res) => {
             return res.status(404).json({ message: "User profile not found." });
         }
         const currentTokens = userDoc.data().freeEntryTokens || {};
-        if ((currentTokens[tokenType] || 0) <= 0) {
+        const available = currentTokens[pluralKey] || 0;
+
+        if (available <= 0) {
             return res.status(400).json({ message: `No ${tokenType} tokens available to consume.` });
         }
         await userRef.update({
-            [`freeEntryTokens.${tokenType}`]: admin.firestore.FieldValue.increment(-1)
+            [`freeEntryTokens.${pluralKey}`]: admin.firestore.FieldValue.increment(-1)
         });
         res.status(200).json({ message: `Successfully consumed 1 ${tokenType} token.`, tokenType });
     } catch (error) {
@@ -846,7 +851,6 @@ app.post('/tokens/consume', protect, async (req, res) => {
         res.status(500).json({ message: `Failed to consume ${tokenType} token.` });
     }
 });
-
 
 // Get Platform Stats (Public - no protect middleware)
 app.get('/platform-stats', async (req, res) => {
