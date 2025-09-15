@@ -300,35 +300,36 @@ export default function GamesPage() {
         )}
 
         {/* Arcade Modal */}
-        {modalGame && modalGame.category === "Arcade" && (
-          <ArcadeInitModal
-            isOpen={!!modalGame}
-            gameId={modalGame.id}
-            category={modalGame.category}
-            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
-            destinationWallet={PLATFORM_WALLET}
-            gameTitle={modalGame.title}
-            arcadeFreeEntryTokens={freeTokens?.arcadeTokens ?? 0}
-            onSuccess={(result) => {
-              setModalGame(null);
-              if (!modalGame.route) {
-                toast.error("Game route not configured. Please try another game.");
-                return;
-              }
-              // result: { txSig?, usedFreeToken? }
-              if (result && result.usedFreeToken) {
-                toast.success("Arcade Free Entry Token used!");
-                refreshProfile();
-              }
-              navigate(modalGame.route, { state: result });
-            }}
-            onError={msg => {
-              setModalGame(null);
-              toast.error(`Game initiation failed: ${msg}`);
-            }}
-            onClose={() => setModalGame(null)}
-          />
-        )}
+          {modalGame && modalGame.category === "Arcade" && (
+        <ArcadeInitModal
+          isOpen={!!modalGame}
+          gameId={modalGame.id}
+          category={modalGame.category}
+          ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
+          destinationWallet={PLATFORM_WALLET}
+          gameTitle={modalGame.title}
+          arcadeFreeEntryTokens={freeTokens?.arcadeTokens ?? 0}
+          onSuccess={(result) => {
+            setModalGame(null); // Always close modal first!
+            if (!modalGame.route) {
+              toast.error("Game route not configured. Please try another game.");
+              return;
+            }
+            // result: { txSig?, usedFreeToken? }
+            if (result && result.usedFreeToken) {
+              toast.success("Arcade Free Entry Token used!");
+              refreshProfile();
+            }
+            // Pass result state to game page for correct parent flow
+            navigate(modalGame.route, { state: result });
+          }}
+          onError={msg => {
+            setModalGame(null);
+            toast.error(`Game initiation failed: ${msg}`);
+          }}
+          onClose={() => setModalGame(null)}
+        />
+      )}
 
         {/* If you want to add Casino/PvP modals, follow the above pattern */}
       </div>

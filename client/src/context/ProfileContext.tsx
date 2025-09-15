@@ -81,6 +81,7 @@ function mergeFreeEntryTokens(tokens: any): any {
 // --- ProfileContextType Interface ---
 interface ProfileContextType {
   user: FirebaseUser | null;
+  currentUser: FirebaseUser | null; // <--- ADD THIS!
   profile: ProfileData | null;
   isAuthenticated: boolean;
   loading: boolean;
@@ -90,7 +91,7 @@ interface ProfileContextType {
   logout: () => Promise<void>;
 }
 
-// Create the React Context
+// Create the React Context (must be BEFORE any use!)
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 
 // --- Internal Helper: ensureUserProfileData ---
@@ -155,7 +156,6 @@ const ensureUserProfileData = async (
     }
   }
 
-  // Always merge freeEntryTokens for robust access in frontend
   profileData.freeEntryTokens = mergeFreeEntryTokens(profileData.freeEntryTokens);
 
   return profileData;
@@ -206,19 +206,7 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
       const userDocRef = doc(db, "users", user.uid);
       try {
         await updateDoc(userDocRef, { ...data, updatedAt: new Date().toISOString() });
-        setProfile((prev) => {
-          if (!prev) return null;
-          // Always merge tokens
-          return {
-            ...prev,
-            ...data,
-            stats: data.stats ? { ...prev.stats, ...data.stats } : prev.stats,
-            coins: data.coins ? { ...prev.coins, ...data.coins } : prev.coins,
-            freeEntryTokens: data.freeEntryTokens
-              ? mergeFreeEntryTokens({ ...prev.freeEntryTokens, ...data.freeEntryTokens })
-              : prev.freeEntryTokens,
-          };
-        });
+        await refreshProfile(); // <<--- this is key for UI reactivity
         toast.success("Profile updated successfully!");
         console.log("ProfileContext: Profile updated for", user.uid, data);
       } catch (error) {
@@ -226,7 +214,7 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
         toast.error("Failed to update profile.");
       }
     },
-    [user]
+    [user, refreshProfile]
   );
 
   const logout = useCallback(
@@ -279,7 +267,6 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
       setLoading(true);
 
       if (firebaseUser) {
-        console.log("ProfileContext: User logged in:", firebaseUser.uid);
         setUser(firebaseUser);
         setIsAuthenticated(true);
 
@@ -312,7 +299,6 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
           setFirebaseAuthToken(null);
         }
       } else {
-        console.log("ProfileContext: User logged out from Firebase.");
         setUser(null);
         setProfile(null);
         setIsAuthenticated(false);
@@ -354,6 +340,7 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
   const contextValue = useMemo(
     () => ({
       user,
+      currentUser: user, // <--- THIS IS THE FIX
       profile,
       isAuthenticated,
       loading,

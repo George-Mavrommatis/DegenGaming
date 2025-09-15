@@ -17,6 +17,24 @@ const GAME_CATEGORY = "Arcade";
 const TICKET_PRICE_SOL = 0.005;
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
+const INSTRUCTION_SLIDES = [
+  {
+    image: "/WackAWegenAssets/instructions1.png",
+    title: "Power-Ups & Penalties",
+    text: "Bombs lose time, Clock gains time, Mystery is random, Golden Wegen gives big points!"
+  },
+  {
+    image: "/WackAWegenAssets/instructions2.png",
+    title: "Scoring & Combos",
+    text: "Normal 10pts, Fast 25pts, Tanky 50pts (3 hits), Golden 150pts, Hit fast for COMBOS!"
+  },
+  {
+    image: "/WackAWegenAssets/instructions3.png",
+    title: "Pro Tips",
+    text: "Chain hits for combos, Avoid near misses, Time bonuses get harder, Watch for patterns!"
+  }
+];
+
 export default function WackAWegen() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
@@ -24,54 +42,32 @@ export default function WackAWegen() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Entry config (from navigation)
-  const { txSig, useArcadeFreeEntry, paid } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean };
+  // Extract payment navigation state
+  const { txSig, useArcadeFreeEntry, paid: paidNav } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean };
 
-  // State for flow
-  const [showInitModal, setShowInitModal] = useState(!txSig && !useArcadeFreeEntry);
-  const [showInstructions, setShowInstructions] = useState(false);
+  // Local state
+  const [paid, setPaid] = useState(!!(paidNav || txSig));
+  const [useFreeTokenIntent, setUseFreeTokenIntent] = useState(!!useArcadeFreeEntry);
+
+  const [showInitModal, setShowInitModal] = useState(!(paidNav || txSig || useArcadeFreeEntry));
+  const [showInstructions, setShowInstructions] = useState(!!(paidNav || txSig || useArcadeFreeEntry));
   const [shouldStartGame, setShouldStartGame] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [coinsEarned, setCoinsEarned] = useState<number>(0);
-  const [gameState, setGameState] = useState<'IDLE'|'PAYING'|'PLAYING'|'GAME_OVER'>('IDLE');
+  const [gameState, setGameState] = useState<'IDLE'|'PLAYING'|'GAME_OVER'>('IDLE');
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [slide, setSlide] = useState(0);
 
-  // Step 1: ArcadeInitModal (payment/free entry)
-  const handleInitSuccess = async (result: { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean }) => {
-    setShowInitModal(false);
-    setGameState('PLAYING');
-    // If paid, update backend stats
-    if (result.txSig) {
-      try {
-        await fetch("http://localhost:4000/api/platform/update-pot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            gameId: GAME_ID,
-            category: GAME_CATEGORY,
-            amount: TICKET_PRICE_SOL,
-            txSig: result.txSig
-          }),
-        });
-      } catch (err) {
-        toast.error("Failed to update platform stats!");
-      }
-    }
-    setShowInstructions(true);
-  };
+  useEffect(() => {
+    console.log("[STATE]", { showInitModal, showInstructions, shouldStartGame, gameStarted, paid, useFreeTokenIntent });
+  }, [showInitModal, showInstructions, shouldStartGame, gameStarted, paid, useFreeTokenIntent]);
 
-  const handleInitError = (msg: string) => {
-    toast.error(msg);
-    setShowInitModal(false);
-    setGameState('IDLE');
-  };
-
-  // Step 2: Instructions overlay
+  // Instructions overlay "Start Game" button
   const handleInstructionsDone = async () => {
-    setTokenError(null); // clear any previous error
-    // If free entry, consume token
-    if (useArcadeFreeEntry && !paid) {
+    setTokenError(null);
+    // If using free token intent and not already paid, consume token
+    if (useFreeTokenIntent && !paid) {
       const tokens = getArcadeFreeEntryTokens(profile);
       if (tokens <= 0) {
         setTokenError("You have no Arcade Free Entry Tokens to consume.");
@@ -86,9 +82,10 @@ export default function WackAWegen() {
         );
         toast.success("Arcade Free Entry Token consumed!");
         await refreshProfile();
+        setPaid(true); // <-- Mark as "paid" after token consumed!
       } catch (err: any) {
         setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
-        toast.error(tokenError || "Failed to consume Arcade Free Entry Token.");
+        toast.error("Failed to consume Arcade Free Entry Token.");
         return;
       }
     }
@@ -96,10 +93,11 @@ export default function WackAWegen() {
     setShouldStartGame(true);
   };
 
-  // Step 3: Mount Phaser only when shouldStartGame
   useEffect(() => {
-    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted) return;
+    // Only start game when paid is true and shouldStartGame is set (after Start Game pressed)
+    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted || !paid) return;
     if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
+    console.log("[PHASER MOUNT] Mounting WackAWegenScene...");
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
       parent: gameContainerRef.current,
@@ -115,16 +113,14 @@ export default function WackAWegen() {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
       txSig,
-      paid,
-      skipInstructions: true, // always skip, parent shows instructions
+      paid: true, // Always true at game start
+      skipInstructions: true,
       onGameOver: handleGameOver,
       onReadyToStartGame: () => setGameStarted(true),
     });
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
-    // eslint-disable-next-line
   }, [shouldStartGame, profile, txSig, paid, gameStarted]);
 
-  // Game Over Handler
   const handleGameOver = useCallback(async (event: { score: number }) => {
     setFinalScore(event.score);
     setCoinsEarned(Math.floor(event.score / 10));
@@ -150,6 +146,9 @@ export default function WackAWegen() {
     setShowInstructions(false);
     setShouldStartGame(false);
     setTokenError(null);
+    setPaid(false);
+    setUseFreeTokenIntent(false);
+    setSlide(0);
   };
 
   const handleFullscreen = () => {
@@ -190,7 +189,7 @@ export default function WackAWegen() {
           <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32 }} />
         </button>
       </div>
-      {/* Game Container (Phaser mounts here after everything is ready) */}
+      {/* Game Container */}
       <div
         ref={gameContainerRef}
         id="phaser-container"
@@ -212,28 +211,65 @@ export default function WackAWegen() {
           justifyContent: "center",
         }}
       />
-      {/* ArcadeInitModal for pay-to-play */}
+      {/* ArcadeInitModal */}
       {showInitModal && (
         <ArcadeInitModal
+          isOpen={showInitModal}
           gameId={GAME_ID}
           category={GAME_CATEGORY}
           ticketPriceSol={TICKET_PRICE_SOL}
           destinationWallet={PLATFORM_WALLET}
-          onSuccess={handleInitSuccess}
-          onError={handleInitError}
+          onSuccess={result => {
+            setShowInitModal(false);
+            setShowInstructions(true);
+            // If paid, set paid state. If using free token, set intent.
+            if (result?.paid || result?.txSig) {
+              setPaid(true);
+              setUseFreeTokenIntent(false);
+            } else if (result?.useArcadeFreeEntry) {
+              setPaid(false);
+              setUseFreeTokenIntent(true);
+            }
+          }}
+          onError={msg => {
+            setShowInitModal(false);
+            toast.error("Arcade initiation failed: " + msg);
+          }}
           onClose={() => setShowInitModal(false)}
         />
       )}
-      {/* Game Instructions (parent controlled) */}
+      {/* Instructions Carousel Overlay */}
       {showInstructions && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90">
           <div className="w-full max-w-2xl mx-auto p-8 rounded-2xl bg-zinc-900 shadow-2xl flex flex-col items-center">
-            <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron">WackAWegen Instructions</h2>
-            <ul className="space-y-4 mb-4 text-lg text-white font-medium">
-              <li>Power-Ups & Penalties: Bombs lose time, Clock gains time, Mystery is random, Golden Wegen gives big points!</li>
-              <li>Scoring & Combos: Normal 10pts, Fast 25pts, Tanky 50pts (3 hits), Golden 150pts, Hit fast for COMBOS!</li>
-              <li>Pro Tips: Chain hits for combos, Avoid near misses, Time bonuses get harder, Watch for patterns!</li>
-            </ul>
+            <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron">
+              WackAWegen Instructions
+            </h2>
+            <div className="w-full flex flex-col items-center">
+              <img
+                src={INSTRUCTION_SLIDES[slide].image}
+                alt={INSTRUCTION_SLIDES[slide].title}
+                style={{ width: "320px", borderRadius: 12, marginBottom: 16, boxShadow: "0 2px 24px #0008" }}
+              />
+              <div className="mb-4 text-lg text-white font-bold text-center">{INSTRUCTION_SLIDES[slide].title}</div>
+              <div className="mb-8 text-base text-gray-300 text-center max-w-xl">{INSTRUCTION_SLIDES[slide].text}</div>
+              <div className="flex flex-row gap-4 mb-6">
+                <button
+                  className="px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold"
+                  onClick={() => setSlide((prev) => Math.max(prev - 1, 0))}
+                  disabled={slide === 0}
+                >
+                  Prev
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold"
+                  onClick={() => setSlide((prev) => Math.min(prev + 1, INSTRUCTION_SLIDES.length - 1))}
+                  disabled={slide === INSTRUCTION_SLIDES.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
             {tokenError && (
               <div className="w-full rounded py-2 px-3 mb-3 text-center text-red-200 text-xs bg-red-800 font-semibold shadow">
                 {tokenError}

@@ -55,9 +55,8 @@ export class WackAWegenScene extends Phaser.Scene {
   private avatarUrl = '/placeholder-avatar.png';
   private txSig?: string;
 
-  private shouldConsumeFreeToken = false;
   private paid = false;
-  private onConsumeFreeToken?: () => Promise<boolean>;
+  private skipInstructionsFlag = false;
   private onReadyToStartGame?: () => void;
   private onGameOver?: (e: { score: number }) => void;
 
@@ -74,10 +73,8 @@ export class WackAWegenScene extends Phaser.Scene {
     this.username = data.username?.trim() || 'Guest';
     this.avatarUrl = data.avatarUrl?.trim() || '/placeholder-avatar.png';
     this.txSig = data.txSig;
-    this.skipInstructions = !!data.skipInstructions;
-    this.shouldConsumeFreeToken = !!data.shouldConsumeFreeToken;
     this.paid = !!data.paid;
-    this.onConsumeFreeToken = data.onConsumeFreeToken;
+    this.skipInstructionsFlag = !!data.skipInstructions;
     this.onReadyToStartGame = data.onReadyToStartGame;
     this.onGameOver = data.onGameOver;
   }
@@ -103,7 +100,11 @@ export class WackAWegenScene extends Phaser.Scene {
       frameHeight: 128,
     });
 
-    this.load.image('userAvatar', this.avatarUrl);
+    // Defensive avatar loading
+    if (this.avatarUrl && this.avatarUrl !== '/placeholder-avatar.png') {
+      this.load.image('userAvatar', this.avatarUrl);
+    }
+    this.load.image('defaultAvatar', '/placeholder-avatar.png');
 
     const audioFiles = [
       { key: 'bgm', paths: ['../sounds/WackAWegen/grid.mp3', '/sounds/WackAWegen/grid.mp3'] },
@@ -122,13 +123,13 @@ export class WackAWegenScene extends Phaser.Scene {
     this.load.crossOrigin = 'anonymous';
     this.load.on('loaderror', (file: any) => {
       console.error('[WackAWegenScene] Asset failed to load:', file.key, file.src);
-      if (file.type === 'audio') {
-        console.warn(`Audio file ${file.key} failed to load. Audio will be disabled.`);
-      }
       if (file.key === 'userAvatar') {
         this.textures.remove('userAvatar');
-        this.load.image('userAvatar', '/placeholder-avatar.png');
-        this.load.start();
+        // Always fallback to default avatar
+        if (!this.textures.exists('defaultAvatar')) {
+          this.load.image('defaultAvatar', '/placeholder-avatar.png');
+          this.load.start();
+        }
       }
     });
 
@@ -161,12 +162,9 @@ export class WackAWegenScene extends Phaser.Scene {
       });
       this.hasResizeHandler = true;
     }
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {});
 
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      // handle resize if needed
-    });
-
-    // Always skip instructions for parent-driven flow
+    // Start the game immediately
     this.buildGame();
     this.startGame();
     if (this.onReadyToStartGame) this.onReadyToStartGame();
@@ -268,8 +266,11 @@ export class WackAWegenScene extends Phaser.Scene {
       .setOrigin(0, 0.5)
       .setDepth(11);
 
+    // Defensive avatar drawing (fallback if missing)
+    let avatarTexture = 'defaultAvatar';
+    if (this.textures.exists('userAvatar')) avatarTexture = 'userAvatar';
     const avatar = this.add
-      .image(userTxt.getRightCenter().x + 10, BH / 2, 'userAvatar')
+      .image(userTxt.getRightCenter().x + 10, BH / 2, avatarTexture)
       .setDisplaySize(BH * 0.7, BH * 0.7)
       .setOrigin(0, 0.5)
       .setDepth(11);
@@ -653,7 +654,9 @@ export class WackAWegenScene extends Phaser.Scene {
       if (this.gameTimer) this.gameTimer.paused = true;
       if (this.popUpTimer) this.popUpTimer.paused = true;
       this.tweens.pauseAll();
-      this.sound.pauseAll();
+      if (this.sound && typeof this.sound.pauseAll === "function") {
+        try { this.sound.pauseAll(); } catch {}
+      }
       this.hammerCursor?.setVisible(false);
     } else {
       this.pauseButton?.setText('||');
@@ -662,7 +665,9 @@ export class WackAWegenScene extends Phaser.Scene {
       if (this.gameTimer) this.gameTimer.paused = false;
       if (this.popUpTimer) this.popUpTimer.paused = false;
       this.tweens.resumeAll();
-      this.sound.resumeAll();
+      if (this.sound && typeof this.sound.resumeAll === "function") {
+        try { this.sound.resumeAll(); } catch {}
+      }
       this.hammerCursor?.setVisible(true);
     }
   }
@@ -672,14 +677,22 @@ export class WackAWegenScene extends Phaser.Scene {
     this.isGameOver = true;
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
-    if (Array.isArray(this.wegens)) {
-      this.wegens.forEach((w) => {
+    // Defensive sound stop (robust)
+    if (this.sound && typeof this.sound.stopAll === "function") {
+      try {
+        this.sound.stopAll();
+      } catch (e) {
+        console.warn("Failed to stop all sounds:", e);
+      }
+    }
+    this.hammerCursor?.setVisible(false);
+
+    if (this.wegens && Array.isArray(this.wegens)) {
+      for (const w of this.wegens) {
         this.tweens.killTweensOf(w);
         w.setVisible(false);
-      });
+      }
     }
-    this.sound.stopAll();
-    this.hammerCursor?.setVisible(false);
 
     if (this.missCount === 0 && this.perfectHits > 10) {
       this.score = Math.round(this.score * 1.5);
@@ -705,7 +718,9 @@ export class WackAWegenScene extends Phaser.Scene {
 
   shutdown() {
     window.removeEventListener('beforeunload', this.handleUnload);
-    this.sound.stopAll();
+    if (this.sound && typeof this.sound.stopAll === "function") {
+      try { this.sound.stopAll(); } catch {}
+    }
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
     this.wegens = [];

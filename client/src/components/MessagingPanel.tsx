@@ -1,15 +1,15 @@
-// DegenGamingFrontend/src/components/MessagingPanel.tsx
-// Ensure this file matches the one I provided exactly.
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useProfile } from '../context/ProfileContext';
-import { apiService } from '../services/api';
 import { toast } from 'react-toastify';
 import LoadingSpinner from './LoadingSpinner';
 import ChatWindow from './ChatWindow';
-import { ChatListItem } from '../utilities/chat'; 
+import { ChatListItem } from '../utilities/chat';
 
-interface FriendForChat { // Consistent interface
+// Firestore imports
+import { db } from '../firebase/firebaseConfig';
+import { collection, query, where, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
+
+interface FriendForChat {
   uid: string;
   username: string;
   avatarUrl: string;
@@ -17,45 +17,140 @@ interface FriendForChat { // Consistent interface
 }
 
 interface MessagingPanelProps {
-  friendToChatWith: FriendForChat | null; 
+  friendToChatWith: FriendForChat | null;
 }
 
 const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => {
-  const { currentUser, firebaseAuthToken } = useProfile();
+  const { currentUser } = useProfile();
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [selectedChat, setSelectedChat] = useState<ChatListItem | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Helper to get friend user data by UID
+  const getFriendProfile = async (uid: string): Promise<FriendForChat | null> => {
+    try {
+      const friendDoc = await getDoc(doc(db, 'users', uid));
+      if (friendDoc.exists()) {
+        const fData = friendDoc.data();
+        return {
+          uid,
+          username: fData.username || uid,
+          avatarUrl: fData.avatarUrl || '/avatars/default.png',
+          isOnline: fData.isOnline || false,
+        };
+      }
+    } catch (e) {
+      console.error("MessagingPanel: Error fetching friend profile:", e);
+    }
+    return null;
+  };
+
+  // Fetch all chats for user, resolve friend data for each chat
   const fetchChats = useCallback(async () => {
-    if (!currentUser || !firebaseAuthToken) {
+    if (!currentUser) {
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const fetchedChats = await apiService.getUserChats();
-      setChats(fetchedChats);
-      console.log("MessagingPanel: Chats fetched:", fetchedChats.length);
+      // Remove orderBy for instant compatibility (or create Firestore index if you want to keep it)
+      const q = query(
+        collection(db, "chats"),
+        where("participants", "array-contains", currentUser.uid)
+      );
+      const snap = await getDocs(q);
+      const chatDocs = snap.docs;
+
+      // For each chat, resolve the other participant's profile
+      const chatsWithFriendData = await Promise.all(chatDocs.map(async docSnap => {
+        const data = docSnap.data();
+        const otherUid = (data.participants as string[]).find(uid => uid !== currentUser.uid);
+        let friend: FriendForChat | null = null;
+        if (otherUid) {
+          friend = await getFriendProfile(otherUid);
+        }
+        return {
+          chatId: docSnap.id,
+          ...data,
+          friend,
+          createdAt: new Date(
+            typeof data.createdAt === 'number'
+              ? (data.createdAt > 1e12 ? data.createdAt : data.createdAt * 1000)
+              : (data.createdAt?.toDate ? data.createdAt.toDate() : Date.now())
+          ),
+          lastMessage: data.lastMessage
+            ? {
+                ...data.lastMessage,
+                sentAt: new Date(
+                  typeof data.lastMessage.sentAt === 'number'
+                    ? (data.lastMessage.sentAt > 1e12 ? data.lastMessage.sentAt : data.lastMessage.sentAt * 1000)
+                    : (data.lastMessage.sentAt?.toDate ? data.lastMessage.sentAt.toDate() : Date.now())
+                ),
+              }
+            : undefined,
+        };
+      }));
+
+      // Sort chats by createdAt descending (since orderBy was removed)
+      chatsWithFriendData.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+      setChats(chatsWithFriendData);
+      console.log("MessagingPanel: Chats fetched from Firestore:", chatsWithFriendData.length);
     } catch (error) {
-      console.error("MessagingPanel: Failed to fetch chats:", error);
+      console.error("MessagingPanel: Failed to fetch chats from Firestore:", error);
     } finally {
       setLoading(false);
     }
-  }, [currentUser, firebaseAuthToken]);
+  }, [currentUser]);
 
+  // Initial fetch and interval
   useEffect(() => {
     fetchChats();
-    const interval = setInterval(fetchChats, 30 * 1000); 
+    const interval = setInterval(fetchChats, 30 * 1000);
     return () => clearInterval(interval);
   }, [fetchChats]);
 
+  // Open chat directly if friendToChatWith is set
   useEffect(() => {
     const handleInitialChat = async () => {
       if (friendToChatWith && currentUser) {
         setLoading(true);
         try {
-          const chat = await apiService.findOrCreateChat(friendToChatWith.uid);
-          setSelectedChat(chat);
+          // Find existing chat with only these two participants
+          let foundChat: ChatListItem | null = null;
+          for (const chat of chats) {
+            if (
+              chat.friend &&
+              chat.friend.uid === friendToChatWith.uid &&
+              Array.isArray(chat.participants) &&
+              chat.participants.length === 2
+            ) {
+              foundChat = chat;
+              break;
+            }
+          }
+          if (foundChat) {
+            setSelectedChat(foundChat);
+          } else {
+            // Create new chat document
+            const newChatRef = doc(collection(db, "chats"));
+            const now = Date.now();
+            const newChatData = {
+              participants: [currentUser.uid, friendToChatWith.uid],
+              createdAt: now,
+              lastMessage: null,
+            };
+            await setDoc(newChatRef, newChatData);
+            const friend = await getFriendProfile(friendToChatWith.uid);
+            setSelectedChat({
+              chatId: newChatRef.id,
+              ...newChatData,
+              friend,
+              createdAt: new Date(now),
+            } as ChatListItem);
+            // Refetch chats
+            fetchChats();
+          }
         } catch (error) {
           console.error("MessagingPanel: Error finding/creating chat for prop:", error);
           toast.error("Failed to open chat with friend.");
@@ -66,6 +161,7 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
       }
     };
     handleInitialChat();
+    // eslint-disable-next-line
   }, [friendToChatWith, currentUser]);
 
   const handleSelectChat = (chatItem: ChatListItem) => {
@@ -84,16 +180,18 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
   return (
     <div className="h-full flex flex-col">
       {selectedChat ? (
-        <ChatWindow 
-          chatId={selectedChat.chatId} 
-          friend={selectedChat.friend} 
-          onBack={() => setSelectedChat(null)} 
+        <ChatWindow
+          chatId={selectedChat.chatId}
+          friend={selectedChat.friend}
+          onBack={() => setSelectedChat(null)}
         />
       ) : (
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           <h3 className="text-xl font-bold mb-4">Your Chats ({chats.length})</h3>
           {chats.length === 0 ? (
-            <p className="text-gray-400 text-center py-4 text-sm">No active chats. Start one from your friends list!</p>
+            <p className="text-gray-400 text-center py-4 text-sm">
+              No active chats. Start one from your friends list!
+            </p>
           ) : (
             <ul className="space-y-3">
               {chats.map((chat) => (
@@ -104,13 +202,15 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
                 >
                   <div className="flex items-center gap-3">
                     <img
-                      src={chat.friend.avatarUrl || "/avatars/default.png"}
+                      src={chat.friend?.avatarUrl || "/avatars/default.png"}
                       className="w-10 h-10 rounded-full object-cover border-2 border-purple-500"
-                      alt={chat.friend.username}
-                      onError={(e) => { e.currentTarget.src = '/avatars/default.png'; }}
+                      alt={chat.friend?.username || ""}
+                      onError={(e) => {
+                        e.currentTarget.src = '/avatars/default.png';
+                      }}
                     />
                     <div>
-                      <span className="font-semibold block">{chat.friend.username}</span>
+                      <span className="font-semibold block">{chat.friend?.username || "Unknown"}</span>
                       {chat.lastMessage ? (
                         <p className="text-sm text-gray-300 truncate w-48">
                           {chat.lastMessage.from === currentUser?.uid ? 'You: ' : ''}

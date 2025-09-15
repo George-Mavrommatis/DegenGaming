@@ -10,11 +10,14 @@ import { db } from "../firebase/firebaseConfig";
 import { FaEdit, FaHistory, FaGamepad, FaCoins } from 'react-icons/fa';
 import UserDashboard from "../components/UserDashboard";
 
+const DEFAULT_AVATAR = "/placeholder-avatar.png";
+
 export default function Profile() {
   const {
     user,
     profile,
     updateUserProfile,
+    refreshProfile,
     loading,
     isAuthenticated
   } = useProfile();
@@ -30,7 +33,6 @@ export default function Profile() {
   const [usernameChecking, setUsernameChecking] = useState(false);
   const usernameInputRef = useRef<HTMLInputElement>(null);
 
-  // Keep keys in sync with backend: arcade, picker, casino, pvp
   const tokenKeys = ["arcade", "picker", "casino", "pvp"] as const;
 
   useEffect(() => {
@@ -154,6 +156,7 @@ export default function Profile() {
         duelsOpen: !!form.duelsOpen,
       };
       await updateUserProfile(dataToSave);
+      await refreshProfile(); // Ensure instant update in Navbar and SocialPanel!
       toast.success("Profile saved successfully!");
       setAvatarFile(null);
       setAvatarPreview(null);
@@ -162,7 +165,7 @@ export default function Profile() {
     } finally {
       setSaving(false);
     }
-  }, [user, avatarFile, form, checkUsernameUnique, updateUserProfile]);
+  }, [user, avatarFile, form, checkUsernameUnique, updateUserProfile, refreshProfile]);
 
   if (loading) {
     return <div className="text-center text-white mt-20 text-xl font-bold animate-pulse">Loading Profile...</div>;
@@ -176,16 +179,15 @@ export default function Profile() {
     );
   }
 
-  const displayedAvatar = avatarPreview || form.avatarUrl || '/WegenRaceAssets/G1small.png';
+  const displayedAvatar = avatarPreview || form.avatarUrl || DEFAULT_AVATAR;
 
-  // Ensure correct keys and fallback
-const tokensObj = form.freeEntryTokens || {};
-const tokens = {
-  arcade: Math.max(tokensObj.arcade ?? 0, tokensObj.arcadeTokens ?? 0),
-  picker: Math.max(tokensObj.picker ?? 0, tokensObj.pickerTokens ?? 0),
-  casino: Math.max(tokensObj.casino ?? 0, tokensObj.casinoTokens ?? 0),
-  pvp: Math.max(tokensObj.pvp ?? 0, tokensObj.pvpTokens ?? 0),
-};
+  const tokensObj = form.freeEntryTokens || {};
+  const tokens = {
+    arcade: Math.max(tokensObj.arcade ?? 0, tokensObj.arcadeTokens ?? 0),
+    picker: Math.max(tokensObj.picker ?? 0, tokensObj.pickerTokens ?? 0),
+    casino: Math.max(tokensObj.casino ?? 0, tokensObj.casinoTokens ?? 0),
+    pvp: Math.max(tokensObj.pvp ?? 0, tokensObj.pvpTokens ?? 0),
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8">
@@ -197,7 +199,7 @@ const tokens = {
                 src={displayedAvatar}
                 alt={`${form.username}'s avatar`}
                 className="w-32 h-32 rounded-full mx-auto border-4 border-purple-500 object-cover"
-                onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                onError={(e) => { e.currentTarget.src = DEFAULT_AVATAR; }}
               />
               <label className="absolute bottom-1 right-1 bg-purple-600 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer hover:bg-purple-700 transition">
                 <FaEdit />
