@@ -30,6 +30,7 @@ export class WackAWegenScene extends Phaser.Scene {
   private isGameOver = false;
   private isPaused = false;
   private gameStartTime = 0;
+  private skipInstructions = false;
   private comboCount = 0;
   private lastHitTime = 0;
   private missCount = 0;
@@ -46,13 +47,16 @@ export class WackAWegenScene extends Phaser.Scene {
   private pauseOverlay?: Phaser.GameObjects.Graphics;
   private pauseText?: Phaser.GameObjects.Text;
   private pauseButton?: Phaser.GameObjects.Text;
+
   private username = 'Guest';
   private avatarUrl = '/placeholder-avatar.png';
   private txSig?: string;
+
   private paid = false;
   private skipInstructionsFlag = false;
   private onReadyToStartGame?: () => void;
   private onGameOver?: (e: { score: number }) => void;
+
   private hasResizeHandler = false;
   private hammerCursor?: Phaser.GameObjects.Image;
   private clickIndicator?: Phaser.GameObjects.Graphics;
@@ -61,7 +65,6 @@ export class WackAWegenScene extends Phaser.Scene {
 
   constructor() {
     super({ key: 'WackAWegenScene' });
-    console.log('[WACKAWEGEN CONSTRUCTOR]');
   }
 
   init(data: any) {
@@ -72,7 +75,6 @@ export class WackAWegenScene extends Phaser.Scene {
     this.skipInstructionsFlag = !!data.skipInstructions;
     this.onReadyToStartGame = data.onReadyToStartGame;
     this.onGameOver = data.onGameOver;
-    console.log('[WACKAWEGEN INIT]', { username: this.username, avatarUrl: this.avatarUrl, paid: this.paid, skipInstructionsFlag: this.skipInstructionsFlag });
   }
 
   preload(): void {
@@ -101,21 +103,32 @@ export class WackAWegenScene extends Phaser.Scene {
     }
     this.load.image('defaultAvatar', '/placeholder-avatar.png');
 
-    this.load.audio('bgm', '/WackAWegenAssets/bgm.mp3');
-    this.load.audio('sfx_whack', '/WackAWegenAssets/sfx_whack.mp3');
-    this.load.audio('sfx_whack_golden', '/WackAWegenAssets/sfx_whack_golden.mp3');
-    this.load.audio('sfx_bomb', '/WackAWegenAssets/sfx_bomb.mp3');
-    this.load.audio('sfx_clock', '/WackAWegenAssets/sfx_clock.mp3');
-    this.load.audio('sfx_mystery', '/WackAWegenAssets/sfx_mystery.mp3');
-    this.load.audio('sfx_miss', '/WackAWegenAssets/sfx_miss.mp3');
-    this.load.audio('sfx_combo', '/WackAWegenAssets/sfx_combo.mp3');
+    const audioFiles = [
+      { key: 'bgm', paths: ['../sounds/WackAWegen/grid.mp3', '/sounds/WackAWegen/grid.mp3'] },
+      { key: 'sfx_whack', paths: ['../sounds/WackAWegen/whack.wav', '/sounds/WackAWegen/whack.wav'] },
+      { key: 'sfx_whack_golden', paths: ['../sounds/WackAWegen/whack.wav', '/sounds/WackAWegen/whack.wav'] },
+      { key: 'sfx_bomb', paths: ['../sounds/WackAWegen/explosion.wav', '/sounds/WackAWegen/explosion.wav'] },
+      { key: 'sfx_clock', paths: ['../sounds/WackAWegen/sweepTransition.wav', '/sounds/WackAWegen/sweepTransition.wav'] },
+      { key: 'sfx_mystery', paths: ['../sounds/WackAWegen/notification.wav', '/sounds/WackAWegen/notification.wav'] },
+      { key: 'sfx_miss', paths: ['../sounds/WackAWegen/miss.wav', '/sounds/WackAWegen/miss.wav'] },
+      { key: 'sfx_combo', paths: ['../sounds/WackAWegen/combo.wav', '/sounds/WackAWegen/combo.wav'] },
+    ];
+    audioFiles.forEach(({ key, paths }) => {
+      this.load.audio(key, paths);
+    });
 
     this.load.crossOrigin = 'anonymous';
     this.load.on('loaderror', (file: any) => {
+      console.error('[WackAWegenScene] Asset failed to load:', file.key, file.src);
       if (file.key === 'userAvatar') {
         this.textures.remove('userAvatar');
+        if (!this.textures.exists('defaultAvatar')) {
+          this.load.image('defaultAvatar', '/placeholder-avatar.png');
+          this.load.start();
+        }
       }
     });
+
     this.load.on('filecomplete', (key: string, type: string, data: any) => {
       if (type === 'audio') {
         console.log(`[WackAWegenScene] Audio loaded successfully: ${key}`);
@@ -124,8 +137,6 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   create(): void {
-    console.log('[WACKAWEGEN CREATE]', { timeLeft: this.timeLeft, isGameOver: this.isGameOver, paid: this.paid, skipInstructionsFlag: this.skipInstructionsFlag });
-
     this.barHeight = Math.max(60, Math.round(this.scale.height * 0.11));
     this.add.image(this.scale.width / 2, this.scale.height / 2, 'background').setDisplaySize(this.scale.width, this.scale.height);
 
@@ -140,136 +151,39 @@ export class WackAWegenScene extends Phaser.Scene {
 
     if (!this.hasResizeHandler) {
       window.addEventListener('beforeunload', this.handleUnload);
-      this.scale.on('resize', () => this.handleResize());
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this.handleUnload();
+        }
+      });
       this.hasResizeHandler = true;
     }
-
-    // Defensive: clean/reset all state and timers
-    this.cleanupAll();
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {});
 
     this.buildGame();
-    this.createHammerCursor();
-    this.setupPointerEvents();
 
-    // Show instructions overlay ONCE, then call startGame() only after user closes the overlay
-    this.showInstructionsOverlay();
+    // --- FIX: only start game after instructions overlay, or skip if flag ---
+    if (this.skipInstructionsFlag) {
+      this.startGame();
+    } else {
+      this.showInstructionsOverlay();
+    }
+
     if (this.onReadyToStartGame) this.onReadyToStartGame();
   }
 
-  private cleanupAll() {
-    this.isGameOver = false;
-    this.isPaused = false;
-    this.score = 0;
-    this.timeLeft = 60;
-    this.comboCount = 0;
-    this.lastHitTime = 0;
-    this.missCount = 0;
-    this.perfectHits = 0;
-
-    this.gameTimer?.destroy();
-    this.popUpTimer?.destroy();
-    this.gameTimer = undefined;
-    this.popUpTimer = undefined;
-    if (this.sound && typeof this.sound.stopAll === 'function') {
-      try { this.sound.stopAll(); } catch {}
-    }
-  }
-
-  private handleResize() {
-    this.scene.restart();
-  }
-
   private showInstructionsOverlay() {
-    if (this.instructionsOverlayContainer) {
-      this.instructionsOverlayContainer.destroy(true);
-    }
-    const w = Math.min(this.scale.width - 40, 640);
-    const h = Math.min(this.scale.height - 40, 440);
-
-    const slides = [
-      {
-        icon: 'bomb',
-        title: 'Power-Ups & Penalties',
-        text: '💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Wegen gives big points!'
-      },
-      {
-        icon: 'wegen_golden',
-        title: 'Scoring & Combos',
-        text: '👊 Normal: 10pts\n⚡ Fast: 25pts\n🛡️ Tanky: 50pts (3 hits)\n⭐ Golden: 150pts\nHit fast for COMBOS!'
-      },
-      {
-        icon: 'clock',
-        title: 'Pro Tips',
-        text: 'Chain hits for combos\nAvoid near misses\nTime bonuses get harder\nWatch for patterns!'
-      }
-    ];
-
-    let idx = 0;
-    const container = this.add.container(this.scale.width / 2, this.scale.height / 2).setDepth(110);
-
-    const bg = this.add.rectangle(0, 0, w, h, 0x23272e, 0.98)
-      .setStrokeStyle(5, 0xffd700);
-    const iconSprite = this.add.sprite(0, -h / 2 + 80, slides[idx].icon)
-      .setScale(1.4);
-    const titleText = this.add.text(0, -h / 2 + 150, slides[idx].title, {
-      fontSize: "32px", fontStyle: "bold", color: "#FFD700", align: "center", fontFamily: "Orbitron, Arial, sans-serif"
-    }).setOrigin(0.5);
-    const bodyText = this.add.text(0, -h / 2 + 210, slides[idx].text, {
-      fontSize: "21px", color: "#fff", align: "center", fontFamily: "Orbitron, Arial, sans-serif", wordWrap: { width: w - 60 }
-    }).setOrigin(0.5);
-
-    const prevBtn = this.add.text(-w / 2 + 100, h / 2 - 50, "◀ Prev", {
-      fontSize: "22px", color: "#fff", backgroundColor: "#333", padding: { left: 18, right: 18, top: 8, bottom: 8 }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    const nextBtn = this.add.text(w / 2 - 100, h / 2 - 50, "Next ▶", {
-      fontSize: "22px", color: "#fff", backgroundColor: "#333", padding: { left: 18, right: 18, top: 8, bottom: 8 }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    const closeBtn = this.add.text(0, h / 2 - 50, "Start Game", {
-      fontSize: "26px", color: "#fff", backgroundColor: "#28a745", fontWeight: "bold",
-      padding: { left: 28, right: 28, top: 10, bottom: 10 }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-
-    prevBtn.setAlpha(0.5);
-    prevBtn.disableInteractive();
-
-    container.add([bg, iconSprite, titleText, bodyText, prevBtn, nextBtn, closeBtn]);
-    this.instructionsOverlayContainer = container;
-
-    nextBtn.on("pointerdown", () => {
-      if (idx < slides.length - 1) {
-        idx++;
-        updateSlide();
-      }
-    });
-    prevBtn.on("pointerdown", () => {
-      if (idx > 0) {
-        idx--;
-        updateSlide();
-      }
-    });
-    closeBtn.on("pointerdown", () => {
-      if (this.instructionsOverlayContainer) this.instructionsOverlayContainer.destroy(true);
-      this.instructionsOverlayContainer = undefined;
-      this.startGame(); // <-- Start the game only when instructions are closed!
-    });
-
-    function updateSlide() {
-      iconSprite.setTexture(slides[idx].icon);
-      titleText.setText(slides[idx].title);
-      bodyText.setText(slides[idx].text);
-
-      if (idx === 0) {
-        prevBtn.setAlpha(0.5); prevBtn.disableInteractive();
-      } else {
-        prevBtn.setAlpha(1); prevBtn.setInteractive({ useHandCursor: true });
-      }
-      if (idx === slides.length - 1) {
-        nextBtn.setAlpha(0.5); nextBtn.disableInteractive();
-      } else {
-        nextBtn.setAlpha(1); nextBtn.setInteractive({ useHandCursor: true });
-      }
-    }
+    // TODO: Replace this with your illustrated instructions overlay/modal.
+    // For now, simulate a modal with a timer, call startGame after user "closes" it.
+    // Replace this with actual overlay/modal logic for production.
+    setTimeout(() => this.startGame(), 1000);
   }
+
+  private handleUnload = () => {
+    if (!this.isGameOver) {
+      this.endGame();
+    }
+  };
 
   private buildGame() {
     this.createHoleGrid();
@@ -416,38 +330,6 @@ export class WackAWegenScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(21).setVisible(false);
   }
 
-  private createHammerCursor() {
-    this.hammerCursor = this.add.image(0, 0, 'hammer')
-      .setVisible(false)
-      .setDepth(100)
-      .setScale(0.5);
-  }
-
-  private setupPointerEvents() {
-    if (this.hasPointerListeners) return;
-    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (this.hammerCursor) {
-        this.hammerCursor.setPosition(pointer.worldX, pointer.worldY);
-      }
-    });
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.hammerCursor) {
-        this.hammerCursor.setRotation(-0.5);
-        this.time.delayedCall(100, () => {
-          if (this.hammerCursor) this.hammerCursor.setRotation(0);
-        });
-      }
-    });
-    this.input.on('pointerup', () => {
-      if (this.hammerCursor) {
-        this.hammerCursor.setRotation(0);
-      }
-    });
-    this.hasPointerListeners = true;
-    this.input.setDefaultCursor('none');
-    if (this.hammerCursor) this.hammerCursor.setVisible(true);
-  }
-
   private startGame() {
     this.isGameOver = false;
     this.isPaused = false;
@@ -458,7 +340,6 @@ export class WackAWegenScene extends Phaser.Scene {
     this.lastHitTime = 0;
     this.missCount = 0;
     this.perfectHits = 0;
-    console.log('[WACKAWEGEN STARTGAME]', { timeLeft: this.timeLeft, isGameOver: this.isGameOver });
 
     this.ui?.score.setText(`Score: 0`);
     this.ui?.timer.setText(`${this.timeLeft}`);
@@ -491,9 +372,9 @@ export class WackAWegenScene extends Phaser.Scene {
   private updateSecond() {
     if (this.isGameOver || this.isPaused) return;
     this.timeLeft--;
-    console.log('[WACKAWEGEN TIMER]', { timeLeft: this.timeLeft, isGameOver: this.isGameOver });
     this.ui?.timer.setText(`${this.timeLeft}`);
     this.updateTimeBarGraphics();
+
     if (this.timeLeft < 20 && this.popUpTimer) {
       this.popUpTimer.destroy();
       this.popUpTimer = this.time.addEvent({
@@ -503,46 +384,348 @@ export class WackAWegenScene extends Phaser.Scene {
         loop: true,
       });
     }
-    if (this.timeLeft <= 0) {
-      console.log('[WACKAWEGEN TIMER TRIGGER ENDGAME]');
-      this.endGame();
+
+    if (this.timeLeft <= 0) this.endGame();
+  }
+
+  private getDifficultyStage() {
+    const elapsed = (this.time.now - this.gameStartTime) / 1000;
+    const survivalBonus = Math.floor(this.timeLeft / 20);
+    if (elapsed > 60 || survivalBonus > 2) return 4;
+    if (elapsed > 40 || survivalBonus > 1) return 3;
+    if (elapsed > 20) return 2;
+    return 1;
+  }
+
+  private getRandomCharacterType(): CharacterType {
+    const stage = this.getDifficultyStage();
+    let table: { type: CharacterType; weight: number }[] = [];
+    if (stage === 4) {
+      table = [
+        { type: 'wegen_normal', weight: 15 },
+        { type: 'wegen_fast',   weight: 35 },
+        { type: 'wegen_tanky',  weight: 20 },
+        { type: 'wegen_golden', weight: 8  },
+        { type: 'bomb',         weight: 20 },
+        { type: 'clock',        weight: 2  },
+        { type: 'mystery_box',  weight: 25 },
+      ];
+    } else if (stage === 3) {
+      table = [
+        { type: 'wegen_normal', weight: 25 },
+        { type: 'wegen_fast',   weight: 25 },
+        { type: 'wegen_tanky',  weight: 15 },
+        { type: 'wegen_golden', weight: 5  },
+        { type: 'bomb',         weight: 15 },
+        { type: 'clock',        weight: 5  },
+        { type: 'mystery_box',  weight: 20 },
+      ];
+    } else if (stage === 2) {
+      table = [
+        { type: 'wegen_normal', weight: 40 },
+        { type: 'wegen_fast',   weight: 25 },
+        { type: 'wegen_tanky',  weight: 10 },
+        { type: 'bomb',         weight: 10 },
+        { type: 'clock',        weight: 5  },
+        { type: 'mystery_box',  weight: 15 },
+      ];
+    } else {
+      table = [
+        { type: 'wegen_normal', weight: 60 },
+        { type: 'wegen_fast',   weight: 15 },
+        { type: 'bomb',         weight: 5  },
+        { type: 'clock',        weight: 5  },
+        { type: 'mystery_box',  weight: 10 },
+      ];
+    }
+    const total = table.reduce((sum, x) => sum + x.weight, 0);
+    let pick = Math.random() * total;
+    for (const item of table) {
+      if (pick < item.weight) return item.type;
+      pick -= item.weight;
+    }
+    return 'wegen_normal';
+  }
+
+  private popUp() {
+    if (this.isGameOver || this.isPaused) return;
+    const avail = this.wegens.filter((w) => !w.getData('isUp'));
+    if (!avail.length) return;
+    const stage = this.getDifficultyStage();
+    const spawnCount = stage >= 3 ? Phaser.Math.Between(1, 2) : 1;
+    for (let i = 0; i < spawnCount && avail.length > i; i++) {
+      const slot = Phaser.Utils.Array.RemoveRandomElement(avail);
+      if (slot) {
+        const type = this.getRandomCharacterType();
+        this.show(slot, type);
+      }
     }
   }
 
-  // ... (keep all your gameplay logic below unchanged, like popUp, whack, etc.)
+  private show(obj: Phaser.GameObjects.Sprite, type: CharacterType) {
+    const info = CHARACTER_DATA[type];
+    const yOff = 30;
+    const stage = this.getDifficultyStage();
+    let hold = 650;
+    let upSpeed = 200;
 
-  private handleUnload = () => {
-    if (!this.isGameOver) {
-      this.endGame();
+    if (type === 'wegen_fast') {
+      hold = 250 - (stage * 20);
+      upSpeed = 120;
+    } else if (type === 'wegen_golden') {
+      hold = 400 - (stage * 30);
+      upSpeed = 150;
+    } else if (type === 'wegen_tanky') {
+      hold = 800;
+      upSpeed = 250;
+    } else {
+      hold = Math.max(300, 650 - (stage * 50));
     }
-  };
+
+    obj.setTexture(info.sprite);
+    obj.setScale(this.characterScale);
+    obj.setData({ isUp: true, type, hitsLeft: info.hits });
+    obj.setVisible(true);
+
+    this.tweens.add({
+      targets: obj,
+      y: obj.y - yOff,
+      duration: upSpeed,
+      yoyo: true,
+      hold,
+      onComplete: () => {
+        obj.setVisible(false);
+        obj.setData('isUp', false);
+        obj.y += yOff;
+      },
+    });
+  }
+
+  private whack(obj: Phaser.GameObjects.Sprite) {
+    if (!obj.getData('isUp') || this.isGameOver || this.isPaused) return;
+
+    const type = obj.getData('type') as CharacterType;
+    const info = CHARACTER_DATA[type];
+    let hitsLeft = obj.getData('hitsLeft') ?? info.hits;
+    hitsLeft--;
+    obj.setData('hitsLeft', hitsLeft);
+
+    const now = this.time.now;
+    if (now - this.lastHitTime < 1000) {
+      this.comboCount++;
+      if (this.comboCount > 2 && this.cache.audio.exists('sfx_combo')) {
+        this.sound.play('sfx_combo', { volume: 0.6 });
+      }
+    } else {
+      this.comboCount = 1;
+    }
+    this.lastHitTime = now;
+
+    if (hitsLeft > 0) {
+      if (type === 'mystery_box') {
+        obj.setTint(0xffff00);
+        this.time.delayedCall(100, () => obj.clearTint());
+      } else if (type === 'wegen_tanky') {
+        obj.setTint(0xff6666);
+        this.time.delayedCall(100, () => obj.clearTint());
+      }
+      const t = this.add.text(obj.x, obj.y - obj.displayHeight - 4, `${hitsLeft}`, {
+        fontSize: '32px', color: type === 'mystery_box' ? '#ff0' : '#fff', stroke: '#000', strokeThickness: 4,
+      }).setOrigin(0.5);
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: 400,
+        onComplete: () => t.destroy(),
+      });
+      if (this.cache.audio.exists('sfx_whack')) {
+        this.sound.play('sfx_whack', { volume: 0.7 });
+      }
+      return;
+    }
+
+    obj.setData('isUp', false);
+    obj.setVisible(false);
+
+    if (type === 'mystery_box') {
+      if (this.cache.audio.exists('sfx_mystery')) {
+        this.sound.play('sfx_mystery', { volume: 0.8 });
+      }
+      const fx = Phaser.Math.Between(1, 4);
+      if (fx === 1) {
+        this.timeLeft = Math.max(0, this.timeLeft - 10);
+        this.cameras.main.shake(150, 0.02);
+        const txt = this.add.text(obj.x, obj.y, '-10s', { fontSize: '32px', color: '#f00', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
+        this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
+      } else if (fx === 2) {
+        this.timeLeft += 5;
+        const txt = this.add.text(obj.x, obj.y, '+5s', { fontSize: '32px', color: '#0f0', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
+        this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
+      } else if (fx === 3) {
+        const bonus = 50;
+        this.score += bonus;
+        const txt = this.add.text(obj.x, obj.y, `+${bonus}!`, { fontSize: '36px', color: '#ffd700', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
+        this.tweens.add({
+          targets: txt,
+          y: txt.y - 50,
+          scale: 1.5,
+          alpha: 0,
+          duration: 800,
+          onComplete: () => txt.destroy()
+        });
+      } else {
+        this.score += 15;
+        const txt = this.add.text(obj.x, obj.y, '+15', { fontSize: '32px', color: '#ffd700', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
+        this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
+      }
+      this.ui?.score.setText(`Score: ${this.score}`);
+      this.ui?.timer.setText(`${this.timeLeft}`);
+      this.updateTimeBarGraphics();
+      if (this.timeLeft <= 0) this.endGame();
+      return;
+    }
+
+    if (type === 'bomb') {
+      this.score = Math.max(0, this.score + info.points);
+      this.cameras.main.shake(200, 0.025);
+      if (this.cache.audio.exists('sfx_bomb')) {
+        this.sound.play('sfx_bomb', { volume: 1 });
+      }
+      this.timeLeft = Math.max(0, this.timeLeft + (info.timePenalty ?? -15));
+      const explosion = this.add.sprite(obj.x, obj.y - obj.displayHeight / 2, 'explosion').setScale(1.5).play('explode');
+      this.ui?.score.setText(`Score: ${this.score}`);
+      this.ui?.timer.setText(`${this.timeLeft}`);
+      this.updateTimeBarGraphics();
+      if (this.timeLeft <= 0) this.endGame();
+      this.comboCount = 0;
+      return;
+    }
+
+    if (type === 'clock') {
+      this.timeLeft += info.timeBonus ?? 10;
+      if (this.cache.audio.exists('sfx_clock')) {
+        this.sound.play('sfx_clock', { volume: 0.8 });
+      }
+      const txt = this.add.text(obj.x, obj.y, `+${info.timeBonus}s`, {
+        fontSize: '32px', color: '#0f0', stroke: '#000', strokeThickness: 4,
+      }).setOrigin(0.5);
+      this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
+      this.ui?.timer.setText(`${this.timeLeft}`);
+      this.updateTimeBarGraphics();
+      return;
+    }
+
+    if (type.startsWith('wegen')) {
+      const w = this.add.sprite(obj.x, obj.y, info.whackedSprite).setScale(obj.scaleX, obj.scaleY).setOrigin(0.5, 0.95);
+      this.tweens.add({ targets: w, alpha: 0, duration: 400, onComplete: () => w.destroy() });
+
+      const comboMultiplier = Math.min(1 + (this.comboCount * 0.1), 2);
+      const points = Math.round(info.points * comboMultiplier);
+      this.score += points;
+
+      if (type === 'wegen_fast') {
+        this.perfectHits++;
+      }
+
+      if (type === 'wegen_golden' && this.cache.audio.exists('sfx_whack_golden')) {
+        this.sound.play('sfx_whack_golden', { volume: 1 });
+      } else if (this.cache.audio.exists('sfx_whack')) {
+        this.sound.play('sfx_whack', { volume: 0.7 });
+      }
+
+      if (this.comboCount > 2) {
+        const comboText = this.add.text(obj.x, obj.y - 30, `COMBO x${this.comboCount}!`, {
+          fontSize: '24px', color: '#ff00ff', stroke: '#000', strokeThickness: 4, fontStyle: 'bold'
+        }).setOrigin(0.5);
+        this.tweens.add({
+          targets: comboText,
+          y: comboText.y - 40,
+          scale: 1.5,
+          alpha: 0,
+          duration: 1000,
+          onComplete: () => comboText.destroy()
+        });
+      }
+
+      this.ui?.score.setText(`Score: ${this.score}`);
+      return;
+    }
+  }
+
+  private togglePause() {
+    if (this.isGameOver) return;
+    this.isPaused = !this.isPaused;
+    if (this.isPaused) {
+      this.pauseButton?.setText('▶');
+      this.pauseOverlay?.setVisible(true);
+      this.pauseText?.setVisible(true);
+      if (this.gameTimer) this.gameTimer.paused = true;
+      if (this.popUpTimer) this.popUpTimer.paused = true;
+      this.tweens.pauseAll();
+      if (this.sound && typeof this.sound.pauseAll === "function") {
+        try { this.sound.pauseAll(); } catch {}
+      }
+      this.hammerCursor?.setVisible(false);
+    } else {
+      this.pauseButton?.setText('||');
+      this.pauseOverlay?.setVisible(false);
+      this.pauseText?.setVisible(false);
+      if (this.gameTimer) this.gameTimer.paused = false;
+      if (this.popUpTimer) this.popUpTimer.paused = false;
+      this.tweens.resumeAll();
+      if (this.sound && typeof this.sound.resumeAll === "function") {
+        try { this.sound.resumeAll(); } catch {}
+      }
+      this.hammerCursor?.setVisible(true);
+    }
+  }
 
   private endGame() {
     if (this.isGameOver) return;
     this.isGameOver = true;
-    console.log('[WACKAWEGEN ENDGAME]', { score: this.score, timeLeft: this.timeLeft });
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
-    if (this.sound && typeof this.sound.stopAll === 'function') {
+    if (this.sound && typeof this.sound.stopAll === "function") {
       try {
         this.sound.stopAll();
       } catch (e) {
-        console.warn('Failed to stop all sounds:', e);
+        console.warn("Failed to stop all sounds:", e);
       }
     }
-    if (this.hammerCursor) this.hammerCursor.setVisible(false);
+    this.hammerCursor?.setVisible(false);
+
     if (this.wegens && Array.isArray(this.wegens)) {
       for (const w of this.wegens) {
         this.tweens.killTweensOf(w);
         w.setVisible(false);
       }
     }
-    if (this.onGameOver) this.onGameOver({ score: this.score });
+
+    if (this.missCount === 0 && this.perfectHits > 10) {
+      this.score = Math.round(this.score * 1.5);
+      this.time.delayedCall(100, () => {
+        const bonusText = this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'PERFECT BONUS!', {
+          fontSize: '48px',
+          color: '#ffd700',
+          stroke: '#000',
+          strokeThickness: 6,
+          fontStyle: 'bold'
+        }).setOrigin(0.5);
+        this.tweens.add({
+          targets: bonusText,
+          scale: 1.5,
+          alpha: 0,
+          duration: 2000,
+          onComplete: () => bonusText.destroy()
+        });
+      });
+    }
+    setTimeout(() => { if (this.onGameOver) this.onGameOver({ score: this.score }); }, 100);
   }
 
   shutdown() {
     window.removeEventListener('beforeunload', this.handleUnload);
-    if (this.sound && typeof this.sound.stopAll === 'function') {
+    if (this.sound && typeof this.sound.stopAll === "function") {
       try { this.sound.stopAll(); } catch {}
     }
     this.gameTimer?.destroy();
