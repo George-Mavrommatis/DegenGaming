@@ -1,22 +1,24 @@
 import Phaser from 'phaser';
 
 type CharacterType =
-  | 'wegen_normal'
-  | 'wegen_fast'
-  | 'wegen_tanky'
-  | 'wegen_golden'
+  | 'degen_normal'
+  | 'degen_fast'
+  | 'degen_tanky'
+  | 'degen_golden'
+  | 'degen_trouble'
   | 'bomb'
   | 'clock'
   | 'mystery_box';
 
 const CHARACTER_DATA = {
-  'wegen_normal':   { points: 10,  sprite: 'wegen_normal',       whackedSprite: 'wegen_normal_whacked', hits: 1 } as const,
-  'wegen_fast':     { points: 25,  sprite: 'wegen_fast',         whackedSprite: 'wegen_fast_whacked',   hits: 1 } as const,
-  'wegen_tanky':    { points: 50,  sprite: 'wegen_tanky',        whackedSprite: 'wegen_tanky_whacked',  hits: 3 } as const,
-  'wegen_golden':   { points: 150, sprite: 'wegen_golden',       whackedSprite: 'wegen_golden_whacked', hits: 1 } as const,
-  'bomb':           { points: -20, sprite: 'bomb',              timePenalty: -15,                     hits: 1 } as const,
-  'clock':          { points: 0,   sprite: 'clock',             timeBonus: 10,                        hits: 1 } as const,
-  'mystery_box':    { points: 0,   sprite: 'mystery_box',       hits: 2 } as const,
+  'degen_normal':   { points: 10,  sprite: 'degen_normal',       whackedSprite: 'degen_normal_whacked', hits: 1 } as const,
+  'degen_fast':     { points: 25,  sprite: 'degen_fast',         whackedSprite: 'degen_fast_whacked',   hits: 1 } as const,
+  'degen_tanky':    { points: 50,  sprite: 'degen_tanky',        whackedSprite: 'degen_tanky_whacked',  hits: 3 } as const,
+  'degen_golden':   { points: 150, sprite: 'degen_golden',       whackedSprite: 'degen_golden_whacked', hits: 1 } as const,
+  'degen_trouble':  { points: -30, sprite: 'degen_trouble',      whackedSprite: 'degen_trouble_whacked', hits: 1, timePenalty: -10 } as const,
+  'bomb':           { points: -20, sprite: 'bomb',              whackedSprite: '', timePenalty: -15, hits: 1 } as const,
+  'clock':          { points: 0,   sprite: 'clock',             whackedSprite: '', timeBonus: 10, hits: 1 } as const,
+  'mystery_box':    { points: 0,   sprite: 'mystery_box',       whackedSprite: '', hits: 2 } as const,
 };
 
 interface UIType {
@@ -30,20 +32,22 @@ export class WackAWegenScene extends Phaser.Scene {
   private isGameOver = false;
   private isPaused = false;
   private gameStartTime = 0;
-  private skipInstructions = false;
   private comboCount = 0;
   private lastHitTime = 0;
   private missCount = 0;
   private perfectHits = 0;
+
   private barHeight = 0;
   private barWidth = 0;
   private timeBar?: Phaser.GameObjects.Graphics;
-  private wegens: Phaser.GameObjects.Sprite[] = [];
+  private degens: Phaser.GameObjects.Sprite[] = [];
   private holes: Phaser.GameObjects.Image[] = [];
   private characterScale = 0.65;
+
   private gameTimer?: Phaser.Time.TimerEvent;
   private popUpTimer?: Phaser.Time.TimerEvent;
   private ui?: UIType;
+
   private pauseOverlay?: Phaser.GameObjects.Graphics;
   private pauseText?: Phaser.GameObjects.Text;
   private pauseButton?: Phaser.GameObjects.Text;
@@ -53,15 +57,11 @@ export class WackAWegenScene extends Phaser.Scene {
   private txSig?: string;
 
   private paid = false;
-  private skipInstructionsFlag = false;
-  private onReadyToStartGame?: () => void;
   private onGameOver?: (e: { score: number }) => void;
-
   private hasResizeHandler = false;
   private hammerCursor?: Phaser.GameObjects.Image;
   private clickIndicator?: Phaser.GameObjects.Graphics;
   private hasPointerListeners = false;
-  private instructionsOverlayContainer?: Phaser.GameObjects.Container;
 
   constructor() {
     super({ key: 'WackAWegenScene' });
@@ -72,22 +72,22 @@ export class WackAWegenScene extends Phaser.Scene {
     this.avatarUrl = data.avatarUrl?.trim() || '/placeholder-avatar.png';
     this.txSig = data.txSig;
     this.paid = !!data.paid;
-    this.skipInstructionsFlag = !!data.skipInstructions;
-    this.onReadyToStartGame = data.onReadyToStartGame;
     this.onGameOver = data.onGameOver;
   }
 
   preload(): void {
     this.load.image('background', '/WackAWegenAssets/BG.png');
     this.load.image('hole', '/WackAWegenAssets/hole.png');
-    this.load.image('wegen_normal', '/WackAWegenAssets/wegen1.png');
-    this.load.image('wegen_normal_whacked', '/WackAWegenAssets/whacked1.png');
-    this.load.image('wegen_fast', '/WackAWegenAssets/wegen2.png');
-    this.load.image('wegen_fast_whacked', '/WackAWegenAssets/whacked2.png');
-    this.load.image('wegen_tanky', '/WackAWegenAssets/wegen3.png');
-    this.load.image('wegen_tanky_whacked', '/WackAWegenAssets/whacked3.png');
-    this.load.image('wegen_golden', '/WackAWegenAssets/wegen4.png');
-    this.load.image('wegen_golden_whacked', '/WackAWegenAssets/whacked4.png');
+    this.load.image('degen_normal', '/WackAWegenAssets/wegen1.png');
+    this.load.image('degen_normal_whacked', '/WackAWegenAssets/whacked1.png');
+    this.load.image('degen_fast', '/WackAWegenAssets/wegen2.png');
+    this.load.image('degen_fast_whacked', '/WackAWegenAssets/whacked2.png');
+    this.load.image('degen_tanky', '/WackAWegenAssets/wegen3.png');
+    this.load.image('degen_tanky_whacked', '/WackAWegenAssets/whacked3.png');
+    this.load.image('degen_golden', '/WackAWegenAssets/wegen4.png');
+    this.load.image('degen_golden_whacked', '/WackAWegenAssets/whacked4.png');
+    this.load.image('degen_trouble', '/WackAWegenAssets/whacked_trouble.png');
+   // this.load.image('degen_trouble_whacked', '/WackAWegenAssets/wegen_trouble_whacked.png');
     this.load.image('bomb', '/WackAWegenAssets/bomb.png');
     this.load.image('clock', '/WackAWegenAssets/clock.png');
     this.load.image('mystery_box', '/WackAWegenAssets/mysteryS.png');
@@ -158,25 +158,21 @@ export class WackAWegenScene extends Phaser.Scene {
       });
       this.hasResizeHandler = true;
     }
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {});
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.handleResize();
+    });
 
+    this.handleResize();
     this.buildGame();
-
-    // --- FIX: only start game after instructions overlay, or skip if flag ---
-    if (this.skipInstructionsFlag) {
-      this.startGame();
-    } else {
-      this.showInstructionsOverlay();
-    }
-
-    if (this.onReadyToStartGame) this.onReadyToStartGame();
+    this.startGame();
   }
 
-  private showInstructionsOverlay() {
-    // TODO: Replace this with your illustrated instructions overlay/modal.
-    // For now, simulate a modal with a timer, call startGame after user "closes" it.
-    // Replace this with actual overlay/modal logic for production.
-    setTimeout(() => this.startGame(), 1000);
+  private handleResize() {
+    // Responsive scaling for fullscreen
+    const W = this.scale.width;
+    const H = this.scale.height;
+    this.characterScale = Math.max(0.5, Math.min(W / 1600, H / 900));
+    this.barHeight = Math.max(60, Math.round(H * 0.11));
   }
 
   private handleUnload = () => {
@@ -192,13 +188,14 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   private createHoleGrid() {
-    const rows = 4;
+    // 5 rows for complexity
+    const rows = 5;
     const cols = 4;
     const topPadding = this.barHeight + 80;
-    const bottomPadding = 100;
+    const bottomPadding = 80;
     const sidePadding = 80;
     const gridW = Math.min(this.scale.width - (sidePadding * 2), 850);
-    const gridH = Math.min(this.scale.height - topPadding - bottomPadding, 500);
+    const gridH = Math.min(this.scale.height - topPadding - bottomPadding, 650);
 
     const startX = (this.scale.width - gridW) / 2;
     const startY = topPadding;
@@ -207,26 +204,26 @@ export class WackAWegenScene extends Phaser.Scene {
     const cellH = gridH / rows;
 
     this.holes = [];
-    this.wegens = [];
+    this.degens = [];
 
     for (let i = 0; i < rows; i++) {
       for (let j = 0; j < cols; j++) {
         const x = startX + cellW * (j + 0.5);
         const y = startY + cellH * (i + 0.5);
 
-        const hole = this.add.image(x, y, 'hole').setScale(0.4);
+        const hole = this.add.image(x, y, 'hole').setScale(0.4 * this.characterScale);
         this.holes.push(hole);
 
-        const w = this.add
-          .sprite(x, y + 10, 'wegen_normal')
+        const d = this.add
+          .sprite(x, y + 10, 'degen_normal')
           .setOrigin(0.5, 0.95)
           .setScale(this.characterScale)
           .setVisible(false)
           .setData({ isUp: false, type: 'none', hitsLeft: 0 })
           .setInteractive({ pixelPerfect: true, useHandCursor: false });
 
-        w.on('pointerdown', () => this.whack(w));
-        this.wegens.push(w);
+        d.on('pointerdown', () => this.whack(d));
+        this.degens.push(d);
       }
     }
   }
@@ -240,15 +237,19 @@ export class WackAWegenScene extends Phaser.Scene {
     const scoreText = this.add
       .text(20, BH / 2, `Score: 0`, {
         fontSize: `${Math.round(BH * 0.4)}px`,
+        fontFamily: "Orbitron, Arial, sans-serif",
         color: '#FFFFFF',
         fontStyle: 'bold',
+        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 8, fill: true }
       }).setOrigin(0, 0.5).setDepth(11);
 
     this.pauseButton = this.add
-      .text(scoreText.getRightCenter().x + 60, BH / 2, '||', {
+      .text(scoreText.getRightCenter().x + 60, BH / 2, '⏸', {
         fontSize: `${Math.round(BH * 0.5)}px`,
-        color: '#FFFFFF',
+        fontFamily: "Orbitron, Arial, sans-serif",
+        color: '#FFD93B',
         fontStyle: 'bold',
+        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 8, fill: true }
       })
       .setOrigin(0.5)
       .setDepth(11)
@@ -259,10 +260,12 @@ export class WackAWegenScene extends Phaser.Scene {
     const timerText = this.add
       .text(W / 2, BH / 2, `${this.timeLeft}`, {
         fontSize: `${Math.round(BH * 0.65)}px`,
+        fontFamily: "Orbitron, Arial, sans-serif",
         color: '#FFD93B',
-        fontStyle: '900',
+        fontStyle: 'bold',
         stroke: '#000000',
         strokeThickness: 4,
+        shadow: { offsetX: 0, offsetY: 0, color: '#FFD93B', blur: 8, fill: true }
       })
       .setOrigin(0.5)
       .setDepth(11);
@@ -270,7 +273,9 @@ export class WackAWegenScene extends Phaser.Scene {
     const userTxt = this.add
       .text(W / 2 + 100, BH / 2, this.username, {
         fontSize: `${Math.round(BH * 0.3)}px`,
+        fontFamily: "Orbitron, Arial, sans-serif",
         color: '#FFFFFF',
+        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 6, fill: true }
       })
       .setOrigin(0, 0.5)
       .setDepth(11);
@@ -286,9 +291,10 @@ export class WackAWegenScene extends Phaser.Scene {
     const mask = this.add.graphics().fillCircle(avatar.getCenter().x, avatar.getCenter().y, BH * 0.35);
     avatar.setMask(mask.createGeometryMask());
 
-    const fs = this.add.text(W - 40, BH / 2, '[ ]', {
+    const fs = this.add.text(W - 40, BH / 2, '🖵', {
       fontSize: `${Math.round(BH * 0.5)}px`,
-      color: '#FFFFFF',
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFD93B',
       fontStyle: 'bold',
     }).setOrigin(0.5).setDepth(11).setInteractive({ useHandCursor: true });
 
@@ -325,8 +331,10 @@ export class WackAWegenScene extends Phaser.Scene {
 
     this.pauseText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
       fontSize: `${Math.round(this.barHeight * 1.2)}px`,
-      color: '#FFFFFF',
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFD93B',
       fontStyle: 'bold',
+      shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 12, fill: true }
     }).setOrigin(0.5).setDepth(21).setVisible(false);
   }
 
@@ -354,6 +362,7 @@ export class WackAWegenScene extends Phaser.Scene {
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
 
+    // Difficulty curve: spawn rate increases as time passes
     this.gameTimer = this.time.addEvent({
       delay: 1000,
       callback: this.updateSecond,
@@ -362,7 +371,7 @@ export class WackAWegenScene extends Phaser.Scene {
     });
 
     this.popUpTimer = this.time.addEvent({
-      delay: 800,
+      delay: 850,
       callback: this.popUp,
       callbackScope: this,
       loop: true,
@@ -375,10 +384,16 @@ export class WackAWegenScene extends Phaser.Scene {
     this.ui?.timer.setText(`${this.timeLeft}`);
     this.updateTimeBarGraphics();
 
-    if (this.timeLeft < 20 && this.popUpTimer) {
+    // Increase spawn rate as timer drops
+    if (this.popUpTimer) {
       this.popUpTimer.destroy();
+      let delay = 850;
+      if (this.timeLeft < 45) delay = 650;
+      if (this.timeLeft < 30) delay = 500;
+      if (this.timeLeft < 16) delay = 350;
+      if (this.timeLeft < 7) delay = 220;
       this.popUpTimer = this.time.addEvent({
-        delay: 500,
+        delay,
         callback: this.popUp,
         callbackScope: this,
         loop: true,
@@ -390,51 +405,56 @@ export class WackAWegenScene extends Phaser.Scene {
 
   private getDifficultyStage() {
     const elapsed = (this.time.now - this.gameStartTime) / 1000;
-    const survivalBonus = Math.floor(this.timeLeft / 20);
-    if (elapsed > 60 || survivalBonus > 2) return 4;
-    if (elapsed > 40 || survivalBonus > 1) return 3;
-    if (elapsed > 20) return 2;
+    const t = this.timeLeft;
+    if (t <= 8 || elapsed > 55) return 4;
+    if (t <= 20 || elapsed > 40) return 3;
+    if (t <= 36 || elapsed > 22) return 2;
     return 1;
   }
 
   private getRandomCharacterType(): CharacterType {
     const stage = this.getDifficultyStage();
     let table: { type: CharacterType; weight: number }[] = [];
+    // Add degen_trouble to spawn table at higher difficulty
     if (stage === 4) {
       table = [
-        { type: 'wegen_normal', weight: 15 },
-        { type: 'wegen_fast',   weight: 35 },
-        { type: 'wegen_tanky',  weight: 20 },
-        { type: 'wegen_golden', weight: 8  },
-        { type: 'bomb',         weight: 20 },
+        { type: 'degen_normal', weight: 10 },
+        { type: 'degen_fast',   weight: 25 },
+        { type: 'degen_tanky',  weight: 10 },
+        { type: 'degen_golden', weight: 6  },
+        { type: 'degen_trouble',weight: 35 },
+        { type: 'bomb',         weight: 28 },
         { type: 'clock',        weight: 2  },
-        { type: 'mystery_box',  weight: 25 },
+        { type: 'mystery_box',  weight: 22 },
       ];
     } else if (stage === 3) {
       table = [
-        { type: 'wegen_normal', weight: 25 },
-        { type: 'wegen_fast',   weight: 25 },
-        { type: 'wegen_tanky',  weight: 15 },
-        { type: 'wegen_golden', weight: 5  },
-        { type: 'bomb',         weight: 15 },
-        { type: 'clock',        weight: 5  },
-        { type: 'mystery_box',  weight: 20 },
+        { type: 'degen_normal', weight: 18 },
+        { type: 'degen_fast',   weight: 18 },
+        { type: 'degen_tanky',  weight: 10 },
+        { type: 'degen_golden', weight: 4  },
+        { type: 'degen_trouble',weight: 22 },
+        { type: 'bomb',         weight: 20 },
+        { type: 'clock',        weight: 4  },
+        { type: 'mystery_box',  weight: 18 },
       ];
     } else if (stage === 2) {
       table = [
-        { type: 'wegen_normal', weight: 40 },
-        { type: 'wegen_fast',   weight: 25 },
-        { type: 'wegen_tanky',  weight: 10 },
-        { type: 'bomb',         weight: 10 },
-        { type: 'clock',        weight: 5  },
-        { type: 'mystery_box',  weight: 15 },
+        { type: 'degen_normal', weight: 28 },
+        { type: 'degen_fast',   weight: 15 },
+        { type: 'degen_tanky',  weight: 7 },
+        { type: 'degen_trouble',weight: 10 },
+        { type: 'bomb',         weight: 12 },
+        { type: 'clock',        weight: 3 },
+        { type: 'mystery_box',  weight: 10 },
       ];
     } else {
       table = [
-        { type: 'wegen_normal', weight: 60 },
-        { type: 'wegen_fast',   weight: 15 },
-        { type: 'bomb',         weight: 5  },
-        { type: 'clock',        weight: 5  },
+        { type: 'degen_normal', weight: 38 },
+        { type: 'degen_fast',   weight: 12 },
+        { type: 'degen_trouble',weight: 5 },
+        { type: 'bomb',         weight: 7 },
+        { type: 'clock',        weight: 5 },
         { type: 'mystery_box',  weight: 10 },
       ];
     }
@@ -444,15 +464,18 @@ export class WackAWegenScene extends Phaser.Scene {
       if (pick < item.weight) return item.type;
       pick -= item.weight;
     }
-    return 'wegen_normal';
+    return 'degen_normal';
   }
 
   private popUp() {
     if (this.isGameOver || this.isPaused) return;
-    const avail = this.wegens.filter((w) => !w.getData('isUp'));
+    // At high difficulty, spawn 2-3 at once
+    const avail = this.degens.filter((d) => !d.getData('isUp'));
     if (!avail.length) return;
     const stage = this.getDifficultyStage();
-    const spawnCount = stage >= 3 ? Phaser.Math.Between(1, 2) : 1;
+    let spawnCount = 1;
+    if (stage >= 4) spawnCount = Phaser.Math.Between(2, 3);
+    else if (stage === 3) spawnCount = Phaser.Math.Between(1, 2);
     for (let i = 0; i < spawnCount && avail.length > i; i++) {
       const slot = Phaser.Utils.Array.RemoveRandomElement(avail);
       if (slot) {
@@ -468,22 +491,19 @@ export class WackAWegenScene extends Phaser.Scene {
     const stage = this.getDifficultyStage();
     let hold = 650;
     let upSpeed = 200;
+    let scaleOverride = undefined;
 
-    if (type === 'wegen_fast') {
-      hold = 250 - (stage * 20);
-      upSpeed = 120;
-    } else if (type === 'wegen_golden') {
-      hold = 400 - (stage * 30);
-      upSpeed = 150;
-    } else if (type === 'wegen_tanky') {
-      hold = 800;
-      upSpeed = 250;
-    } else {
-      hold = Math.max(300, 650 - (stage * 50));
+    if (type === 'bomb') {
+      // Bomb gets smaller at higher difficulty
+      scaleOverride = 0.35 - Math.min(stage * 0.07, 0.18);
     }
-
+    if (type === 'degen_trouble') {
+      obj.setTint(0xff2222);
+      hold = 350 - (stage * 20);
+      upSpeed = 120;
+    }
     obj.setTexture(info.sprite);
-    obj.setScale(this.characterScale);
+    obj.setScale(scaleOverride ?? this.characterScale);
     obj.setData({ isUp: true, type, hitsLeft: info.hits });
     obj.setVisible(true);
 
@@ -497,13 +517,13 @@ export class WackAWegenScene extends Phaser.Scene {
         obj.setVisible(false);
         obj.setData('isUp', false);
         obj.y += yOff;
+        obj.clearTint();
       },
     });
   }
 
   private whack(obj: Phaser.GameObjects.Sprite) {
     if (!obj.getData('isUp') || this.isGameOver || this.isPaused) return;
-
     const type = obj.getData('type') as CharacterType;
     const info = CHARACTER_DATA[type];
     let hitsLeft = obj.getData('hitsLeft') ?? info.hits;
@@ -525,7 +545,7 @@ export class WackAWegenScene extends Phaser.Scene {
       if (type === 'mystery_box') {
         obj.setTint(0xffff00);
         this.time.delayedCall(100, () => obj.clearTint());
-      } else if (type === 'wegen_tanky') {
+      } else if (type === 'degen_tanky') {
         obj.setTint(0xff6666);
         this.time.delayedCall(100, () => obj.clearTint());
       }
@@ -547,11 +567,17 @@ export class WackAWegenScene extends Phaser.Scene {
     obj.setData('isUp', false);
     obj.setVisible(false);
 
+    // Mystery box difficulty
     if (type === 'mystery_box') {
       if (this.cache.audio.exists('sfx_mystery')) {
         this.sound.play('sfx_mystery', { volume: 0.8 });
       }
-      const fx = Phaser.Math.Between(1, 4);
+      const stage = this.getDifficultyStage();
+      let fx: number;
+      if (stage >= 4) fx = Phaser.Math.Between(1, 2); // 50% negative
+      else if (stage >= 3) fx = Phaser.Math.Between(1, 3); // 33% negative
+      else fx = Phaser.Math.Between(1, 4); // 25% negative
+
       if (fx === 1) {
         this.timeLeft = Math.max(0, this.timeLeft - 10);
         this.cameras.main.shake(150, 0.02);
@@ -578,6 +604,23 @@ export class WackAWegenScene extends Phaser.Scene {
         const txt = this.add.text(obj.x, obj.y, '+15', { fontSize: '32px', color: '#ffd700', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
         this.tweens.add({ targets: txt, y: txt.y - 50, alpha: 0, duration: 800, onComplete: () => txt.destroy() });
       }
+      this.ui?.score.setText(`Score: ${this.score}`);
+      this.ui?.timer.setText(`${this.timeLeft}`);
+      this.updateTimeBarGraphics();
+      if (this.timeLeft <= 0) this.endGame();
+      return;
+    }
+
+    // New negative degen_trouble
+    if (type === 'degen_trouble') {
+      this.score = Math.max(0, this.score + info.points);
+      this.timeLeft = Math.max(0, this.timeLeft + (info.timePenalty ?? -10));
+      obj.setTint(0xff2222);
+      this.cameras.main.shake(100, 0.03);
+      const txt = this.add.text(obj.x, obj.y, `${info.points} • ${info.timePenalty}s`, {
+        fontSize: '28px', color: '#f00', stroke: '#000', strokeThickness: 4
+      }).setOrigin(0.5);
+      this.tweens.add({ targets: txt, y: txt.y - 30, alpha: 0, duration: 700, onComplete: () => txt.destroy() });
       this.ui?.score.setText(`Score: ${this.score}`);
       this.ui?.timer.setText(`${this.timeLeft}`);
       this.updateTimeBarGraphics();
@@ -615,7 +658,7 @@ export class WackAWegenScene extends Phaser.Scene {
       return;
     }
 
-    if (type.startsWith('wegen')) {
+    if (type.startsWith('degen')) {
       const w = this.add.sprite(obj.x, obj.y, info.whackedSprite).setScale(obj.scaleX, obj.scaleY).setOrigin(0.5, 0.95);
       this.tweens.add({ targets: w, alpha: 0, duration: 400, onComplete: () => w.destroy() });
 
@@ -623,11 +666,11 @@ export class WackAWegenScene extends Phaser.Scene {
       const points = Math.round(info.points * comboMultiplier);
       this.score += points;
 
-      if (type === 'wegen_fast') {
+      if (type === 'degen_fast') {
         this.perfectHits++;
       }
 
-      if (type === 'wegen_golden' && this.cache.audio.exists('sfx_whack_golden')) {
+      if (type === 'degen_golden' && this.cache.audio.exists('sfx_whack_golden')) {
         this.sound.play('sfx_whack_golden', { volume: 1 });
       } else if (this.cache.audio.exists('sfx_whack')) {
         this.sound.play('sfx_whack', { volume: 0.7 });
@@ -667,7 +710,7 @@ export class WackAWegenScene extends Phaser.Scene {
       }
       this.hammerCursor?.setVisible(false);
     } else {
-      this.pauseButton?.setText('||');
+      this.pauseButton?.setText('⏸');
       this.pauseOverlay?.setVisible(false);
       this.pauseText?.setVisible(false);
       if (this.gameTimer) this.gameTimer.paused = false;
@@ -694,10 +737,10 @@ export class WackAWegenScene extends Phaser.Scene {
     }
     this.hammerCursor?.setVisible(false);
 
-    if (this.wegens && Array.isArray(this.wegens)) {
-      for (const w of this.wegens) {
-        this.tweens.killTweensOf(w);
-        w.setVisible(false);
+    if (this.degens && Array.isArray(this.degens)) {
+      for (const d of this.degens) {
+        this.tweens.killTweensOf(d);
+        d.setVisible(false);
       }
     }
 
@@ -706,10 +749,12 @@ export class WackAWegenScene extends Phaser.Scene {
       this.time.delayedCall(100, () => {
         const bonusText = this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'PERFECT BONUS!', {
           fontSize: '48px',
+          fontFamily: "Orbitron, Arial, sans-serif",
           color: '#ffd700',
           stroke: '#000',
           strokeThickness: 6,
-          fontStyle: 'bold'
+          fontStyle: 'bold',
+          shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 16, fill: true }
         }).setOrigin(0.5);
         this.tweens.add({
           targets: bonusText,
@@ -730,7 +775,7 @@ export class WackAWegenScene extends Phaser.Scene {
     }
     this.gameTimer?.destroy();
     this.popUpTimer?.destroy();
-    this.wegens = [];
+    this.degens = [];
     this.holes = [];
     this.ui = undefined;
     this.pauseOverlay = undefined;

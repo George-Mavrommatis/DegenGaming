@@ -21,17 +21,17 @@ const INSTRUCTION_SLIDES = [
   {
     image: "/WackAWegenAssets/instructions1.png",
     title: "Power-Ups & Penalties",
-    text: "Bombs lose time, Clock gains time, Mystery is random, Golden Wegen gives big points!"
+    text: "💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Wegen gives big points!"
   },
   {
     image: "/WackAWegenAssets/instructions2.png",
     title: "Scoring & Combos",
-    text: "Normal 10pts, Fast 25pts, Tanky 50pts (3 hits), Golden 150pts, Hit fast for COMBOS!"
+    text: "👊 Normal: 10pts\n⚡ Fast: 25pts\n🛡️ Tanky: 50pts (3 hits)\n⭐ Golden: 150pts\nHit fast for COMBOS!"
   },
   {
     image: "/WackAWegenAssets/instructions3.png",
     title: "Pro Tips",
-    text: "Chain hits for combos, Avoid near misses, Time bonuses get harder, Watch for patterns!"
+    text: "Chain hits for combos\nAvoid near misses\nTime bonuses get harder\nWatch for patterns!"
   }
 ];
 
@@ -59,14 +59,16 @@ export default function WackAWegen() {
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [slide, setSlide] = useState(0);
 
+  // Modern animated background!
   useEffect(() => {
-    console.log("[STATE]", { showInitModal, showInstructions, shouldStartGame, gameStarted, paid, useFreeTokenIntent });
-  }, [showInitModal, showInstructions, shouldStartGame, gameStarted, paid, useFreeTokenIntent]);
+    document.body.style.background = "radial-gradient(circle at 60% 40%, #352b5c 0%, #181a2e 100%)";
+    return () => { document.body.style.background = "#000"; };
+  }, []);
 
-  // Instructions overlay "Start Game" button
+  // Instructions overlay "Start Game" button logic
   const handleInstructionsDone = async () => {
     setTokenError(null);
-    // If using free token intent and not already paid, consume token
+    // Free token logic
     if (useFreeTokenIntent && !paid) {
       const tokens = getArcadeFreeEntryTokens(profile);
       if (tokens <= 0) {
@@ -82,7 +84,7 @@ export default function WackAWegen() {
         );
         toast.success("Arcade Free Entry Token consumed!");
         await refreshProfile();
-        setPaid(true); // <-- Mark as "paid" after token consumed!
+        setPaid(true);
       } catch (err: any) {
         setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
         toast.error("Failed to consume Arcade Free Entry Token.");
@@ -93,11 +95,10 @@ export default function WackAWegen() {
     setShouldStartGame(true);
   };
 
+  // Mount Phaser only after payment, instructions, and "Start Game"
   useEffect(() => {
-    // Only start game when paid is true and shouldStartGame is set (after Start Game pressed)
     if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted || !paid) return;
     if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
-    console.log("[PHASER MOUNT] Mounting WackAWegenScene...");
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
       parent: gameContainerRef.current,
@@ -112,14 +113,11 @@ export default function WackAWegen() {
     game.scene.start("WackAWegenScene", {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
-      txSig,
-      paid: true, // Always true at game start
-      skipInstructions: true,
       onGameOver: handleGameOver,
-      onReadyToStartGame: () => setGameStarted(true),
+      // No instructions logic in scene anymore!
     });
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
-  }, [shouldStartGame, profile, txSig, paid, gameStarted]);
+  }, [shouldStartGame, profile, paid, gameStarted]);
 
   const handleGameOver = useCallback(async (event: { score: number }) => {
     setFinalScore(event.score);
@@ -177,16 +175,16 @@ export default function WackAWegen() {
   return (
     <div className="w-full min-h-screen flex flex-col items-center justify-start bg-black relative">
       {/* Top Bar */}
-      <div className="flex flex-row items-center justify-between mt-8 mb-4 px-6 py-3 rounded-lg bg-zinc-900 bg-opacity-80 shadow-lg"
+      <div className="flex flex-row items-center justify-between mt-8 mb-4 px-6 py-3 rounded-lg bg-gradient-to-r from-[#332e6c] to-[#191a2d] shadow-lg"
         style={{ width: GAME_WIDTH, minWidth: 320, maxWidth: GAME_WIDTH }}>
-        <div className="text-lg font-bold text-orange-400">WackAWegen</div>
+        <div className="text-lg font-extrabold text-orange-400 tracking-wide font-orbitron drop-shadow">WackAWegen</div>
         <button
           onClick={handleFullscreen}
           title="Fullscreen"
-          className="focus:outline-none"
-          style={{ width: 32, height: 32, background: "none", padding: 0 }}
+          className="focus:outline-none bg-transparent"
+          style={{ width: 32, height: 32, padding: 0 }}
         >
-          <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32 }} />
+          <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
         </button>
       </div>
       {/* Game Container */}
@@ -198,10 +196,10 @@ export default function WackAWegen() {
           maxWidth: GAME_WIDTH,
           height: `calc(100vw * ${GAME_HEIGHT / GAME_WIDTH})`,
           maxHeight: GAME_HEIGHT,
-          background: "#222",
-          borderRadius: 16,
+          background: "linear-gradient(135deg, #23243a 0%, #302d6c 100%)",
+          borderRadius: 24,
           overflow: "hidden",
-          boxShadow: "0 4px 32px #000a",
+          boxShadow: "0 8px 48px #000a",
           margin: "0 auto",
           position: "relative",
           zIndex: 1,
@@ -240,33 +238,33 @@ export default function WackAWegen() {
       )}
       {/* Instructions Carousel Overlay */}
       {showInstructions && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90">
-          <div className="w-full max-w-2xl mx-auto p-8 rounded-2xl bg-zinc-900 shadow-2xl flex flex-col items-center">
-            <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 transition animate-fade-in">
+          <div className="w-full max-w-2xl mx-auto p-8 rounded-2xl bg-gradient-to-br from-[#332e6c] to-[#191a2d] shadow-2xl flex flex-col items-center border-4 border-yellow-400">
+            <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron tracking-wide">
               WackAWegen Instructions
             </h2>
             <div className="w-full flex flex-col items-center">
               <img
                 src={INSTRUCTION_SLIDES[slide].image}
                 alt={INSTRUCTION_SLIDES[slide].title}
-                style={{ width: "320px", borderRadius: 12, marginBottom: 16, boxShadow: "0 2px 24px #0008" }}
+                style={{ width: "320px", borderRadius: 18, marginBottom: 16, boxShadow: "0 2px 24px #0008" }}
               />
-              <div className="mb-4 text-lg text-white font-bold text-center">{INSTRUCTION_SLIDES[slide].title}</div>
-              <div className="mb-8 text-base text-gray-300 text-center max-w-xl">{INSTRUCTION_SLIDES[slide].text}</div>
+              <div className="mb-4 text-lg text-white font-bold text-center drop-shadow">{INSTRUCTION_SLIDES[slide].title}</div>
+              <div className="mb-8 text-base text-gray-300 text-center max-w-xl whitespace-pre-line">{INSTRUCTION_SLIDES[slide].text}</div>
               <div className="flex flex-row gap-4 mb-6">
                 <button
-                  className="px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold"
+                  className={`px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold transition ${slide === 0 ? "opacity-40 cursor-not-allowed" : "hover:bg-gray-600"}`}
                   onClick={() => setSlide((prev) => Math.max(prev - 1, 0))}
                   disabled={slide === 0}
                 >
-                  Prev
+                  ◀ Prev
                 </button>
                 <button
-                  className="px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold"
+                  className={`px-4 py-2 rounded bg-gray-700 text-gray-200 font-bold transition ${slide === INSTRUCTION_SLIDES.length - 1 ? "opacity-40 cursor-not-allowed" : "hover:bg-gray-600"}`}
                   onClick={() => setSlide((prev) => Math.min(prev + 1, INSTRUCTION_SLIDES.length - 1))}
                   disabled={slide === INSTRUCTION_SLIDES.length - 1}
                 >
-                  Next
+                  Next ▶
                 </button>
               </div>
             </div>
