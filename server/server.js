@@ -1408,78 +1408,77 @@ app.post('/chats/:chatId/messages', protect, async (req, res) => {
 
 
 
+// async function migrateSolStatsToMaps() {
+//   const RUN_MIGRATION = true; // Set to true to run, then REMOVE after success!
 
-async function migrateGameNameAndSolStats() {
-  const RUN_MIGRATION = true; // Set to true to run, then REMOVE after success!
+//   if (!RUN_MIGRATION) {
+//     console.log("Migration is disabled. Set RUN_MIGRATION = true to enable.");
+//     return;
+//   }
 
-  if (!RUN_MIGRATION) {
-    console.log("Migration is disabled. Set RUN_MIGRATION = true to enable.");
-    return;
-  }
-  console.log("Starting Firestore game name and SOL stats migration...");
+//   console.log("Starting Firestore SOL stats map migration...");
 
-  try {
-    const gamesCollection = db.collection('games');
-    const renames = [
-      { old: 'wack-a-wegen', new: 'wack-a-degen' },
-      { old: 'wegen-race',   new: 'degen-race' }
-    ];
+//   try {
+//     const gamesCollection = db.collection('games');
+//     const gameDocsSnapshot = await gamesCollection.get();
 
-    for (const { old, new: newName } of renames) {
-      const gameDoc = await gamesCollection.doc(old).get();
-      if (!gameDoc.exists) {
-        console.log(`Game "${old}" not found, skipping.`);
-        continue;
-      }
-      let data = gameDoc.data();
+//     for (const doc of gameDocsSnapshot.docs) {
+//       let data = doc.data();
 
-      // --- Migrate solGathered ---
-      let solGathered = data.solGathered;
-      if (typeof solGathered === 'number') {
-        // Move number to map
-        solGathered = { allTime: solGathered, lastMonth: 0 };
-      } else if (typeof solGathered === 'object') {
-        // Ensure both keys exist
-        solGathered.allTime = typeof solGathered.allTime === 'number' ? solGathered.allTime : 0;
-        solGathered.lastMonth = typeof solGathered.lastMonth === 'number' ? solGathered.lastMonth : 0;
-      } else {
-        solGathered = { allTime: 0, lastMonth: 0 };
-      }
-      data.solGathered = solGathered;
+//       // --- Gather values from all possible places ---
+//       let gatheredAllTime = 0, gatheredLastMonth = 0, distributedAllTime = 0, distributedLastMonth = 0;
 
-      // --- Migrate solDistributed ---
-      let solDistributed = data.solDistributed;
-      if (typeof solDistributed === 'number') {
-        solDistributed = { allTime: solDistributed, lastMonth: 0 };
-      } else if (typeof solDistributed === 'object') {
-        solDistributed.allTime = typeof solDistributed.allTime === 'number' ? solDistributed.allTime : 0;
-        solDistributed.lastMonth = typeof solDistributed.lastMonth === 'number' ? solDistributed.lastMonth : 0;
-      } else {
-        solDistributed = { allTime: 0, lastMonth: 0 };
-      }
-      data.solDistributed = solDistributed;
+//       // From top-level fields
+//       if (typeof data.solGathered === 'number') gatheredAllTime = data.solGathered;
+//       if (typeof data.solDistributed === 'number') distributedAllTime = data.solDistributed;
 
-      // Remove stray stats fields that are now redundant for clarity
-      if (data.stats) {
-        delete data.stats;
-      }
+//       // From top-level maps
+//       if (typeof data.solGathered === 'object') {
+//         gatheredAllTime = data.solGathered.allTime ?? gatheredAllTime;
+//         gatheredLastMonth = data.solGathered.lastMonth ?? 0;
+//       }
+//       if (typeof data.solDistributed === 'object') {
+//         distributedAllTime = data.solDistributed.allTime ?? distributedAllTime;
+//         distributedLastMonth = data.solDistributed.lastMonth ?? 0;
+//       }
 
-      // Write to new doc
-      await gamesCollection.doc(newName).set(data);
-      console.log(`Copied "${old}" to "${newName}" with SOL stats as maps.`);
-      await gamesCollection.doc(old).delete();
-      console.log(`Deleted old "${old}" doc.`);
-    }
+//       // From stats map (if exists)
+//       if (data.stats) {
+//         if (typeof data.stats.solGathered === 'number') gatheredAllTime = data.stats.solGathered;
+//         if (typeof data.stats.solDistributed === 'number') distributedAllTime = data.stats.solDistributed;
+//         if (typeof data.stats.solGathered === 'object') {
+//           gatheredAllTime = data.stats.solGathered.allTime ?? gatheredAllTime;
+//           gatheredLastMonth = data.stats.solGathered.lastMonth ?? gatheredLastMonth;
+//         }
+//         if (typeof data.stats.solDistributed === 'object') {
+//           distributedAllTime = data.stats.solDistributed.allTime ?? distributedAllTime;
+//           distributedLastMonth = data.stats.solDistributed.lastMonth ?? distributedLastMonth;
+//         }
+//       }
 
-    // Optionally migrate scores collections as before...
+//       // --- Set new fields ---
+//       data.solGathered = { allTime: gatheredAllTime, lastMonth: gatheredLastMonth };
+//       data.solDistributed = { allTime: distributedAllTime, lastMonth: distributedLastMonth };
 
-    console.log("Migration completed successfully!");
-  } catch (err) {
-    console.error("Migration failed:", err);
-  }
-}
+//       // --- Remove old fields ---
+//       // Remove plain number fields
+//       if (typeof data.solGathered === 'number') delete data.solGathered;
+//       if (typeof data.solDistributed === 'number') delete data.solDistributed;
+//       // Remove stats field
+//       if (data.stats) delete data.stats;
 
-migrateGameNameAndSolStats();
+//       // --- Write back to Firestore, overwrite all fields ---
+//       await gamesCollection.doc(doc.id).set(data, { merge: false });
+//       console.log(`Updated "${doc.id}" with SOL stats as maps.`);
+//     }
+
+//     console.log("SOL stats map migration completed!");
+//   } catch (err) {
+//     console.error("Migration failed:", err);
+//   }
+// }
+
+// migrateSolStatsToMaps();
 
 
 // In your server.js, import and call once:
