@@ -86,7 +86,7 @@ export default function Navbar() {
         <nav className="w-full max-w-[1600px] mx-auto flex items-center justify-between h-full px-6">
           {/* Logo */}
           <Link to="/" aria-label="Home" className="flex-shrink-0 flex items-center" style={{ width: "5rem" }}>
-            <img src="/small-logo.png" alt="Logo" className="h-16 w-16 object-contain select-none animate-scaleIn" />
+            <img src="/ggWEB3_logo.png" alt="Logo" className="h-16 w-16 object-contain select-none animate-scaleIn" />
           </Link>
           {/* Nav Center */}
           <div className="flex-1 flex items-center justify-center">

@@ -84,8 +84,8 @@ export default function Landing() {
       <section className="relative flex flex-col items-center justify-center min-h-[70vh] pt-24 pb-32 w-full bg-gradient-to-b from-black via-fuchsia-950/60 to-zinc-900 overflow-hidden">
         {/* Layer 2: Large transparent GIF logo in the background */}
         <img
-          src="/dglogo.gif"
-          alt="Degen Gaming Logo Animation"
+          src="/ggWEB3_logo.png"
+          alt="GG Web3 Logo "
           aria-hidden
           className="pointer-events-none select-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0"
           style={{
@@ -100,7 +100,7 @@ export default function Landing() {
         {/* Main content (z-10) */}
         <div className="relative z-10 flex flex-col items-center w-full">
           <h1 className="text-[#FFD93B] text-4xl sm:text-5xl uppercase font-orbitron font-extrabold mb-8 drop-shadow-md tracking-widest text-center">
-            Welcome to Degen Gaming!
+            Welcome to GG Web3 !
           </h1>
           {isAuthenticated ? (
             <div className="text-white text-center">
@@ -161,7 +161,7 @@ export default function Landing() {
       >
         <div className="absolute inset-0 bg-black/60" />
         <h1 className="relative z-10 text-[#FFD93B] text-3xl sm:text-5xl uppercase font-orbitron font-extrabold mb-4 drop-shadow-md tracking-widest text-center">
-          We are here to build Degen Games for Web3!
+          We are here to build Good Games for Web3 Degens!
         </h1>
       </section>
 

@@ -1408,6 +1408,80 @@ app.post('/chats/:chatId/messages', protect, async (req, res) => {
 
 
 
+
+async function migrateGameNameAndSolStats() {
+  const RUN_MIGRATION = true; // Set to true to run, then REMOVE after success!
+
+  if (!RUN_MIGRATION) {
+    console.log("Migration is disabled. Set RUN_MIGRATION = true to enable.");
+    return;
+  }
+  console.log("Starting Firestore game name and SOL stats migration...");
+
+  try {
+    const gamesCollection = db.collection('games');
+    const renames = [
+      { old: 'wack-a-wegen', new: 'wack-a-degen' },
+      { old: 'wegen-race',   new: 'degen-race' }
+    ];
+
+    for (const { old, new: newName } of renames) {
+      const gameDoc = await gamesCollection.doc(old).get();
+      if (!gameDoc.exists) {
+        console.log(`Game "${old}" not found, skipping.`);
+        continue;
+      }
+      let data = gameDoc.data();
+
+      // --- Migrate solGathered ---
+      let solGathered = data.solGathered;
+      if (typeof solGathered === 'number') {
+        // Move number to map
+        solGathered = { allTime: solGathered, lastMonth: 0 };
+      } else if (typeof solGathered === 'object') {
+        // Ensure both keys exist
+        solGathered.allTime = typeof solGathered.allTime === 'number' ? solGathered.allTime : 0;
+        solGathered.lastMonth = typeof solGathered.lastMonth === 'number' ? solGathered.lastMonth : 0;
+      } else {
+        solGathered = { allTime: 0, lastMonth: 0 };
+      }
+      data.solGathered = solGathered;
+
+      // --- Migrate solDistributed ---
+      let solDistributed = data.solDistributed;
+      if (typeof solDistributed === 'number') {
+        solDistributed = { allTime: solDistributed, lastMonth: 0 };
+      } else if (typeof solDistributed === 'object') {
+        solDistributed.allTime = typeof solDistributed.allTime === 'number' ? solDistributed.allTime : 0;
+        solDistributed.lastMonth = typeof solDistributed.lastMonth === 'number' ? solDistributed.lastMonth : 0;
+      } else {
+        solDistributed = { allTime: 0, lastMonth: 0 };
+      }
+      data.solDistributed = solDistributed;
+
+      // Remove stray stats fields that are now redundant for clarity
+      if (data.stats) {
+        delete data.stats;
+      }
+
+      // Write to new doc
+      await gamesCollection.doc(newName).set(data);
+      console.log(`Copied "${old}" to "${newName}" with SOL stats as maps.`);
+      await gamesCollection.doc(old).delete();
+      console.log(`Deleted old "${old}" doc.`);
+    }
+
+    // Optionally migrate scores collections as before...
+
+    console.log("Migration completed successfully!");
+  } catch (err) {
+    console.error("Migration failed:", err);
+  }
+}
+
+migrateGameNameAndSolStats();
+
+
 // In your server.js, import and call once:
 // await ensurePlatformStatsSchema();
 

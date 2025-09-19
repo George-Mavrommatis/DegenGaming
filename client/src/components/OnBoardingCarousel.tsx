@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 const slides = [
   {
-    title: " Welcome to Degen Gaming ! ",
+    title: " Welcome to GG Web3 ! ",
     description: "A modern arcade in web3. Play, earn, and stand out.",
   },
     {

@@ -32,7 +32,7 @@ export async function solanaWalletLogin(
     }
     const address = wallet.publicKey.toString();
     const nonce = (Math.random() * 1e18).toString();
-    const message = `Sign in to Degen Gaming with this one-time code: ${nonce}`;
+    const message = `Sign in to GG Web3 with this one-time code: ${nonce}`;
     onStatus?.("Requesting signature...");
     const signed = await wallet.signMessage(new TextEncoder().encode(message));
     const signature = btoa(String.fromCharCode(...signed));

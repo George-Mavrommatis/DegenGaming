@@ -146,7 +146,7 @@ export default function Home() {
             Welcome to
           </h1>
           <h2 className="text-5xl font-black font-orbitron text-[#ffd93b] mb-6 uppercase">
-            Degen Gaming!
+            GG Web3 !
           </h2>
           <p className="text-slate-300 text-xl max-w-2xl mx-auto mb-8">
             Discover games, track your progress, and climb the leaderboards.<br />
