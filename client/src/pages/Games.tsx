@@ -36,8 +36,8 @@ type Game = {
   prizePool?: string;
   route: string;
   description: string;
-  solGathered?: number;
-  solDistributed?: number;
+  solGathered?: { allTime: number; lastMonth: number };
+  solDistributed?: { allTime: number; lastMonth: number };
   ticketPriceUsd?: number;
   destinationWallet?: string;
   minPlayers?: number;
@@ -54,6 +54,12 @@ interface FreeEntryTokens {
   pickerTokens: number;
   casinoTokens: number;
   pvpTokens: number;
+}
+
+function formatSOL(n: number | undefined) {
+  if (typeof n !== 'number') return "N/A SOL";
+  if (n === 0) return "0.000 SOL";
+  return `${n.toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 6 })} SOL`;
 }
 
 export default function GamesPage() {
@@ -146,11 +152,14 @@ export default function GamesPage() {
       <div className="p-3">
         <h4 className="font-bold mb-1 text-sm text-white">{game.title}</h4>
         <p className="text-xs text-slate-300 mb-1">{game.description}</p>
-        {game.solGathered !== undefined && game.solDistributed !== undefined && (
+
+        {/* <LastMonthSOLStats game={game} /> */}
+
+        {/* {(game.solGathered && game.solDistributed) && (
           <div className="text-[11px] text-amber-200 bg-gray-950/30 p-2 mt-1 rounded-md leading-tight">
-            Last month we gathered <span className="font-bold text-yellow-300">{game.solGathered} SOL</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{game.solDistributed} SOL</span>
+            Last month we gathered <span className="font-bold text-yellow-300">{formatSOL(game.solGathered.lastMonth)}</span> and gave back to the TOP 5 players <span className="font-bold text-green-300">{formatSOL(game.solDistributed.lastMonth)}</span>
           </div>
-        )}
+        )} */}
         <button
           className="mt-3 w-full py-2 rounded bg-gradient-to-r from-lime-500 to-green-600 text-white text-xs font-bold shadow hover:from-lime-600 hover:to-green-700"
           onClick={() => setModalGame(game)}
@@ -214,9 +223,9 @@ export default function GamesPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900/30 to-slate-900 pt-24 pb-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-12">
-          <h1 className="text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600 mb-4">Game Hub</h1>
+          <h1 className="text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600 mb-4">Games Hub</h1>
           <p className="text-slate-300 text-xl max-w-2xl mx-auto mb-8">Compete, earn, and climb the leaderboards in our Web3 gaming ecosystem</p>
-          <div className="max-w-md mx-auto">
+          {/* <div className="max-w-md mx-auto">
             <input
               type="text"
               placeholder="Search all games..."
@@ -224,10 +233,10 @@ export default function GamesPage() {
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full px-4 py-3 bg-slate-800/50 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:border-purple-500 focus:outline-none backdrop-blur-md"
             />
-          </div>
+          </div> */}
         </div>
 
-        <div className="bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-2xl p-8 mb-12 border border-purple-500/30 backdrop-blur-md">
+        {/* <div className="bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-2xl p-8 mb-12 border border-purple-500/30 backdrop-blur-md">
           <div className="flex flex-col lg:flex-row items-center gap-8">
             <div className="flex-1 text-center lg:text-left">
               <div className="flex items-center justify-center lg:justify-start gap-2 mb-4">
@@ -237,12 +246,12 @@ export default function GamesPage() {
               <h2 className="text-4xl font-bold text-white mb-4">Inauguration Month of Degen Gaming</h2>
               <p className="text-slate-300 text-lg mb-6">Use our Picker Games with their minimal fee drawing a winner from a list of Degen Users or simply wallets for your giveaway!</p>
               <p className="text-slate-300 text-lg mb-6">Compete across all Arcade Games for Monthly payouts to the Top 5 Degen Players of the month!</p>
-              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-lg text-white font-bold shadow">
+              <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-lg text-white font-bold">
                 Wack A Wegen to celebrate with us! <FaArrowRight />
               </Link>
             </div>
           </div>
-        </div>
+        </div> */}
 
         <div className="space-y-8">
           {loading ? (
@@ -300,36 +309,34 @@ export default function GamesPage() {
         )}
 
         {/* Arcade Modal */}
-          {modalGame && modalGame.category === "Arcade" && (
-        <ArcadeInitModal
-          isOpen={!!modalGame}
-          gameId={modalGame.id}
-          category={modalGame.category}
-          ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
-          destinationWallet={PLATFORM_WALLET}
-          gameTitle={modalGame.title}
-          arcadeFreeEntryTokens={freeTokens?.arcadeTokens ?? 0}
-          onSuccess={(result) => {
-            setModalGame(null); // Always close modal first!
-            if (!modalGame.route) {
-              toast.error("Game route not configured. Please try another game.");
-              return;
-            }
-            // result: { txSig?, usedFreeToken? }
-            if (result && result.usedFreeToken) {
-              toast.success("Arcade Free Entry Token used!");
-              refreshProfile();
-            }
-            // Pass result state to game page for correct parent flow
-            navigate(modalGame.route, { state: result });
-          }}
-          onError={msg => {
-            setModalGame(null);
-            toast.error(`Game initiation failed: ${msg}`);
-          }}
-          onClose={() => setModalGame(null)}
-        />
-      )}
+        {modalGame && modalGame.category === "Arcade" && (
+          <ArcadeInitModal
+            isOpen={!!modalGame}
+            gameId={modalGame.id}
+            category={modalGame.category}
+            ticketPriceSol={CATEGORY_PAYMENT[modalGame.category] || 0.005}
+            destinationWallet={PLATFORM_WALLET}
+            gameTitle={modalGame.title}
+            arcadeFreeEntryTokens={freeTokens?.arcadeTokens ?? 0}
+            onSuccess={(result) => {
+              setModalGame(null); // Always close modal first!
+              if (!modalGame.route) {
+                toast.error("Game route not configured. Please try another game.");
+                return;
+              }
+              if (result && result.usedFreeToken) {
+                toast.success("Arcade Free Entry Token used!");
+                refreshProfile();
+              }
+              navigate(modalGame.route, { state: result });
+            }}
+            onError={msg => {
+              setModalGame(null);
+              toast.error(`Game initiation failed: ${msg}`);
+            }}
+            onClose={() => setModalGame(null)}
+          />
+        )}
 
         {/* If you want to add Casino/PvP modals, follow the above pattern */}
       </div>
