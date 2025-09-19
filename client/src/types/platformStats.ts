@@ -1,54 +1,29 @@
-// src/types/platformStats.ts
-
 export interface GameStats {
   gameId: string;
-  name: string;
+  name: string | null;
   category: "arcade" | "pvp" | "casino" | "picker";
-  solTotal: number;                   // gathered all time
-  solDistributed: number;             // distributed all time (0 for picker)
-  solLastMonth: number;               // gathered last month
-  solDistributedLastMonth: number;    // distributed last month (0 for picker)
-  playsTotal: number;
-  playsLastMonth: number;
-  lastPayoutMonth?: string;           // e.g. "2024-06"
-  lastPayoutAmount?: number;
+  solGathered: { allTime: number; lastMonth: number };
+  solDistributed: { allTime: number; lastMonth: number };
+  gamesPlayed: { allTime: number; lastMonth: number };
+  image?: string | null;
+  description?: string | null;
 }
 
 export interface CategoryStats {
-  solTotal: number;                  // gathered all time
-  solDistributed: number;            // distributed all time (0 for picker)
-  solLastMonth: number;              // gathered last month
-  solDistributedLastMonth: number;   // distributed last month (0 for picker)
-  playsTotal: number;
-  playsLastMonth: number;
-  games: string[];                   // game IDs in this category
+  solGathered: { allTime: number; lastMonth: number };
+  solDistributed: { allTime: number; lastMonth: number };
+  gamesPlayed: { allTime: number; lastMonth: number };
+  games: string[];         // game IDs in this category
 }
 
 export interface PlatformStats {
   registeredUsers: number;
   onlineUsers: number;
   totalGamesPlayed: number;
-
-  // Aggregate fields (legacy, for convenience)
-  pickerSolTotal: number;
-  pickerSolLastMonth: number;
-  arcadeSolTotal: number;
-  arcadeSolDistributed: number;
-  arcadeSolLastMonth: number;
-  arcadeSolDistributedLastMonth: number;
-  casinoSolTotal: number;
-  casinoSolDistributed: number;
-  casinoSolLastMonth: number;
-  casinoSolDistributedLastMonth: number;
-  pvpSolTotal: number;
-  pvpSolDistributed: number;
-  pvpSolLastMonth: number;
-  pvpSolDistributedLastMonth: number;
-
-  // Scalable fields
+  totalSolDistributed: number;
   categories: { [cat in "picker" | "arcade" | "pvp" | "casino"]: CategoryStats };
   games: { [gameId: string]: GameStats };
-
   lastMonthPeriod: string;
+  currentMonthPeriod: string;
   lastUpdated: string;
 }

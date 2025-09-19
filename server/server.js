@@ -394,6 +394,8 @@ async function updateALLUsersOnlineStatus() {
 }
 
 
+// --- Platform Stats Aggregation ---
+// This cron function ensures each category has "gamesPlayed: { allTime, lastMonth }" ONLY.
 async function updatePlatformStatsAggregatedInSol() {
     console.log('Cron job: Running updatePlatformStatsAggregatedInSol...');
     try {
@@ -403,50 +405,94 @@ async function updatePlatformStatsAggregatedInSol() {
         const statsDocRef = db.collection('platform').doc('stats');
         const statsDoc = await statsDocRef.get();
 
+        // Default structure
         let currentStats = {
-            registeredUsers: 0,
+            registeredUsers,
             onlineUsers: 0,
             totalGamesPlayed: 0,
+            totalSolDistributed: 0,
             lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
             currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
             lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
             categories: {
-                arcade: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                pvp: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                casino: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                picker: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
+                arcade: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                pvp:    { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                casino: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                picker: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
             },
-            games: {} // Placeholder for per-game stats if needed
+            games: {}
         };
 
         if (statsDoc.exists) {
             Object.assign(currentStats, statsDoc.data());
         }
-        currentStats.registeredUsers = registeredUsers; // Update registered users count
 
-        // Fetch total games played and other game-related stats (example logic)
         const gamesSnapshot = await db.collection('games').get();
         let totalGamesPlayed = 0;
         let totalSolDistributed = 0;
-        gamesSnapshot.forEach(gameDoc => {
-            const gameData = gameDoc.data();
-            totalGamesPlayed += (gameData.plays || 0); // Assuming 'plays' field exists for games
-            totalSolDistributed += (gameData.winningsDistributed || 0); // Assuming 'winningsDistributed'
-            // Add more specific category calculations here if needed
+
+        const categoryKeys = Object.keys(currentStats.categories);
+
+        categoryKeys.forEach(cat => {
+            currentStats.categories[cat].solGathered = { allTime: 0, lastMonth: 0 };
+            currentStats.categories[cat].solDistributed = { allTime: 0, lastMonth: 0 };
+            currentStats.categories[cat].gamesPlayed = { allTime: 0, lastMonth: 0 };
+            currentStats.categories[cat].games = [];
         });
+
+        gamesSnapshot.forEach(gameDoc => {
+            const g = gameDoc.data();
+            const cat = (g.category || '').toLowerCase();
+            if (!categoryKeys.includes(cat)) return;
+            const catStats = currentStats.categories[cat];
+            catStats.games.push(gameDoc.id);
+
+            // Defensive: support both map and number
+            const solGathered = g.solGathered ?? { allTime: 0, lastMonth: 0 };
+            const solDistributed = g.solDistributed ?? { allTime: 0, lastMonth: 0 };
+            catStats.solGathered.allTime += solGathered.allTime || 0;
+            catStats.solGathered.lastMonth += solGathered.lastMonth || 0;
+            catStats.solDistributed.allTime += solDistributed.allTime || 0;
+            catStats.solDistributed.lastMonth += solDistributed.lastMonth || 0;
+
+            // --- Games Played aggregation ---
+            // Counts DISTINCT games played: allTime if any play count > 0, lastMonth if play count in last month > 0
+            if ((g.playsTotal ?? g.plays ?? 0) > 0) {
+                catStats.gamesPlayed.allTime += 1;
+            }
+            if ((g.playsLastMonth ?? 0) > 0) {
+                catStats.gamesPlayed.lastMonth += 1;
+            }
+
+            // --- Per-game stats for frontend ---
+            currentStats.games[gameDoc.id] = {
+                gameId: gameDoc.id,
+                name: g.name ?? null,
+                category: cat,
+                solGathered: solGathered,
+                solDistributed: solDistributed,
+                playsTotal: g.playsTotal ?? g.plays ?? 0,
+                playsLastMonth: g.playsLastMonth ?? 0,
+                lastPayoutMonth: g.lastPayoutMonth ?? null,
+                lastPayoutAmount: g.lastPayoutAmount ?? null,
+                image: g.image ?? null,
+                description: g.description ?? null,
+            };
+
+            totalGamesPlayed += g.playsTotal ?? g.plays ?? 0;
+            totalSolDistributed += solDistributed.allTime || 0;
+        });
+
         currentStats.totalGamesPlayed = totalGamesPlayed;
         currentStats.totalSolDistributed = totalSolDistributed;
-        currentStats.onlineUsers = (await getOnlineUserIds()).length; // Update current online users count
+        currentStats.onlineUsers = (await getOnlineUserIds()).length;
 
-
-        await statsDocRef.set(currentStats, { merge: true }); // Merge to avoid overwriting unrelated fields
+        await statsDocRef.set(currentStats, { merge: true });
         console.log('Platform stats updated successfully in Firestore.');
-
     } catch (error) {
         console.error('Error updating platform stats:', error);
     }
 }
-
 
 // Cron job to clean up online status every 5 minutes
 cron.schedule('*/5 * * * *', updateALLUsersOnlineStatus);
@@ -463,7 +509,7 @@ updatePlatformStatsAggregatedInSol();
 
 // Base route
 app.get('/', (req, res) => {
-    res.send('Degen Gaming Backend is running!');
+    res.send('GG Web3 Backend is running!');
 });
 
 // User Registration (Public - no protect middleware)
@@ -538,7 +584,7 @@ app.post("/verify-wallet", async (req, res) => {
         }
 
         // IMPORTANT: The message string MUST EXACTLY match what the frontend signs.
-        const message = `Sign in to Degen Gaming with this one-time code: ${nonce}`;
+        const message = `Sign in to GG Web3 with this one-time code: ${nonce}`;
         const messageBytes = new TextEncoder().encode(message);
 
         let signatureBytes;
@@ -892,6 +938,91 @@ app.get('/onlineUsers', async (req, res) => {
         console.error("Error fetching online users in API:", error);
         res.status(500).json({ message: "Failed to fetch online users." });
     }
+});
+
+// Increment solGathered for a game and category
+app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body;
+  const now = new Date();
+  const lastMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  try {
+    // Game doc
+    const gameRef = db.collection('games').doc(gameId);
+    await gameRef.update({
+      'solGathered.allTime': admin.firestore.FieldValue.increment(amount),
+      'solGathered.lastMonth': admin.firestore.FieldValue.increment(amount)
+    });
+
+    // Platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.solGathered.allTime`]: admin.firestore.FieldValue.increment(amount),
+      [`categories.${category}.solGathered.lastMonth`]: admin.firestore.FieldValue.increment(amount)
+    });
+
+    res.status(200).json({ success: true });
+    // Optionally, emit socket.io update to all clients here!
+  } catch (error) {
+    console.error('Error incrementing solGathered:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Increment gamesPlayed for a game and category
+app.post('/api/games/increment-games-played', protect, async (req, res) => {
+  const { gameId, category } = req.body;
+  try {
+    // Game doc
+    const gameRef = db.collection('games').doc(gameId);
+    await gameRef.update({
+      'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
+      'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
+    });
+
+    // Platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
+      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
+    });
+
+    res.status(200).json({ success: true });
+    // Optionally, emit socket.io update to all clients here!
+  } catch (error) {
+    console.error('Error incrementing gamesPlayed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body; // amount in SOL
+  try {
+    // Defensive: ensure amount is a number
+    const incrementValue = Number(amount);
+    if (isNaN(incrementValue) || incrementValue <= 0) {
+      return res.status(400).json({ success: false, error: "Invalid amount" });
+    }
+
+    // Increment game doc
+    const gameRef = db.collection('games').doc(gameId);
+    await gameRef.update({
+      'solGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
+      'solGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    // Increment category in platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.solGathered.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
+      [`categories.${category}.solGathered.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    res.status(200).json({ success: true });
+    // Optionally: Emit socket.io event for live updates here!
+  } catch (error) {
+    console.error('Error incrementing solGathered:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 
@@ -1406,83 +1537,63 @@ app.post('/chats/:chatId/messages', protect, async (req, res) => {
     }
 });
 
+// --- Leaderboard Score Submission API ---
+app.post('/leaderboards/submit-score', protect, async (req, res) => {
+  const { gameId, score } = req.body;
+  const userId = req.user.uid;
+  if (!gameId || !userId || typeof score !== 'number') {
+    return res.status(400).json({ message: "Missing required fields." });
+  }
+
+  // Disallow for Picker games (no leaderboard)
+  const gameDoc = await db.collection('games').doc(gameId).get();
+  if (gameDoc.exists && ['picker', 'Picker'].includes((gameDoc.data().category || '').toLowerCase())) {
+    return res.status(400).json({ message: "Picker games do not have leaderboards." });
+  }
+
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const leaderboardRef = db.collection('leaderboards').doc(gameId);
+
+  const leaderboardDoc = await leaderboardRef.get();
+  let data = leaderboardDoc.exists ? leaderboardDoc.data() : {};
+  if (!data.allTimeScores) data.allTimeScores = {};
+  if (!data.monthlyScores) data.monthlyScores = {};
+
+  // 1. Update monthlyScores
+  if (!data.monthlyScores[monthKey]) data.monthlyScores[monthKey] = {};
+  data.monthlyScores[monthKey][userId] = {
+    score,
+    timestamp: now.toISOString(),
+  };
+
+  // 2. Update allTimeScores if new score is higher
+  const prevAllTime = data.allTimeScores[userId]?.score || 0;
+  let updatedAllTime = false;
+  if (score > prevAllTime) {
+    data.allTimeScores[userId] = {
+      score,
+      timestamp: now.toISOString(),
+    };
+    updatedAllTime = true;
+  }
+
+  await leaderboardRef.set(data, { merge: true });
+  res.status(200).json({ message: "Score submitted.", updatedAllTime });
+});
+
+// --- API: Get leaderboard for a game ---
+app.get('/leaderboards/:gameId', protect, async (req, res) => {
+  const { gameId } = req.params;
+  const leaderboardDoc = await db.collection('leaderboards').doc(gameId).get();
+  if (!leaderboardDoc.exists) {
+    return res.status(404).json({ message: "Leaderboard not found." });
+  }
+  res.status(200).json(leaderboardDoc.data());
+});
 
 
-// async function migrateSolStatsToMaps() {
-//   const RUN_MIGRATION = true; // Set to true to run, then REMOVE after success!
 
-//   if (!RUN_MIGRATION) {
-//     console.log("Migration is disabled. Set RUN_MIGRATION = true to enable.");
-//     return;
-//   }
-
-//   console.log("Starting Firestore SOL stats map migration...");
-
-//   try {
-//     const gamesCollection = db.collection('games');
-//     const gameDocsSnapshot = await gamesCollection.get();
-
-//     for (const doc of gameDocsSnapshot.docs) {
-//       let data = doc.data();
-
-//       // --- Gather values from all possible places ---
-//       let gatheredAllTime = 0, gatheredLastMonth = 0, distributedAllTime = 0, distributedLastMonth = 0;
-
-//       // From top-level fields
-//       if (typeof data.solGathered === 'number') gatheredAllTime = data.solGathered;
-//       if (typeof data.solDistributed === 'number') distributedAllTime = data.solDistributed;
-
-//       // From top-level maps
-//       if (typeof data.solGathered === 'object') {
-//         gatheredAllTime = data.solGathered.allTime ?? gatheredAllTime;
-//         gatheredLastMonth = data.solGathered.lastMonth ?? 0;
-//       }
-//       if (typeof data.solDistributed === 'object') {
-//         distributedAllTime = data.solDistributed.allTime ?? distributedAllTime;
-//         distributedLastMonth = data.solDistributed.lastMonth ?? 0;
-//       }
-
-//       // From stats map (if exists)
-//       if (data.stats) {
-//         if (typeof data.stats.solGathered === 'number') gatheredAllTime = data.stats.solGathered;
-//         if (typeof data.stats.solDistributed === 'number') distributedAllTime = data.stats.solDistributed;
-//         if (typeof data.stats.solGathered === 'object') {
-//           gatheredAllTime = data.stats.solGathered.allTime ?? gatheredAllTime;
-//           gatheredLastMonth = data.stats.solGathered.lastMonth ?? gatheredLastMonth;
-//         }
-//         if (typeof data.stats.solDistributed === 'object') {
-//           distributedAllTime = data.stats.solDistributed.allTime ?? distributedAllTime;
-//           distributedLastMonth = data.stats.solDistributed.lastMonth ?? distributedLastMonth;
-//         }
-//       }
-
-//       // --- Set new fields ---
-//       data.solGathered = { allTime: gatheredAllTime, lastMonth: gatheredLastMonth };
-//       data.solDistributed = { allTime: distributedAllTime, lastMonth: distributedLastMonth };
-
-//       // --- Remove old fields ---
-//       // Remove plain number fields
-//       if (typeof data.solGathered === 'number') delete data.solGathered;
-//       if (typeof data.solDistributed === 'number') delete data.solDistributed;
-//       // Remove stats field
-//       if (data.stats) delete data.stats;
-
-//       // --- Write back to Firestore, overwrite all fields ---
-//       await gamesCollection.doc(doc.id).set(data, { merge: false });
-//       console.log(`Updated "${doc.id}" with SOL stats as maps.`);
-//     }
-
-//     console.log("SOL stats map migration completed!");
-//   } catch (err) {
-//     console.error("Migration failed:", err);
-//   }
-// }
-
-// migrateSolStatsToMaps();
-
-
-// In your server.js, import and call once:
-// await ensurePlatformStatsSchema();
 
 // --- General Error Handling ---
 // This middleware should be last
@@ -1495,7 +1606,7 @@ app.use((err, req, res, next) => {
 // --- Server Start ---
 // Starts the Express server and performs initial setup tasks
 server.listen(PORT, async () => {
-    console.log(`DegenGaming Backend listening on port ${PORT}`);
+    console.log(`GG Web3 Backend listening on port ${PORT}`);
     // Ensure the game token mint is loaded or created when the server starts
     // Run initial cron jobs
     

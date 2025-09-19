@@ -57,8 +57,8 @@ export default function App() {
             <Route path="/games" element={<Games />} />
             <Route path="/leaderboards" element={<Leaderboards />} />
             {/* Game Routes that require login */}
-            <Route path="/games/wegenrace" element={<WegenRace />} />
-            <Route path="/games/wackawegen" element={<WackAWegen />} />
+            <Route path="/games/degenrace" element={<WegenRace />} />
+            <Route path="/games/wackadegen" element={<WackAWegen />} />
           </Route>
         </Routes>
       </Layout>

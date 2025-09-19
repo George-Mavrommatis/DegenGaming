@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
-import { FaUsers, FaGamepad, FaDollarSign, FaChartLine, FaHourglassHalf, FaFire, FaDice, FaCrosshairs, FaEye, FaTrophy } from 'react-icons/fa';
-import { GiPistolGun, GiSlotMachine, GiGiraffe } from "react-icons/gi";
+import { FaUsers, FaGamepad, FaTrophy, FaEye, FaCrosshairs, FaDice } from 'react-icons/fa';
 import { usePlatformStats } from '../firebase/usePlatformStats';
 import { PlatformStats, CategoryStats, GameStats } from '../types/platformStats';
 
@@ -148,12 +147,20 @@ function CategoryStatsPanel({
           );
         }
         const color = CATEGORY_COLORS[cat] || "bg-slate-800 border-slate-600";
-        const showDistributed = cat !== "picker"; // Picker has no distribution
+        const showDistributed = cat !== "picker";
 
         // Defensive fallback for category stats
-        const solTotal = type === "month" ? catStats.solLastMonth : catStats.solTotal;
-        const solDistributed = type === "month" ? (catStats.solDistributedLastMonth || 0) : (catStats.solDistributed || 0);
-        const plays = type === "month" ? catStats.playsLastMonth : catStats.playsTotal;
+        const solTotal = type === "month"
+          ? catStats.solGathered?.lastMonth ?? 0
+          : catStats.solGathered?.allTime ?? 0;
+        const solDistributed = type === "month"
+          ? catStats.solDistributed?.lastMonth ?? 0
+          : catStats.solDistributed?.allTime ?? 0;
+
+        // Here is the fix - fetch both Games Played stats
+        // Always show both columns regardless of "type"
+        const gamesPlayedLastMonth = catStats.gamesPlayed?.lastMonth ?? 0;
+        const gamesPlayedAllTime = catStats.gamesPlayed?.allTime ?? 0;
 
         return (
           <div
@@ -179,10 +186,18 @@ function CategoryStatsPanel({
                   </span>
                 </div>
               )}
+              {/* ---- FIXED LINE: Games Played columns ---- */}
               <div className="flex justify-between items-center">
-                <span className="text-sm text-slate-300">Plays:</span>
+                <span className="text-sm text-slate-300">Games Played:</span>
                 <span className="font-semibold text-blue-200 text-sm">
-                  {formatNum(plays)}
+                  <span className="mr-2">
+                    {formatNum(gamesPlayedLastMonth)}
+                    <span className="text-xs text-slate-400"> LM</span>
+                  </span>
+                  <span>
+                    {formatNum(gamesPlayedAllTime)}
+                    <span className="text-xs text-slate-400"> AT</span>
+                  </span>
                 </span>
               </div>
             </div>
@@ -195,20 +210,38 @@ function CategoryStatsPanel({
                   catStats.games?.map(gameId => {
                     const g = games[gameId];
                     if (!g) return null;
-                    const gSolTotal = type === "month" ? g.solLastMonth : g.solTotal;
-                    const gSolDistributed = type === "month" ? (g.solDistributedLastMonth || 0) : (g.solDistributed || 0);
+                    const gSolTotal = type === "month"
+                      ? g.solGathered?.lastMonth ?? 0
+                      : g.solGathered?.allTime ?? 0;
+                    const gSolDistributed = type === "month"
+                      ? g.solDistributed?.lastMonth ?? 0
+                      : g.solDistributed?.allTime ?? 0;
                     const gPlays = type === "month" ? g.playsLastMonth : g.playsTotal;
                     return (
-                      <div key={gameId} className="p-2 rounded bg-black/30 border border-slate-700/30">
-                        <div className="font-semibold text-white text-xs mb-1">{g.name}</div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-yellow-300">{formatSOL(gSolTotal)}</span>
-                          {showDistributed && (
-                            <span className="text-green-400">{formatSOL(gSolDistributed)}</span>
+                      <div key={gameId} className="p-2 rounded bg-black/30 border border-slate-700/30 flex gap-2 items-center">
+                        {g.image && (
+                          <img
+                            src={g.image}
+                            alt={g.name}
+                            className="w-8 h-8 rounded object-cover mr-1 border border-slate-800"
+                            style={{ minWidth: 32, minHeight: 32 }}
+                            onError={e => { e.currentTarget.src = "/images/games/small-logo.png"; }}
+                          />
+                        )}
+                        <div className="flex-grow">
+                          <div className="font-semibold text-white text-xs mb-1">{g.name}</div>
+                          {g.description && (
+                            <div className="text-xs text-slate-400 mb-1">{g.description}</div>
                           )}
-                        </div>
-                        <div className="text-right text-blue-200 text-xs mt-1">
-                          {formatNum(gPlays)} plays
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-yellow-300">{formatSOL(gSolTotal)}</span>
+                            {showDistributed && (
+                              <span className="text-green-400">{formatSOL(gSolDistributed)}</span>
+                            )}
+                          </div>
+                          <div className="text-right text-blue-200 text-xs mt-1">
+                            {formatNum(gPlays)} plays
+                          </div>
                         </div>
                       </div>
                     );

@@ -170,6 +170,33 @@ export const apiService = {
     const response = await apiClient.get('/user/game-history');
     return response.data;
   },
+
+
+  /**
+   * Increment solGathered for a game and category
+   */
+   incrementSolGathered: async (gameId: string, category: string, amount: number) => {
+    const response = await apiClient.post('/api/games/increment-sol-gathered', {
+      gameId,
+      category,
+      amount
+    });
+    return response.data;
+  },
+
+  /**
+   * Increment gamesPlayed for a game and category
+   */
+  incrementGamesPlayed: async (gameId: string, category: string) => {
+    const response = await apiClient.post('/api/games/increment-games-played', {
+      gameId,
+      category
+    });
+    return response.data;
+  },
+  
 };
+
+
 
 export const api = apiClient;

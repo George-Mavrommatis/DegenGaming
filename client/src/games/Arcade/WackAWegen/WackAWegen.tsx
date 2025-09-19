@@ -7,13 +7,13 @@ import ArcadeInitModal from "../../../games/Arcade/ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
 import { saveWackAWegenScore } from "../../../firebase/gamescores";
 import { WackAWegenScene } from "./WackAWegenScene";
-import { api } from '../../../services/api';
+import { apiService } from '../../../services/api'; // <-- Use apiService here!
 import { getArcadeFreeEntryTokens } from "../../../utilities/token";
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
 const GAME_ID = "wackawegen";
-const GAME_CATEGORY = "Arcade";
+const GAME_CATEGORY = "arcade"; // lowercase for backend consistency
 const TICKET_PRICE_SOL = 0.005;
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
@@ -52,7 +52,7 @@ export default function WackAWegen() {
   const [showInitModal, setShowInitModal] = useState(!(paidNav || txSig || useArcadeFreeEntry));
   const [showInstructions, setShowInstructions] = useState(!!(paidNav || txSig || useArcadeFreeEntry));
   const [shouldStartGame, setShouldStartGame] = useState(false);
-  const [gameStarted, setGameStarted] = useState(false);
+  const [gameStarted, setGameStarted] = useState(false); // <-- used for session increment
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [coinsEarned, setCoinsEarned] = useState<number>(0);
   const [gameState, setGameState] = useState<'IDLE'|'PLAYING'|'GAME_OVER'>('IDLE');
@@ -77,7 +77,7 @@ export default function WackAWegen() {
         return;
       }
       try {
-        await api.post(
+        await apiService.post(
           "/tokens/consume",
           { tokenType: "arcade" },
           { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
@@ -95,9 +95,21 @@ export default function WackAWegen() {
     setShouldStartGame(true);
   };
 
+  // --- INCREMENT gamesPlayed for this game and category ---
+  useEffect(() => {
+    if (shouldStartGame && paid && !gameStarted) {
+      setGameStarted(true); // prevent multiple increments
+      apiService.incrementGamesPlayed(GAME_ID, GAME_CATEGORY)
+        .catch(e => {
+          // Don't block gameplay; just report error
+          console.error("Failed to increment gamesPlayed stats:", e);
+        });
+    }
+  }, [shouldStartGame, paid, gameStarted]);
+
   // Mount Phaser only after payment, instructions, and "Start Game"
   useEffect(() => {
-    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted || !paid) return;
+    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted && gameRef.current || !paid) return;
     if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
@@ -114,7 +126,6 @@ export default function WackAWegen() {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
       onGameOver: handleGameOver,
-      // No instructions logic in scene anymore!
     });
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
   }, [shouldStartGame, profile, paid, gameStarted]);
@@ -220,7 +231,6 @@ export default function WackAWegen() {
           onSuccess={result => {
             setShowInitModal(false);
             setShowInstructions(true);
-            // If paid, set paid state. If using free token, set intent.
             if (result?.paid || result?.txSig) {
               setPaid(true);
               setUseFreeTokenIntent(false);
