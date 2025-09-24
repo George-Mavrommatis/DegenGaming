@@ -7,13 +7,13 @@ import ArcadeInitModal from "../../../games/Arcade/ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
 import { saveWackAWegenScore } from "../../../firebase/gamescores";
 import { WackAWegenScene } from "./WackAWegenScene";
-import { apiService } from '../../../services/api'; // <-- Use apiService here!
+import { apiService } from '../../../services/api';
 import { getArcadeFreeEntryTokens } from "../../../utilities/token";
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
 const GAME_ID = "wackawegen";
-const GAME_CATEGORY = "arcade"; // lowercase for backend consistency
+const GAME_CATEGORY = "arcade";
 const TICKET_PRICE_SOL = 0.005;
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
@@ -42,72 +42,87 @@ export default function WackAWegen() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Extract payment navigation state
+  // Payment navigation state (for replays, deep linking, etc)
   const { txSig, useArcadeFreeEntry, paid: paidNav } = (location.state || {}) as { txSig?: string; useArcadeFreeEntry?: boolean; paid?: boolean };
 
-  // Local state
+  // Component state
   const [paid, setPaid] = useState(!!(paidNav || txSig));
   const [useFreeTokenIntent, setUseFreeTokenIntent] = useState(!!useArcadeFreeEntry);
-
   const [showInitModal, setShowInitModal] = useState(!(paidNav || txSig || useArcadeFreeEntry));
   const [showInstructions, setShowInstructions] = useState(!!(paidNav || txSig || useArcadeFreeEntry));
   const [shouldStartGame, setShouldStartGame] = useState(false);
-  const [gameStarted, setGameStarted] = useState(false); // <-- used for session increment
+  const [gameStarted, setGameStarted] = useState(false);
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [coinsEarned, setCoinsEarned] = useState<number>(0);
   const [gameState, setGameState] = useState<'IDLE'|'PLAYING'|'GAME_OVER'>('IDLE');
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [slide, setSlide] = useState(0);
+  const [fullscreenLoading, setFullscreenLoading] = useState(false);
 
-  // Modern animated background!
+  // Responsive background
   useEffect(() => {
     document.body.style.background = "radial-gradient(circle at 60% 40%, #352b5c 0%, #181a2e 100%)";
     return () => { document.body.style.background = "#000"; };
   }, []);
 
   // Instructions overlay "Start Game" button logic
-  const handleInstructionsDone = async () => {
+  const handleInstructionsDone = () => {
     setTokenError(null);
-    // Free token logic
-    if (useFreeTokenIntent && !paid) {
-      const tokens = getArcadeFreeEntryTokens(profile);
-      if (tokens <= 0) {
-        setTokenError("You have no Arcade Free Entry Tokens to consume.");
-        toast.error("No arcade tokens available to consume.");
-        return;
-      }
-      try {
-        await apiService.post(
-          "/tokens/consume",
-          { tokenType: "arcade" },
-          { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
-        );
-        toast.success("Arcade Free Entry Token consumed!");
-        await refreshProfile();
-        setPaid(true);
-      } catch (err: any) {
-        setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
-        toast.error("Failed to consume Arcade Free Entry Token.");
-        return;
-      }
-    }
     setShowInstructions(false);
-    setShouldStartGame(true);
+    setShouldStartGame(true); // The actual token consumption now happens in the game start effect
   };
 
-  // --- INCREMENT gamesPlayed for this game and category ---
+  // Consume free entry token as SOON as the game starts
+  useEffect(() => {
+    async function consumeFreeTokenIfNeeded() {
+      if (shouldStartGame && !gameStarted && (useFreeTokenIntent || paidNav || txSig)) {
+        // Always consume 1 token at game start
+        const tokens = getArcadeFreeEntryTokens(profile);
+        if (tokens <= 0) {
+          setTokenError("You have no Arcade Free Entry Tokens to consume.");
+          toast.error("No arcade tokens available to consume.");
+          setShouldStartGame(false);
+          setShowInitModal(true);
+          setShowInstructions(false);
+          setPaid(false);
+          setUseFreeTokenIntent(false);
+          return;
+        }
+        try {
+          await apiService.post(
+            "/tokens/consume",
+            { tokenType: "arcade" },
+            { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
+          );
+          toast.success("Arcade Free Entry Token consumed!");
+          await refreshProfile();
+          setPaid(true);
+        } catch (err: any) {
+          setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
+          toast.error("Failed to consume Arcade Free Entry Token.");
+          setShouldStartGame(false);
+          setShowInitModal(true);
+          setPaid(false);
+          setUseFreeTokenIntent(false);
+        }
+      }
+    }
+    consumeFreeTokenIfNeeded();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldStartGame, useFreeTokenIntent, paid, profile, firebaseAuthToken, refreshProfile]);
+
+  // INCREMENT gamesPlayed for this game and category (only once per session)
   useEffect(() => {
     if (shouldStartGame && paid && !gameStarted) {
-      setGameStarted(true); // prevent multiple increments
+      setGameStarted(true);
       apiService.incrementGamesPlayed(GAME_ID, GAME_CATEGORY)
         .catch(e => {
-          // Don't block gameplay; just report error
           console.error("Failed to increment gamesPlayed stats:", e);
         });
     }
   }, [shouldStartGame, paid, gameStarted]);
 
-  // Mount Phaser only after payment, instructions, and "Start Game"
+  // Mount Phaser game only after payment, instructions, and token consumption
   useEffect(() => {
     if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted && gameRef.current || !paid) return;
     if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
@@ -116,7 +131,7 @@ export default function WackAWegen() {
       parent: gameContainerRef.current,
       width: GAME_WIDTH,
       height: GAME_HEIGHT,
-      scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+      scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, // Best scaling for fullscreen
       backgroundColor: "#000000",
       scene: [WackAWegenScene],
     };
@@ -130,6 +145,7 @@ export default function WackAWegen() {
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
   }, [shouldStartGame, profile, paid, gameStarted]);
 
+  // Game Over Handler
   const handleGameOver = useCallback(async (event: { score: number }) => {
     setFinalScore(event.score);
     setCoinsEarned(Math.floor(event.score / 10));
@@ -146,6 +162,7 @@ export default function WackAWegen() {
     }
   }, [profile]);
 
+  // Restart flow
   const restartGame = () => {
     setFinalScore(null);
     setCoinsEarned(0);
@@ -160,21 +177,28 @@ export default function WackAWegen() {
     setSlide(0);
   };
 
-  const handleFullscreen = () => {
-    const canvas = gameContainerRef.current?.querySelector("canvas");
-    if (canvas) {
-      if (canvas.requestFullscreen) {
-        canvas.requestFullscreen();
-      } else if ((canvas as any).webkitRequestFullscreen) {
+  // Robust fullscreen handler (native + Phaser)
+  const handleFullscreen = async () => {
+    setFullscreenLoading(true);
+    try {
+      let canvas = gameContainerRef.current?.querySelector("canvas");
+      if (gameRef.current?.scale && typeof gameRef.current.scale.startFullscreen === 'function') {
+        gameRef.current.scale.startFullscreen();
+      } else if (canvas?.requestFullscreen) {
+        await canvas.requestFullscreen();
+      } else if ((canvas as any)?.webkitRequestFullscreen) {
         (canvas as any).webkitRequestFullscreen();
       } else {
-        toast.error("Fullscreen not supported.");
+        toast.error("Fullscreen not supported on this device.");
       }
-    } else {
-      toast.error("No game canvas found!");
+    } catch (e) {
+      toast.error("Failed to enter fullscreen.");
+    } finally {
+      setFullscreenLoading(false);
     }
   };
 
+  // Loading state
   if (profileLoading) {
     return (
       <div className="w-full min-h-screen flex items-center justify-center bg-black">
@@ -183,8 +207,9 @@ export default function WackAWegen() {
     );
   }
 
+  // Main render
   return (
-    <div className="w-full min-h-screen flex flex-col items-center justify-start bg-black relative">
+    <div className="w-full min-h-screen flex flex-col items-center justify-center bg-black relative">
       {/* Top Bar */}
       <div className="flex flex-row items-center justify-between mt-8 mb-4 px-6 py-3 rounded-lg bg-gradient-to-r from-[#332e6c] to-[#191a2d] shadow-lg"
         style={{ width: GAME_WIDTH, minWidth: 320, maxWidth: GAME_WIDTH }}>
@@ -194,6 +219,7 @@ export default function WackAWegen() {
           title="Fullscreen"
           className="focus:outline-none bg-transparent"
           style={{ width: 32, height: 32, padding: 0 }}
+          disabled={fullscreenLoading}
         >
           <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
         </button>
@@ -218,8 +244,15 @@ export default function WackAWegen() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          minHeight: "calc(100vh - 240px)", // Ensures vertical centering and padding in windowed mode
         }}
-      />
+      >
+        {fullscreenLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-60 z-50">
+            <div className="w-12 h-12 border-4 border-t-transparent border-yellow-400 border-solid rounded-full animate-spin" />
+          </div>
+        )}
+      </div>
       {/* ArcadeInitModal */}
       {showInitModal && (
         <ArcadeInitModal

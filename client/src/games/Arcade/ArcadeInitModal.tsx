@@ -3,14 +3,11 @@ import Modal from "react-modal";
 import { toast } from "react-toastify";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Connection } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createTransferInstruction } from "@solana/spl-token";
 import { useProfile } from "../../context/ProfileContext";
 import { api } from '../../services/api';
 import { getArcadeFreeEntryTokens } from "../../utilities/token";
 
 const FIXED_SOL_ENTRY_FEE = 0.005;
-const FIXED_CJT_ENTRY_FEE = 5; // CJT fee, adjust if needed
-const CJT_MINT_ADDRESS = "7ztGsbEkbSzeeUgm3SwCp6hkmaJe3Gwi4zgvANKSfYML";
 const FONT_FAMILY = "'WegensFont', Orbitron, Arial, sans-serif";
 
 const modalStyles = {
@@ -42,14 +39,14 @@ export default function ArcadeInitModal(props: any) {
   const [step, setStep] = useState<"pay" | "paying" | "done" | "error">("pay");
   const [txSig, setTxSig] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'CJT' | 'FREE' | null>(null);
-   const arcadeFreeEntryTokens = getArcadeFreeEntryTokens(profile);
+  const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'FREE' | null>(null);
+  const arcadeFreeEntryTokens = getArcadeFreeEntryTokens(profile);
 
   const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
   const connection = (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed');
 
   // --- PAYMENT HANDLER ---
-  async function handlePay(method: 'SOL' | 'CJT' | 'FREE') {
+  async function handlePay(method: 'SOL' | 'FREE') {
     setPaymentMethod(method);
     setStep("paying");
     setPaymentError(null);
@@ -64,10 +61,10 @@ export default function ArcadeInitModal(props: any) {
 
     try {
       if (method === "FREE") {
-        // Robust: Only allow if user actually has a token in profile
         if (arcadeFreeEntryTokens <= 0) throw new Error("No Arcade Free Entry Tokens available.");
         setStep("done");
-        onSuccess({ paid: false, useArcadeFreeEntry: true });
+        // Do NOT generate a token here, just move forward
+        onSuccess({ paid: true, useArcadeFreeEntry: true });
         return;
       }
 
@@ -124,69 +121,9 @@ export default function ArcadeInitModal(props: any) {
         return;
       }
 
-      // --- CJT path ---
-      if (method === "CJT") {
-        if (!wallet.publicKey || !wallet.sendTransaction) {
-          throw new Error("Wallet not available. Please connect your wallet.");
-        }
-        if (!connection) throw new Error("Solana RPC connection not available.");
-        const mint = new PublicKey(CJT_MINT_ADDRESS);
-        const sourceATA = await getAssociatedTokenAddress(mint, wallet.publicKey);
-        const destATA = await getAssociatedTokenAddress(mint, new PublicKey(destinationWallet));
-
-        const tx = new Transaction();
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.lastValidBlockHeight = lastValidBlockHeight;
-        tx.feePayer = wallet.publicKey!;
-
-        tx.add(
-          createTransferInstruction(
-            sourceATA,
-            destATA,
-            wallet.publicKey!,
-            FIXED_CJT_ENTRY_FEE, // Amount in base units (adjust if CJT has decimals)
-            [],
-            TOKEN_PROGRAM_ID
-          )
-        );
-
-        let transactionSignature = null;
-        try {
-          transactionSignature = await wallet.sendTransaction(tx, connection);
-        } catch (walletSendErr: any) {
-          if (walletSendErr?.message?.toLowerCase().includes("user rejected")) throw new Error("Transaction cancelled by user.");
-          throw walletSendErr;
-        }
-        const confirmation = await connection.confirmTransaction({
-          signature: transactionSignature,
-          blockhash,
-          lastValidBlockHeight,
-        }, "confirmed");
-
-        if (confirmation.value.err) {
-          if (confirmation.value.err.toString().toLowerCase().includes('insufficient')) throw new Error("Insufficient CJT. Please check your wallet balance.");
-          throw new Error(`Transaction failed: ${confirmation.value.err.toString()}`);
-        }
-
-        setTxSig(transactionSignature);
-        toast.success("Payment successful with CJT!");
-
-        await api.post('/tokens/generate', { tokenType: "arcade" }, {
-          headers: { Authorization: `Bearer ${firebaseAuthToken}` }
-        });
-        toast.success("1 Arcade Free Entry Token granted!");
-        await refreshProfile();
-
-        setStep("done");
-        onSuccess({ paid: true, useArcadeFreeEntry: false, txSig: transactionSignature, paidWith: "CJT" });
-        return;
-      }
-
     } catch (err: any) {
       let msg = err?.message || "Transaction failed. Please check your balance and try again.";
       if (msg.toLowerCase().includes("insufficient funds")) msg = "Insufficient funds. Please check your wallet balance.";
-      else if (msg.toLowerCase().includes("insufficient cjt")) msg = "Insufficient CJT. Please check your wallet balance.";
       else if (msg.toLowerCase().includes("user rejected transaction") || msg.toLowerCase().includes("transaction cancelled by user")) msg = "Transaction cancelled by user.";
       setStep("error");
       setPaymentError(msg);
@@ -224,7 +161,7 @@ export default function ArcadeInitModal(props: any) {
               Arcade Free Entry Tokens: <span className="text-lime-300 font-bold">{arcadeFreeEntryTokens}</span>
             </div>
             <div className="text-lg text-white font-medium">
-              Entry Fee: <span className="font-bold text-lime-300">{ticketPriceSol.toFixed(3)} SOL</span> or <span className="font-bold text-blue-300">{FIXED_CJT_ENTRY_FEE} CJT</span>
+              Entry Fee: <span className="font-bold text-lime-300">{ticketPriceSol.toFixed(3)} SOL</span>
             </div>
             <div className="text-xs text-gray-400 mb-2 text-center">
               To: <span className="font-mono text-slate-300">{safeWalletDisplay(destinationWallet)}</span>
@@ -239,14 +176,7 @@ export default function ArcadeInitModal(props: any) {
                 Pay {ticketPriceSol.toFixed(3)} SOL
               </button>
               <button
-                className={`w-full py-3 rounded-lg bg-gradient-to-r from-blue-400 to-blue-600 text-white text-lg font-bold font-orbitron shadow-lg transition-transform`}
-                onClick={() => handlePay('CJT')}
-                disabled={step === "paying"}
-              >
-                Pay {FIXED_CJT_ENTRY_FEE} CJT
-              </button>
-              <button
-                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${arcadeFreeEntryTokens > 0 ? "" : "opacity-50 cursor-not-allowed"}`}
+                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${arcadeFreeEntryTokens > 0 ? "" : "opacity-40 cursor-not-allowed"}`}
                 onClick={() => handlePay('FREE')}
                 disabled={step === "paying" || arcadeFreeEntryTokens <= 0}
               >
@@ -260,8 +190,7 @@ export default function ArcadeInitModal(props: any) {
           <div className="w-full py-9 flex flex-col items-center">
             <div className="w-8 h-8 border-4 border-t-transparent border-yellow-400 border-solid rounded-full animate-spin mb-4" />
             <p className="text-base text-yellow-200 text-center animate-pulse font-medium">
-              {paymentMethod === 'FREE' ? "Checking free token…" :
-                paymentMethod === 'CJT' ? "Waiting for CJT wallet confirmation…" : "Waiting for wallet confirmation…"}
+              {paymentMethod === 'FREE' ? "Checking free token…" : "Waiting for wallet confirmation…"}
             </p>
             <p className="text-xs text-gray-400 text-center">
               {paymentMethod === 'FREE' ? "Routing to game..." : "Please approve the transaction in your wallet."}
@@ -272,8 +201,7 @@ export default function ArcadeInitModal(props: any) {
           <div className="w-full py-8 flex flex-col items-center">
             <span className="text-5xl mb-2 text-yellow-400 animate-bounce">🎟️</span>
             <div className="mt-2 text-green-300 font-orbitron font-black text-2xl text-center animate-pulse">
-              {paymentMethod === "FREE" ? "Free Entry Token Ready!" :
-                paymentMethod === "CJT" ? "Payment received (CJT)!" : "Payment received (SOL)!"}
+              {paymentMethod === "FREE" ? "Free Entry Token Ready!" : "Payment received (SOL)!"}
             </div>
             <p className="text-white text-center mt-2">Loading your game...</p>
           </div>

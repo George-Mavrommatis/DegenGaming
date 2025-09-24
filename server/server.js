@@ -21,9 +21,11 @@ import {
     clusterApiUrl,
     Transaction,
     Keypair,
-    sendAndConfirmTransaction, // Needed if backend signs transactions
+    sendAndConfirmTransaction,
 } from '@solana/web3.js';
-import {
+
+import splToken from '@solana/spl-token';
+const {
     getOrCreateAssociatedTokenAccount,
     mintTo,
     createMint,
@@ -31,13 +33,12 @@ import {
     getAccount,
     TOKEN_PROGRAM_ID,
     getAssociatedTokenAddress,
-} from '@solana/spl-token';
+} = splToken;
+
 import bs58 from 'bs58';
-import nacl from 'tweetnacl'; // For Solana message verification
-
-import * as cron from 'node-cron'; // For scheduled tasks
-
-import { fileURLToPath } from 'url'; // For __dirname in ES Modules
+import nacl from 'tweetnacl';
+import * as cron from 'node-cron';
+import { fileURLToPath } from 'url';
 import path from 'path';
 
 // --- Import Backend Services ---
@@ -974,6 +975,15 @@ app.post('/api/games/increment-games-played', protect, async (req, res) => {
   try {
     // Game doc
     const gameRef = db.collection('games').doc(gameId);
+    const gameDoc = await gameRef.get();
+    if (!gameDoc.exists) {
+      // Create minimal doc if missing
+      await gameRef.set({
+        name: gameId,
+        category,
+        gamesPlayed: { allTime: 0, lastMonth: 0 }
+      });
+    }
     await gameRef.update({
       'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
       'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
@@ -987,7 +997,6 @@ app.post('/api/games/increment-games-played', protect, async (req, res) => {
     });
 
     res.status(200).json({ success: true });
-    // Optionally, emit socket.io update to all clients here!
   } catch (error) {
     console.error('Error incrementing gamesPlayed:', error);
     res.status(500).json({ success: false, error: error.message });

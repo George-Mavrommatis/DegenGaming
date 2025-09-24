@@ -24,6 +24,8 @@ const CHARACTER_DATA = {
 interface UIType {
   score: Phaser.GameObjects.Text;
   timer: Phaser.GameObjects.Text;
+  title: Phaser.GameObjects.Text;
+  avatar: Phaser.GameObjects.Image;
 }
 
 export class WackAWegenScene extends Phaser.Scene {
@@ -87,7 +89,6 @@ export class WackAWegenScene extends Phaser.Scene {
     this.load.image('degen_golden', '/WackAWegenAssets/wegen4.png');
     this.load.image('degen_golden_whacked', '/WackAWegenAssets/whacked4.png');
     this.load.image('degen_trouble', '/WackAWegenAssets/whacked_trouble.png');
-   // this.load.image('degen_trouble_whacked', '/WackAWegenAssets/wegen_trouble_whacked.png');
     this.load.image('bomb', '/WackAWegenAssets/bomb.png');
     this.load.image('clock', '/WackAWegenAssets/clock.png');
     this.load.image('mystery_box', '/WackAWegenAssets/mysteryS.png');
@@ -137,8 +138,9 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.barHeight = Math.max(60, Math.round(this.scale.height * 0.11));
-    this.add.image(this.scale.width / 2, this.scale.height / 2, 'background').setDisplaySize(this.scale.width, this.scale.height);
+    this.barHeight = Math.max(48, Math.round(this.scale.height * 0.11));
+    this.add.image(this.scale.width / 2, this.scale.height / 2, 'background')
+      .setDisplaySize(this.scale.width, this.scale.height);
 
     if (!this.anims.exists('explode')) {
       this.anims.create({
@@ -158,9 +160,7 @@ export class WackAWegenScene extends Phaser.Scene {
       });
       this.hasResizeHandler = true;
     }
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      this.handleResize();
-    });
+    this.scale.on('resize', () => this.handleResize());
 
     this.handleResize();
     this.buildGame();
@@ -168,23 +168,104 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   private handleResize() {
-    // Responsive scaling for fullscreen
     const W = this.scale.width;
     const H = this.scale.height;
     this.characterScale = Math.max(0.5, Math.min(W / 1600, H / 900));
-    this.barHeight = Math.max(60, Math.round(H * 0.11));
+    this.barHeight = Math.max(48, Math.round(H * 0.11));
+
+    if (this.ui) {
+      this.ui.title.setPosition(W / 2, this.barHeight * 0.6);
+      this.ui.title.setFontSize(Math.min(this.barHeight * 0.6, 46));
+      this.ui.score.setPosition(36, this.barHeight * 0.6);
+      this.ui.timer.setPosition(W / 2, this.barHeight * 0.88);
+      this.ui.avatar.setPosition(W - 56, this.barHeight * 0.6);
+      this.ui.avatar.setDisplaySize(this.barHeight * 0.7, this.barHeight * 0.7);
+    }
+    if (this.timeBar) {
+      this.barWidth = W - 72;
+      this.timeBar.setPosition(36, this.barHeight - 10);
+      this.updateTimeBarGraphics();
+    }
+    if (this.pauseButton) {
+      this.pauseButton.setPosition(W - 56, 16);
+    }
+    if (this.pauseOverlay) {
+      this.pauseOverlay.clear().fillStyle(0x000000, 0.7).fillRect(0, 0, W, H);
+    }
+    if (this.pauseText) {
+      this.pauseText.setPosition(W / 2, H / 2);
+    }
   }
 
-  private handleUnload = () => {
-    if (!this.isGameOver) {
-      this.endGame();
-    }
-  };
-
   private buildGame() {
-    this.createHoleGrid();
     this.createTopBar();
+    this.createHoleGrid();
     this.createPauseScreen();
+  }
+
+  private createTopBar() {
+    const W = this.scale.width;
+    const BH = this.barHeight;
+
+    this.add.graphics().fillStyle(0x191a2d, 0.95).fillRect(0, 0, W, BH).setDepth(10);
+
+    // Smaller, non-overlapping title
+    const titleText = this.add.text(W / 2, BH * 0.6, "WACKAWEGEN", {
+      fontSize: `${Math.min(BH * 0.6, 46)}px`,
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFD700',
+      fontStyle: 'bold',
+      align: 'center',
+      shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 10, fill: true }
+    }).setOrigin(0.5).setDepth(12);
+
+    // Score (left, spaced from edge)
+    const scoreText = this.add.text(36, BH * 0.6, `Score: 0`, {
+      fontSize: `${Math.round(BH * 0.32)}px`,
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFFFFF',
+      fontStyle: 'bold',
+      shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 8, fill: true }
+    }).setOrigin(0, 0.5).setDepth(11);
+
+    // Timer (center, under title)
+    const timerText = this.add.text(W / 2, BH * 0.88, `${this.timeLeft}`, {
+      fontSize: `${Math.round(BH * 0.38)}px`,
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFD93B',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4,
+      shadow: { offsetX: 0, offsetY: 0, color: '#FFD93B', blur: 8, fill: true }
+    }).setOrigin(0.5).setDepth(11);
+
+    // Avatar (right, spaced from edge)
+    let avatarTexture = 'defaultAvatar';
+    if (this.textures.exists('userAvatar')) avatarTexture = 'userAvatar';
+    const avatar = this.add.image(W - 56, BH * 0.6, avatarTexture)
+      .setDisplaySize(BH * 0.7, BH * 0.7)
+      .setOrigin(1, 0.5)
+      .setDepth(11);
+    const mask = this.add.graphics().fillCircle(avatar.x - BH * 0.35, avatar.y, BH * 0.35);
+    avatar.setMask(mask.createGeometryMask());
+
+    // Fullscreen button (top right, above avatar)
+    this.pauseButton = this.add.text(W - 56, 16, '🖵', {
+      fontSize: `${Math.round(BH * 0.36)}px`,
+      fontFamily: "Orbitron, Arial, sans-serif",
+      color: '#FFD93B',
+      fontStyle: 'bold',
+    }).setOrigin(1, 0).setDepth(11).setInteractive({ useHandCursor: true });
+    this.pauseButton.on('pointerdown', () => {
+      if (this.scale.isFullscreen) this.scale.stopFullscreen();
+      else this.scale.startFullscreen();
+    });
+
+    this.barWidth = W - 72;
+    this.timeBar = this.add.graphics().setPosition(36, BH - 10).setDepth(11);
+    this.updateTimeBarGraphics();
+
+    this.ui = { score: scoreText, timer: timerText, title: titleText, avatar };
   }
 
   private createHoleGrid() {
@@ -211,7 +292,10 @@ export class WackAWegenScene extends Phaser.Scene {
         const x = startX + cellW * (j + 0.5);
         const y = startY + cellH * (i + 0.5);
 
-        const hole = this.add.image(x, y, 'hole').setScale(0.4 * this.characterScale);
+        // Add a little drop shadow effect for holes
+        this.add.graphics().fillStyle(0x000000, 0.08).fillEllipse(x, y + 10, 48, 16);
+
+        const hole = this.add.image(x, y, 'hole').setScale(0.42 * this.characterScale);
         this.holes.push(hole);
 
         const d = this.add
@@ -228,88 +312,20 @@ export class WackAWegenScene extends Phaser.Scene {
     }
   }
 
-  private createTopBar() {
-    const W = this.scale.width;
-    const BH = this.barHeight;
+  private createPauseScreen() {
+    const W = this.scale.width, H = this.scale.height;
+    this.pauseOverlay = this.add.graphics().fillStyle(0x000000, 0.7)
+      .fillRect(0, 0, W, H)
+      .setDepth(20)
+      .setVisible(false);
 
-    this.add.graphics().fillStyle(0x2d3748, 0.85).fillRect(0, 0, W, BH).setDepth(10);
-
-    const scoreText = this.add
-      .text(20, BH / 2, `Score: 0`, {
-        fontSize: `${Math.round(BH * 0.4)}px`,
-        fontFamily: "Orbitron, Arial, sans-serif",
-        color: '#FFFFFF',
-        fontStyle: 'bold',
-        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 8, fill: true }
-      }).setOrigin(0, 0.5).setDepth(11);
-
-    this.pauseButton = this.add
-      .text(scoreText.getRightCenter().x + 60, BH / 2, '⏸', {
-        fontSize: `${Math.round(BH * 0.5)}px`,
-        fontFamily: "Orbitron, Arial, sans-serif",
-        color: '#FFD93B',
-        fontStyle: 'bold',
-        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 8, fill: true }
-      })
-      .setOrigin(0.5)
-      .setDepth(11)
-      .setInteractive({ useHandCursor: true });
-
-    this.pauseButton.on('pointerdown', () => this.togglePause());
-
-    const timerText = this.add
-      .text(W / 2, BH / 2, `${this.timeLeft}`, {
-        fontSize: `${Math.round(BH * 0.65)}px`,
-        fontFamily: "Orbitron, Arial, sans-serif",
-        color: '#FFD93B',
-        fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: 4,
-        shadow: { offsetX: 0, offsetY: 0, color: '#FFD93B', blur: 8, fill: true }
-      })
-      .setOrigin(0.5)
-      .setDepth(11);
-
-    const userTxt = this.add
-      .text(W / 2 + 100, BH / 2, this.username, {
-        fontSize: `${Math.round(BH * 0.3)}px`,
-        fontFamily: "Orbitron, Arial, sans-serif",
-        color: '#FFFFFF',
-        shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 6, fill: true }
-      })
-      .setOrigin(0, 0.5)
-      .setDepth(11);
-
-    let avatarTexture = 'defaultAvatar';
-    if (this.textures.exists('userAvatar')) avatarTexture = 'userAvatar';
-    const avatar = this.add
-      .image(userTxt.getRightCenter().x + 10, BH / 2, avatarTexture)
-      .setDisplaySize(BH * 0.7, BH * 0.7)
-      .setOrigin(0, 0.5)
-      .setDepth(11);
-
-    const mask = this.add.graphics().fillCircle(avatar.getCenter().x, avatar.getCenter().y, BH * 0.35);
-    avatar.setMask(mask.createGeometryMask());
-
-    const fs = this.add.text(W - 40, BH / 2, '🖵', {
-      fontSize: `${Math.round(BH * 0.5)}px`,
+    this.pauseText = this.add.text(W / 2, H / 2, 'PAUSED', {
+      fontSize: `${Math.round(this.barHeight * 1.2)}px`,
       fontFamily: "Orbitron, Arial, sans-serif",
       color: '#FFD93B',
       fontStyle: 'bold',
-    }).setOrigin(0.5).setDepth(11).setInteractive({ useHandCursor: true });
-
-    fs.on('pointerdown', () => {
-      if (this.scale.isFullscreen) {
-        this.scale.stopFullscreen();
-      } else {
-        this.scale.startFullscreen();
-      }
-    });
-
-    this.ui = { score: scoreText, timer: timerText };
-    this.barWidth = W - 40;
-    this.timeBar = this.add.graphics().setDepth(11);
-    this.updateTimeBarGraphics();
+      shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 12, fill: true }
+    }).setOrigin(0.5).setDepth(21).setVisible(false);
   }
 
   private updateTimeBarGraphics() {
@@ -320,22 +336,7 @@ export class WackAWegenScene extends Phaser.Scene {
     else if (ratio < 0.66) color = 0xffff00;
     this.timeBar.clear();
     this.timeBar.fillStyle(color, 1);
-    this.timeBar.fillRect(20, this.barHeight - 6, this.barWidth * ratio, 8);
-  }
-
-  private createPauseScreen() {
-    this.pauseOverlay = this.add.graphics().fillStyle(0x000000, 0.7)
-      .fillRect(0, 0, this.scale.width, this.scale.height)
-      .setDepth(20)
-      .setVisible(false);
-
-    this.pauseText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'PAUSED', {
-      fontSize: `${Math.round(this.barHeight * 1.2)}px`,
-      fontFamily: "Orbitron, Arial, sans-serif",
-      color: '#FFD93B',
-      fontStyle: 'bold',
-      shadow: { offsetX: 2, offsetY: 2, color: '#FFD93B', blur: 12, fill: true }
-    }).setOrigin(0.5).setDepth(21).setVisible(false);
+    this.timeBar.fillRect(0, 0, this.barWidth * ratio, 8);
   }
 
   private startGame() {
@@ -415,7 +416,6 @@ export class WackAWegenScene extends Phaser.Scene {
   private getRandomCharacterType(): CharacterType {
     const stage = this.getDifficultyStage();
     let table: { type: CharacterType; weight: number }[] = [];
-    // Add degen_trouble to spawn table at higher difficulty
     if (stage === 4) {
       table = [
         { type: 'degen_normal', weight: 10 },
@@ -469,7 +469,6 @@ export class WackAWegenScene extends Phaser.Scene {
 
   private popUp() {
     if (this.isGameOver || this.isPaused) return;
-    // At high difficulty, spawn 2-3 at once
     const avail = this.degens.filter((d) => !d.getData('isUp'));
     if (!avail.length) return;
     const stage = this.getDifficultyStage();
@@ -494,7 +493,6 @@ export class WackAWegenScene extends Phaser.Scene {
     let scaleOverride = undefined;
 
     if (type === 'bomb') {
-      // Bomb gets smaller at higher difficulty
       scaleOverride = 0.35 - Math.min(stage * 0.07, 0.18);
     }
     if (type === 'degen_trouble') {
@@ -567,16 +565,15 @@ export class WackAWegenScene extends Phaser.Scene {
     obj.setData('isUp', false);
     obj.setVisible(false);
 
-    // Mystery box difficulty
     if (type === 'mystery_box') {
       if (this.cache.audio.exists('sfx_mystery')) {
         this.sound.play('sfx_mystery', { volume: 0.8 });
       }
       const stage = this.getDifficultyStage();
       let fx: number;
-      if (stage >= 4) fx = Phaser.Math.Between(1, 2); // 50% negative
-      else if (stage >= 3) fx = Phaser.Math.Between(1, 3); // 33% negative
-      else fx = Phaser.Math.Between(1, 4); // 25% negative
+      if (stage >= 4) fx = Phaser.Math.Between(1, 2);
+      else if (stage >= 3) fx = Phaser.Math.Between(1, 3);
+      else fx = Phaser.Math.Between(1, 4);
 
       if (fx === 1) {
         this.timeLeft = Math.max(0, this.timeLeft - 10);
@@ -611,7 +608,6 @@ export class WackAWegenScene extends Phaser.Scene {
       return;
     }
 
-    // New negative degen_trouble
     if (type === 'degen_trouble') {
       this.score = Math.max(0, this.score + info.points);
       this.timeLeft = Math.max(0, this.timeLeft + (info.timePenalty ?? -10));
