@@ -10,8 +10,8 @@ import Games from "./pages/Games";
 import Leaderboards from "./pages/Leaderboards";
 import GameHistory from './pages/GameHistory';
 import ProtectedRoute from "./routes/ProtectedRoute";
-import WegenRace from "../src/games/Picker/WegenRace/wegenRace";
-import WackAWegen from './games/Arcade/WackAWegen/WackAWegen';
+import DegenRace from "../src/games/Picker/DegenRace/DegenRace";
+import WackADegen from './games/Arcade/WackADegen/WackADegen';
 import Modal from "react-modal";
 import UserActivityTracker from "./components/activityTracker";
 Modal.setAppElement("#root");
@@ -57,8 +57,8 @@ export default function App() {
             <Route path="/games" element={<Games />} />
             <Route path="/leaderboards" element={<Leaderboards />} />
             {/* Game Routes that require login */}
-            <Route path="/games/degenrace" element={<WegenRace />} />
-            <Route path="/games/wackadegen" element={<WackAWegen />} />
+            <Route path="/games/degenrace" element={<DegenRace />} />
+            <Route path="/games/wackadegen" element={<WackADegen />} />
           </Route>
         </Routes>
       </Layout>

@@ -3,13 +3,13 @@ import React, {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-    createWegenRaceGame,
-    destroyWegenRaceGame,
+    createDegenRaceGame,
+    destroyDegenRaceGame,
     enableDebugMode,
-    getWegenRaceScene,
-    WegenRaceScene,
+    getDegenRaceScene,
+    DegenRaceScene,
     Player
-} from './wegenRaceGame';
+} from './DegenRaceGame';
 import "./wegenrace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
@@ -52,11 +52,11 @@ const LeaderboardPanel = memo(({ leaderboard, loadedGameConfig }: any) => (
                             {idx + 1}
                         </span>
                         <img
-                            src={player.avatarUrl || '/WegenRaceAssets/G1small.png'}
+                            src={player.avatarUrl || '/DegenRaceAssets/G1small.png'}
                             className="participant-avatar"
                             alt={player.name || ""}
                             style={{ width: 28, height: 28, borderRadius: '50%' }}
-                            onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                            onError={(e) => { e.currentTarget.src = '/DegenRaceAssets/G1small.png'; }}
                         />
                         <span style={{
                             fontSize: 12,
@@ -103,7 +103,7 @@ const EventLogPanel = memo(({ eventLog }: any) => (
 ));
 EventLogPanel.displayName = "EventLogPanel";
 
-export default function WegenRace() {
+export default function DegenRace() {
     const location = useLocation();
     const navigate = useNavigate();
     const freeTokenConsumedRef = useRef(false);
@@ -195,17 +195,17 @@ export default function WegenRace() {
     // --- Game config load, with avatar CORS fix ---
     const preparePlayersWithSafeAvatars = useCallback(async (players: Player[]) => {
         const prepared = await Promise.all(players.map(async (p) => {
-            if (!p.avatarUrl || p.avatarUrl === "" || p.avatarUrl === "/WegenRaceAssets/G1small.png") {
-                return { ...p, avatarUrl: "/WegenRaceAssets/G1small.png" };
+            if (!p.avatarUrl || p.avatarUrl === "" || p.avatarUrl === "/DegenRaceAssets/G1small.png") {
+                return { ...p, avatarUrl: "/DegenRaceAssets/G1small.png" };
             }
             if (p.avatarUrl.startsWith("data:") || p.avatarUrl.startsWith(window.location.origin)) {
                 return p;
             }
             try {
                 const base64 = await fetchImageAsBase64(p.avatarUrl);
-                return { ...p, avatarUrl: base64 || "/WegenRaceAssets/G1small.png" };
+                return { ...p, avatarUrl: base64 || "/DegenRaceAssets/G1small.png" };
             } catch {
-                return { ...p, avatarUrl: "/WegenRaceAssets/G1small.png" };
+                return { ...p, avatarUrl: "/DegenRaceAssets/G1small.png" };
             }
         }));
         return prepared;
@@ -230,16 +230,16 @@ export default function WegenRace() {
             const playersWithAvatars = await preparePlayersWithSafeAvatars(config.players);
             config.players = playersWithAvatars.map((p: Player) => ({
                 ...p,
-                avatarUrl: p.avatarUrl && p.avatarUrl !== "" ? p.avatarUrl : '/WegenRaceAssets/G1small.png',
+                avatarUrl: p.avatarUrl && p.avatarUrl !== "" ? p.avatarUrl : '/DegenRaceAssets/G1small.png',
                 name: p.username && p.username !== "" ? p.username : (
                     p.wallet ? `${p.wallet.slice(0, 3)}...${p.wallet.slice(-3)}` : 'Guest'
                 )
             }));
             if (config.humanChoice) {
                 if (config.humanChoice.avatarUrl && !config.humanChoice.avatarUrl.startsWith("data:") && !config.humanChoice.avatarUrl.startsWith(window.location.origin)) {
-                    config.humanChoice.avatarUrl = await fetchImageAsBase64(config.humanChoice.avatarUrl) || '/WegenRaceAssets/G1small.png';
+                    config.humanChoice.avatarUrl = await fetchImageAsBase64(config.humanChoice.avatarUrl) || '/DegenRaceAssets/G1small.png';
                 }
-                config.humanChoice.avatarUrl = config.humanChoice.avatarUrl && config.humanChoice.avatarUrl !== "" ? config.humanChoice.avatarUrl : '/WegenRaceAssets/G1small.png';
+                config.humanChoice.avatarUrl = config.humanChoice.avatarUrl && config.humanChoice.avatarUrl !== "" ? config.humanChoice.avatarUrl : '/DegenRaceAssets/G1small.png';
                 config.humanChoice.name = config.humanChoice.username && config.humanChoice.username !== "" ? config.humanChoice.username : (
                     config.humanChoice.wallet ? `${config.humanChoice.wallet.slice(0, 3)}...${config.humanChoice.wallet.slice(-3)}` : 'Guest'
                 );
@@ -270,17 +270,17 @@ export default function WegenRace() {
             return;
         }
         if (phaserGameRef.current) {
-            destroyWegenRaceGame(phaserGameRef.current);
+            destroyDegenRaceGame(phaserGameRef.current);
             phaserGameRef.current = null;
         }
         let cancelled = false;
         gameContainer.innerHTML = '';
-        const game = createWegenRaceGame(gameContainer, loadedGameConfig.players, loadedGameConfig.duration);
+        const game = createDegenRaceGame(gameContainer, loadedGameConfig.players, loadedGameConfig.duration);
         phaserGameRef.current = game;
 
         setTimeout(() => {
-            const sceneRaw = game.scene.getScene('WegenRaceScene');
-            const scene = sceneRaw as WegenRaceScene;
+            const sceneRaw = game.scene.getScene('DegenRaceScene');
+            const scene = sceneRaw as DegenRaceScene;
             if (scene && typeof scene.onStateChange === 'function' && typeof scene.onGameEnd === 'function') {
                 scene.events.once('race-scene-fully-ready', () => {
                     if (cancelled) return;
@@ -319,7 +319,7 @@ export default function WegenRace() {
         return () => {
             cancelled = true;
             if (phaserGameRef.current) {
-                destroyWegenRaceGame(phaserGameRef.current);
+                destroyDegenRaceGame(phaserGameRef.current);
                 phaserGameRef.current = null;
             }
             setIsPhaserGameRunning(false);
@@ -346,7 +346,7 @@ export default function WegenRace() {
     // --- Fullscreen handler ---
     const handleBackToGames = useCallback(() => {
         if (phaserGameRef.current) {
-            destroyWegenRaceGame(phaserGameRef.current);
+            destroyDegenRaceGame(phaserGameRef.current);
             phaserGameRef.current = null;
         }
         navigate("/games");
@@ -387,7 +387,7 @@ export default function WegenRace() {
         clickHandledRef.current = true;
         setTimeout(() => {
             if (phaserGameRef.current) {
-                const scene = getWegenRaceScene(phaserGameRef.current);
+                const scene = getDegenRaceScene(phaserGameRef.current);
                 if (scene && typeof scene.startRaceExternally === "function") {
                     (scene as any).muteMusic = muteMusic;
                     (scene as any).muteSfx = muteSfx;
@@ -468,11 +468,11 @@ export default function WegenRace() {
     }
 
     return (
-        <div className={`wegenrace-root${isFullscreen ? " fullscreen-mode" : ""}`} style={{ fontFamily: 'WegensFont, Arial, sans-serif', width: "100vw", minHeight: "100vh" }}>
+        <div className={`degenrace-root${isFullscreen ? " fullscreen-mode" : ""}`} style={{ fontFamily: 'WegensFont, Arial, sans-serif', width: "100vw", minHeight: "100vh" }}>
             {/* === TOP BAR === */}
-            <div className={`wegenrace-topbar animated-panel ${phaseAnimClass}`}>
-                <div className="wegenrace-topbar-content">
-                    <span className="race-title">{loadedGameConfig?.gameTitle || "Wegen Race"}</span>
+            <div className={`degenrace-topbar animated-panel ${phaseAnimClass}`}>
+                <div className="degenrace-topbar-content">
+                    <span className="race-title">{loadedGameConfig?.gameTitle || "Degen Race"}</span>
                     <span className="race-details">
                         <span>Players: <b>{gameState.players.length}</b></span>
                         <span>Status: <span style={{ color: "#76ffb4" }}>{gameState.status}</span></span>
@@ -480,7 +480,7 @@ export default function WegenRace() {
                         <span>🕐 {formatTimeRemaining()}</span>
                         <span>
                             Your pick: <b style={{ color: "#ffd93b" }}>{loadedGameConfig?.humanChoice?.name}</b>
-                            <img src={loadedGameConfig?.humanChoice?.avatarUrl || '/WegenRaceAssets/G1small.png'} alt="Your pick" style={{
+                            <img src={loadedGameConfig?.humanChoice?.avatarUrl || '/DegenRaceAssets/G1small.png'} alt="Your pick" style={{
                                 width: 28, height: 28, borderRadius: '50%',
                                 marginLeft: 7, verticalAlign: 'middle', border: '2px solid #ffd93b'
                             }} />
@@ -500,12 +500,12 @@ export default function WegenRace() {
                 </div>
             </div>
             {/* === MAIN CONTENT === */}
-            <div className="wegenrace-content">
-                <div className="wegenrace-sidebar animated-panel">
+            <div className="degenrace-content">
+                <div className="degenrace-sidebar animated-panel">
                     <LeaderboardPanel leaderboard={gameState.leaderboard} loadedGameConfig={loadedGameConfig} />
                     <EventLogPanel eventLog={eventLog} />
                 </div>
-                <div className="wegenrace-game-area">
+                <div className="degenrace-game-area">
                     <div
                         className="phaser-game-container"
                         id="phaser-game-container"
@@ -552,11 +552,11 @@ export default function WegenRace() {
                                 }}
                             >
                                 <img
-                                    src={player.avatarUrl || '/WegenRaceAssets/G1small.png'}
+                                    src={player.avatarUrl || '/DegenRaceAssets/G1small.png'}
                                     alt={player.name || ''}
                                     className="participant-avatar"
                                     style={{ width: 28, height: 28, borderRadius: '50%' }}
-                                    onError={(e) => { e.currentTarget.src = '/WegenRaceAssets/G1small.png'; }}
+                                    onError={(e) => { e.currentTarget.src = '/DegenRaceAssets/G1small.png'; }}
                                 />
                                 <span
                                     className="participant-name"
@@ -642,7 +642,7 @@ export default function WegenRace() {
                                 .map((player: any) => ({
                                     ...player,
                                     progress: phaserGameRef.current
-                                        ? (phaserGameRef.current.scene && phaserGameRef.current.scene.getScene('WegenRaceScene')?.getPlayerProgress(player.key) * 100) || 0
+                                        ? (phaserGameRef.current.scene && phaserGameRef.current.scene.getScene('DegenRaceScene')?.getPlayerProgress(player.key) * 100) || 0
                                         : 0,
                                     finishTime: (gameState.winner && player.key === gameState.winner.key && gameState.raceElapsedTime)
                                         ? gameState.raceElapsedTime / 1000

@@ -2,40 +2,39 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "react-toastify";
 import Phaser from "phaser";
-import ArcadeGameOverModal from "../../../games/Arcade/ArcadeGameOverModal";
-import ArcadeInitModal from "../../../games/Arcade/ArcadeInitModal";
+import ArcadeGameOverModal from "../ArcadeGameOverModal";
+import ArcadeInitModal from "../ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
-import { saveWackAWegenScore } from "../../../firebase/gamescores";
-import { WackAWegenScene } from "./WackAWegenScene";
+import { saveWackADegenScore } from "../../../firebase/gamescores";
+import { WackADegenScene } from "./WackADegenScene";
 import { apiService } from '../../../services/api';
-import { getArcadeFreeEntryTokens } from "../../../utilities/token";
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
-const GAME_ID = "wackawegen";
+const GAME_ID = "wack-a-degen";
 const GAME_CATEGORY = "arcade";
 const TICKET_PRICE_SOL = 0.005;
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
 const INSTRUCTION_SLIDES = [
   {
-    image: "/WackAWegenAssets/instructions1.png",
+    image: "/WackADegenAssets/instructions1.png",
     title: "Power-Ups & Penalties",
     text: "💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Wegen gives big points!"
   },
   {
-    image: "/WackAWegenAssets/instructions2.png",
+    image: "/WackADegenAssets/instructions2.png",
     title: "Scoring & Combos",
     text: "👊 Normal: 10pts\n⚡ Fast: 25pts\n🛡️ Tanky: 50pts (3 hits)\n⭐ Golden: 150pts\nHit fast for COMBOS!"
   },
   {
-    image: "/WackAWegenAssets/instructions3.png",
+    image: "/WackADegenAssets/instructions3.png",
     title: "Pro Tips",
     text: "Chain hits for combos\nAvoid near misses\nTime bonuses get harder\nWatch for patterns!"
   }
 ];
 
-export default function WackAWegen() {
+export default function WackADegen() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const { profile, loading: profileLoading, firebaseAuthToken, refreshProfile } = useProfile();
@@ -65,6 +64,31 @@ export default function WackAWegen() {
     return () => { document.body.style.background = "#000"; };
   }, []);
 
+  // ArcadeInitModal result handler
+  const handleInitModalSuccess = async (result: any) => {
+    setShowInitModal(false);
+    setShowInstructions(true);
+    if (result?.paid || result?.txSig) {
+      // User paid with SOL, generate token before instructions
+      try {
+        await apiService.post(
+          "/tokens/generate",
+          { tokenType: GAME_CATEGORY },
+          { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
+        );
+        setPaid(true);
+        setUseFreeTokenIntent(false);
+        toast.success("Arcade Free Entry Token credited for payment!");
+      } catch (e) {
+        toast.error("Failed to credit Arcade Free Entry Token after payment.");
+      }
+    } else if (result?.useArcadeFreeEntry) {
+      // User selected to use free token, do not generate
+      setPaid(false);
+      setUseFreeTokenIntent(true);
+    }
+  };
+
   // Instructions overlay "Start Game" button logic
   const handleInstructionsDone = () => {
     setTokenError(null);
@@ -72,34 +96,23 @@ export default function WackAWegen() {
     setShouldStartGame(true); // The actual token consumption now happens in the game start effect
   };
 
-  // Consume free entry token as SOON as the game starts
+  // Consume free entry token (ALWAYS) when game starts
   useEffect(() => {
-    async function consumeFreeTokenIfNeeded() {
-      if (shouldStartGame && !gameStarted && (useFreeTokenIntent || paidNav || txSig)) {
-        // Always consume 1 token at game start
-        const tokens = getArcadeFreeEntryTokens(profile);
-        if (tokens <= 0) {
-          setTokenError("You have no Arcade Free Entry Tokens to consume.");
-          toast.error("No arcade tokens available to consume.");
-          setShouldStartGame(false);
-          setShowInitModal(true);
-          setShowInstructions(false);
-          setPaid(false);
-          setUseFreeTokenIntent(false);
-          return;
-        }
+    async function consumeAndStartGame() {
+      if (shouldStartGame && !gameStarted) {
         try {
           await apiService.post(
             "/tokens/consume",
-            { tokenType: "arcade" },
+            { tokenType: GAME_CATEGORY },
             { headers: { Authorization: `Bearer ${firebaseAuthToken}` } }
           );
           toast.success("Arcade Free Entry Token consumed!");
+          await apiService.incrementGamesPlayed(GAME_ID, GAME_CATEGORY);
           await refreshProfile();
-          setPaid(true);
+          setGameStarted(true);
         } catch (err: any) {
-          setTokenError("Could not consume Arcade Free Entry Token. Please try again.");
-          toast.error("Failed to consume Arcade Free Entry Token.");
+          setTokenError("Could not consume Arcade Free Entry Token or increment games played.");
+          toast.error("Failed to consume Arcade Free Entry Token or increment games played.");
           setShouldStartGame(false);
           setShowInitModal(true);
           setPaid(false);
@@ -107,24 +120,13 @@ export default function WackAWegen() {
         }
       }
     }
-    consumeFreeTokenIfNeeded();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldStartGame, useFreeTokenIntent, paid, profile, firebaseAuthToken, refreshProfile]);
+    consumeAndStartGame();
+    // eslint-disable-next-line
+  }, [shouldStartGame, gameStarted, firebaseAuthToken, refreshProfile]);
 
-  // INCREMENT gamesPlayed for this game and category (only once per session)
+  // Mount Phaser game only after payment, instructions, token consumption
   useEffect(() => {
-    if (shouldStartGame && paid && !gameStarted) {
-      setGameStarted(true);
-      apiService.incrementGamesPlayed(GAME_ID, GAME_CATEGORY)
-        .catch(e => {
-          console.error("Failed to increment gamesPlayed stats:", e);
-        });
-    }
-  }, [shouldStartGame, paid, gameStarted]);
-
-  // Mount Phaser game only after payment, instructions, and token consumption
-  useEffect(() => {
-    if (!shouldStartGame || !profile || !gameContainerRef.current || gameStarted && gameRef.current || !paid) return;
+    if (!gameStarted || !profile || !gameContainerRef.current || gameRef.current) return;
     if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
@@ -133,17 +135,17 @@ export default function WackAWegen() {
       height: GAME_HEIGHT,
       scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, // Best scaling for fullscreen
       backgroundColor: "#000000",
-      scene: [WackAWegenScene],
+      scene: [WackADegenScene],
     };
     const game = new Phaser.Game(config);
     gameRef.current = game;
-    game.scene.start("WackAWegenScene", {
+    game.scene.start("WackADegenScene", {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
       onGameOver: handleGameOver,
     });
     return () => { if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; } };
-  }, [shouldStartGame, profile, paid, gameStarted]);
+  }, [gameStarted, profile]);
 
   // Game Over Handler
   const handleGameOver = useCallback(async (event: { score: number }) => {
@@ -155,7 +157,7 @@ export default function WackAWegen() {
       return;
     }
     try {
-      await saveWackAWegenScore(profile, event.score);
+      await saveWackADegenScore(profile, event.score);
       toast.success(`Score of ${event.score} saved!`);
     } catch (error) {
       toast.error("There was an issue saving your score.");
@@ -213,7 +215,7 @@ export default function WackAWegen() {
       {/* Top Bar */}
       <div className="flex flex-row items-center justify-between mt-8 mb-4 px-6 py-3 rounded-lg bg-gradient-to-r from-[#332e6c] to-[#191a2d] shadow-lg"
         style={{ width: GAME_WIDTH, minWidth: 320, maxWidth: GAME_WIDTH }}>
-        <div className="text-lg font-extrabold text-orange-400 tracking-wide font-orbitron drop-shadow">WackAWegen</div>
+        <div className="text-lg font-extrabold text-orange-400 tracking-wide font-orbitron drop-shadow">Whack A Degen</div>
         <button
           onClick={handleFullscreen}
           title="Fullscreen"
@@ -221,7 +223,7 @@ export default function WackAWegen() {
           style={{ width: 32, height: 32, padding: 0 }}
           disabled={fullscreenLoading}
         >
-          <img src="/WackAWegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
+          <img src="/WackADegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
         </button>
       </div>
       {/* Game Container */}
@@ -261,17 +263,7 @@ export default function WackAWegen() {
           category={GAME_CATEGORY}
           ticketPriceSol={TICKET_PRICE_SOL}
           destinationWallet={PLATFORM_WALLET}
-          onSuccess={result => {
-            setShowInitModal(false);
-            setShowInstructions(true);
-            if (result?.paid || result?.txSig) {
-              setPaid(true);
-              setUseFreeTokenIntent(false);
-            } else if (result?.useArcadeFreeEntry) {
-              setPaid(false);
-              setUseFreeTokenIntent(true);
-            }
-          }}
+          onSuccess={handleInitModalSuccess}
           onError={msg => {
             setShowInitModal(false);
             toast.error("Arcade initiation failed: " + msg);
@@ -284,7 +276,7 @@ export default function WackAWegen() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 transition animate-fade-in">
           <div className="w-full max-w-2xl mx-auto p-8 rounded-2xl bg-gradient-to-br from-[#332e6c] to-[#191a2d] shadow-2xl flex flex-col items-center border-4 border-yellow-400">
             <h2 className="text-3xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron tracking-wide">
-              WackAWegen Instructions
+              Whack A Degen Instructions
             </h2>
             <div className="w-full flex flex-col items-center">
               <img

@@ -28,7 +28,7 @@ interface UIType {
   avatar: Phaser.GameObjects.Image;
 }
 
-export class WackAWegenScene extends Phaser.Scene {
+export class WackADegenScene extends Phaser.Scene {
   private score = 0;
   private timeLeft = 60;
   private isGameOver = false;
@@ -66,7 +66,7 @@ export class WackAWegenScene extends Phaser.Scene {
   private hasPointerListeners = false;
 
   constructor() {
-    super({ key: 'WackAWegenScene' });
+    super({ key: 'WackADegenScene' });
   }
 
   init(data: any) {
@@ -78,23 +78,23 @@ export class WackAWegenScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.image('background', '/WackAWegenAssets/BG.png');
-    this.load.image('hole', '/WackAWegenAssets/hole.png');
-    this.load.image('degen_normal', '/WackAWegenAssets/wegen1.png');
-    this.load.image('degen_normal_whacked', '/WackAWegenAssets/whacked1.png');
-    this.load.image('degen_fast', '/WackAWegenAssets/wegen2.png');
-    this.load.image('degen_fast_whacked', '/WackAWegenAssets/whacked2.png');
-    this.load.image('degen_tanky', '/WackAWegenAssets/wegen3.png');
-    this.load.image('degen_tanky_whacked', '/WackAWegenAssets/whacked3.png');
-    this.load.image('degen_golden', '/WackAWegenAssets/wegen4.png');
-    this.load.image('degen_golden_whacked', '/WackAWegenAssets/whacked4.png');
-    this.load.image('degen_trouble', '/WackAWegenAssets/whacked_trouble.png');
-    this.load.image('bomb', '/WackAWegenAssets/bomb.png');
-    this.load.image('clock', '/WackAWegenAssets/clock.png');
-    this.load.image('mystery_box', '/WackAWegenAssets/mysteryS.png');
-    this.load.image('hammer', '/WackAWegenAssets/hammer.png');
-    this.load.image('near_miss', '/WackAWegenAssets/miss.png');
-    this.load.spritesheet('explosion', '/WackAWegenAssets/explosionS.png', {
+    this.load.image('background', '/WackADegenAssets/BG.png');
+    this.load.image('hole', '/WackADegenAssets/hole.png');
+    this.load.image('degen_normal', '/WackADegenAssets/wegen1.png');
+    this.load.image('degen_normal_whacked', '/WackADegenAssets/whacked1.png');
+    this.load.image('degen_fast', '/WackADegenAssets/wegen2.png');
+    this.load.image('degen_fast_whacked', '/WackADegenAssets/whacked2.png');
+    this.load.image('degen_tanky', '/WackADegenAssets/wegen3.png');
+    this.load.image('degen_tanky_whacked', '/WackADegenAssets/whacked3.png');
+    this.load.image('degen_golden', '/WackADegenAssets/wegen4.png');
+    this.load.image('degen_golden_whacked', '/WackADegenAssets/whacked4.png');
+    this.load.image('degen_trouble', '/WackADegenAssets/whacked_trouble.png');
+    this.load.image('bomb', '/WackADegenAssets/bomb.png');
+    this.load.image('clock', '/WackADegenAssets/clock.png');
+    this.load.image('mystery_box', '/WackADegenAssets/mysteryS.png');
+    this.load.image('hammer', '/WackADegenAssets/hammer.png');
+    this.load.image('near_miss', '/WackADegenAssets/miss.png');
+    this.load.spritesheet('explosion', '/WackADegenAssets/explosionS.png', {
       frameWidth: 128,
       frameHeight: 128,
     });
@@ -105,14 +105,14 @@ export class WackAWegenScene extends Phaser.Scene {
     this.load.image('defaultAvatar', '/placeholder-avatar.png');
 
     const audioFiles = [
-      { key: 'bgm', paths: ['../sounds/WackAWegen/grid.mp3', '/sounds/WackAWegen/grid.mp3'] },
-      { key: 'sfx_whack', paths: ['../sounds/WackAWegen/whack.wav', '/sounds/WackAWegen/whack.wav'] },
-      { key: 'sfx_whack_golden', paths: ['../sounds/WackAWegen/whack.wav', '/sounds/WackAWegen/whack.wav'] },
-      { key: 'sfx_bomb', paths: ['../sounds/WackAWegen/explosion.wav', '/sounds/WackAWegen/explosion.wav'] },
-      { key: 'sfx_clock', paths: ['../sounds/WackAWegen/sweepTransition.wav', '/sounds/WackAWegen/sweepTransition.wav'] },
-      { key: 'sfx_mystery', paths: ['../sounds/WackAWegen/notification.wav', '/sounds/WackAWegen/notification.wav'] },
-      { key: 'sfx_miss', paths: ['../sounds/WackAWegen/miss.wav', '/sounds/WackAWegen/miss.wav'] },
-      { key: 'sfx_combo', paths: ['../sounds/WackAWegen/combo.wav', '/sounds/WackAWegen/combo.wav'] },
+      { key: 'bgm', paths: ['../sounds/WackADegen/grid.mp3', '/sounds/WackADegen/grid.mp3'] },
+      { key: 'sfx_whack', paths: ['../sounds/WackADegen/whack.wav', '/sounds/WackADegen/whack.wav'] },
+      { key: 'sfx_whack_golden', paths: ['../sounds/WackADegen/whack.wav', '/sounds/WackADegen/whack.wav'] },
+      { key: 'sfx_bomb', paths: ['../sounds/WackADegen/explosion.wav', '/sounds/WackADegen/explosion.wav'] },
+      { key: 'sfx_clock', paths: ['../sounds/WackADegen/sweepTransition.wav', '/sounds/WackADegen/sweepTransition.wav'] },
+      { key: 'sfx_mystery', paths: ['../sounds/WackADegen/notification.wav', '/sounds/WackADegen/notification.wav'] },
+      { key: 'sfx_miss', paths: ['../sounds/WackADegen/miss.wav', '/sounds/WackADegen/miss.wav'] },
+      { key: 'sfx_combo', paths: ['../sounds/WackADegen/combo.wav', '/sounds/WackADegen/combo.wav'] },
     ];
     audioFiles.forEach(({ key, paths }) => {
       this.load.audio(key, paths);
@@ -120,7 +120,7 @@ export class WackAWegenScene extends Phaser.Scene {
 
     this.load.crossOrigin = 'anonymous';
     this.load.on('loaderror', (file: any) => {
-      console.error('[WackAWegenScene] Asset failed to load:', file.key, file.src);
+      console.error('[WackADegenScene] Asset failed to load:', file.key, file.src);
       if (file.key === 'userAvatar') {
         this.textures.remove('userAvatar');
         if (!this.textures.exists('defaultAvatar')) {
@@ -132,7 +132,7 @@ export class WackAWegenScene extends Phaser.Scene {
 
     this.load.on('filecomplete', (key: string, type: string, data: any) => {
       if (type === 'audio') {
-        console.log(`[WackAWegenScene] Audio loaded successfully: ${key}`);
+        console.log(`[WackADegenScene] Audio loaded successfully: ${key}`);
       }
     });
   }
@@ -210,7 +210,7 @@ export class WackAWegenScene extends Phaser.Scene {
     this.add.graphics().fillStyle(0x191a2d, 0.95).fillRect(0, 0, W, BH).setDepth(10);
 
     // Smaller, non-overlapping title
-    const titleText = this.add.text(W / 2, BH * 0.6, "WACKAWEGEN", {
+    const titleText = this.add.text(W / 2, BH * 0.6, "WHACK A DEGEN", {
       fontSize: `${Math.min(BH * 0.6, 46)}px`,
       fontFamily: "Orbitron, Arial, sans-serif",
       color: '#FFD700',

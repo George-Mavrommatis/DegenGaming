@@ -88,7 +88,7 @@ const enum spriteDepths {
 }
 
 // --- Game Logic Engine ---
-class WegenRaceGameLogic {
+class DegenRaceGameLogic {
     private players: Player[] = [];
     private gameState: GameState;
     public phases: string[] = GAME_CONSTANTS.PHASE_TITLES;
@@ -383,8 +383,8 @@ class WegenRaceGameLogic {
 }
 
 // --- Scene Class ---
-export class WegenRaceScene extends Phaser.Scene {
-    public gameLogic!: WegenRaceGameLogic;
+export class DegenRaceScene extends Phaser.Scene {
+    public gameLogic!: DegenRaceGameLogic;
     public players: Player[] = [];
     public duration: number = 2;
 
@@ -418,13 +418,13 @@ export class WegenRaceScene extends Phaser.Scene {
     }
 
     preload(): void {
-        this.load.image('boost_icon', '/WegenRaceAssets/turbo.png');
-        this.load.image('stumble_icon', '/WegenRaceAssets/obstacle.png');
-        this.load.audio('bg_music', '/WegenRaceAssets/bg_music.mp3');
-        this.load.audio('countdown_tick', '/WegenRaceAssets/beep.wav');
-        this.load.audio('race_start_horn', '/WegenRaceAssets/whack.wav');
-        this.load.audio('victory_music', '/WegenRaceAssets/finish.wav');
-        this.load.audio('celebration_sound', '/WegenRaceAssets/applause.wav');
+        this.load.image('boost_icon', '/DegenRaceAssets/turbo.png');
+        this.load.image('stumble_icon', '/DegenRaceAssets/obstacle.png');
+        this.load.audio('bg_music', '/DegenRaceAssets/bg_music.mp3');
+        this.load.audio('countdown_tick', '/DegenRaceAssets/beep.wav');
+        this.load.audio('race_start_horn', '/DegenRaceAssets/whack.wav');
+        this.load.audio('victory_music', '/DegenRaceAssets/finish.wav');
+        this.load.audio('celebration_sound', '/DegenRaceAssets/applause.wav');
     }
 
     create(): void {
@@ -534,7 +534,7 @@ export class WegenRaceScene extends Phaser.Scene {
             }
         ).setOrigin(0.5).setDepth(spriteDepths.overallUI);
 
-        this.gameLogic = new WegenRaceGameLogic();
+        this.gameLogic = new DegenRaceGameLogic();
         this.gameLogic.initializeRace(players, duration);
 
         this.gameLogic.onPlayerPhaseAdvance((playerKey, phaseIndex) => this.handlePlayerPhaseAdvance(playerKey, phaseIndex));
@@ -591,7 +591,7 @@ export class WegenRaceScene extends Phaser.Scene {
     private playMusicAndCountdown() {
         if (!this.sound.get('bg_music')) {
             if (!this.cache.audio.exists('bg_music')) {
-                this.load.audio('bg_music', '/WegenRaceAssets/bg_music.mp3');
+                this.load.audio('bg_music', '/DegenRaceAssets/bg_music.mp3');
                 this.load.once('complete', () => this.playMusicAndCountdown());
                 this.load.start();
                 return;
@@ -862,14 +862,14 @@ export class WegenRaceScene extends Phaser.Scene {
 }
 
 // --- Game Factory Functions ---
-export function createWegenRaceGame(container: HTMLElement, players: Player[], duration: number): Phaser.Game {
+export function createDegenRaceGame(container: HTMLElement, players: Player[], duration: number): Phaser.Game {
     const config: Phaser.Types.Core.GameConfig = {
         type: Phaser.AUTO,
         width: container.clientWidth || 900,
         height: container.clientHeight || 600,
         parent: container,
         backgroundColor: '#191e26',
-        scene: [WegenRaceScene],
+        scene: [DegenRaceScene],
         physics: { default: 'arcade', arcade: { gravity: { y: 0, x: 0 }, debug: false } },
         audio: { disableWebAudio: false },
         scale: {
@@ -880,31 +880,31 @@ export function createWegenRaceGame(container: HTMLElement, players: Player[], d
         }
     };
     const game = new Phaser.Game(config);
-    game.scene.start('WegenRaceScene', { players, duration });
+    game.scene.start('DegenRaceScene', { players, duration });
     return game;
 }
 
-export function destroyWegenRaceGame(game: Phaser.Game): void {
+export function destroyDegenRaceGame(game: Phaser.Game): void {
     if (game && !game.isDestroyed) {
-        game.scene.stop('WegenRaceScene');
-        game.scene.remove('WegenRaceScene');
+        game.scene.stop('DegenRaceScene');
+        game.scene.remove('DegenRaceScene');
         game.destroy(true);
     }
 }
 
-export function getWegenRaceScene(game: Phaser.Game): WegenRaceScene | null {
+export function getDegenRaceScene(game: Phaser.Game): DegenRaceScene | null {
     if (!game || game.isDestroyed) return null;
-    return game.scene.getScene('WegenRaceScene') as WegenRaceScene;
+    return game.scene.getScene('DegenRaceScene') as DegenRaceScene;
 }
 
 export function isGameValid(game: Phaser.Game): boolean {
-    return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('WegenRaceScene');
+    return !!game && !game.isDestroyed && !!game.scene && !!game.scene.getScene('DegenRaceScene');
 }
 
 export function enableDebugMode(game: Phaser.Game): void {
-    const scene = getWegenRaceScene(game);
+    const scene = getDegenRaceScene(game);
     if (scene) {
-        (window as any).wegenRaceDebug = {
+        (window as any).degenRaceDebug = {
             game,
             scene,
             gameLogic: (scene as any).gameLogic,
@@ -913,4 +913,4 @@ export function enableDebugMode(game: Phaser.Game): void {
     }
 }
 
-console.log("🎮 WegenRaceGame.ts loaded successfully.");
+console.log("🎮 DegenRaceGame.ts loaded successfully.");

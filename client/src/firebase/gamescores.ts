@@ -55,7 +55,7 @@ export async function fetchAccountRankingLeaderboard(limitCount = 100): Promise<
 // =========================================================================
 //  SAVE SCORE FUNCTION (Your original code - no changes needed here)
 // =========================================================================
-export const saveWackAWegenScore = async (profile: ProfileData, score: number) => {
+export const saveWackADegenScore = async (profile: ProfileData, score: number) => {
   if (!profile?.wallet) {
     throw new Error("User profile or wallet address is not available.");
   }
@@ -66,12 +66,12 @@ export const saveWackAWegenScore = async (profile: ProfileData, score: number) =
   const year = now.getFullYear();
   const month = (now.getMonth() + 1).toString().padStart(2, '0');
   const monthlyLeaderboardId = `${year}-${month}`;
-  const allTimeScoreRef = doc(db, 'leaderboards/wack-a-wegen/allTimeScores', profile.wallet);
-  const monthlyScoreRef = doc(db, `leaderboards/wack-a-wegen/monthlyScores/${monthlyLeaderboardId}/scores`, profile.wallet);
+  const allTimeScoreRef = doc(db, 'leaderboards/wack-a-degen/allTimeScores', profile.wallet);
+  const monthlyScoreRef = doc(db, `leaderboards/wack-a-degen/monthlyScores/${monthlyLeaderboardId}/scores`, profile.wallet);
   const coinsEarned = Math.floor(score / 10);
   const gameRunData = {
-    gameId: 'wack-a-wegen',
-    gameName: 'Wack a Wegen',
+    gameId: 'wack-a-degen',
+    gameName: 'Wack a Degen',
     gameType: 'arcade',
     score: score,
     coinsEarned: coinsEarned,
@@ -108,7 +108,7 @@ export const saveWackAWegenScore = async (profile: ProfileData, score: number) =
       const currentProfileData = userProfileSnap.data() as ProfileData;
       const recentGames = currentProfileData.recentGames || [];
       const newRecentGame = {
-        gameName: 'Wack a Wegen',
+        gameName: 'Wack a Degen',
         score: score,
         playedAt: now.toISOString()
       };
@@ -116,7 +116,7 @@ export const saveWackAWegenScore = async (profile: ProfileData, score: number) =
 
       transaction.update(userProfileRef, {
         'stats.totalGamesPlayed': increment(1),
-        'stats.bestScores.wackawegen': Math.max(score, currentProfileData.stats?.bestScores?.wackawegen || 0),
+        'stats.bestScores.wackadegen': Math.max(score, currentProfileData.stats?.bestScores?.wackadegen || 0),
         'accountXP': increment(score),
         'coins.arcade': increment(coinsEarned),
         'recentGames': updatedRecentGames,
