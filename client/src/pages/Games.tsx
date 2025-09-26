@@ -247,7 +247,7 @@ export default function GamesPage() {
               <p className="text-slate-300 text-lg mb-6">Use our Picker Games with their minimal fee drawing a winner from a list of Degen Users or simply wallets for your giveaway!</p>
               <p className="text-slate-300 text-lg mb-6">Compete across all Arcade Games for Monthly payouts to the Top 5 Degen Players of the month!</p>
               <Link to="/tournaments/december-championship" className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-8 py-4 rounded-lg text-white font-bold">
-                Wack A Wegen to celebrate with us! <FaArrowRight />
+                Whack A Degen to celebrate with us! <FaArrowRight />
               </Link>
             </div>
           </div>

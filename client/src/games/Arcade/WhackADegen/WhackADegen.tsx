@@ -5,36 +5,36 @@ import Phaser from "phaser";
 import ArcadeGameOverModal from "../ArcadeGameOverModal";
 import ArcadeInitModal from "../ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
-import { saveWackADegenScore } from "../../../firebase/gamescores";
-import { WackADegenScene } from "./WackADegenScene";
+import { saveWhackADegenScore } from "../../../firebase/gamescores";
+import { WhackADegenScene } from "./WhackADegenScene";
 import { apiService } from '../../../services/api';
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
-const GAME_ID = "wack-a-degen";
+const GAME_ID = "whack-a-degen";
 const GAME_CATEGORY = "arcade";
 const TICKET_PRICE_SOL = 0.005;
 const PLATFORM_WALLET = "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy";
 
 const INSTRUCTION_SLIDES = [
   {
-    image: "/WackADegenAssets/instructions1.png",
+    image: "/WhackADegenAssets/instructions1.png",
     title: "Power-Ups & Penalties",
     text: "💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Wegen gives big points!"
   },
   {
-    image: "/WackADegenAssets/instructions2.png",
+    image: "/WhackADegenAssets/instructions2.png",
     title: "Scoring & Combos",
     text: "👊 Normal: 10pts\n⚡ Fast: 25pts\n🛡️ Tanky: 50pts (3 hits)\n⭐ Golden: 150pts\nHit fast for COMBOS!"
   },
   {
-    image: "/WackADegenAssets/instructions3.png",
+    image: "/WhackADegenAssets/instructions3.png",
     title: "Pro Tips",
     text: "Chain hits for combos\nAvoid near misses\nTime bonuses get harder\nWatch for patterns!"
   }
 ];
 
-export default function WackADegen() {
+export default function WhackADegen() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const { profile, loading: profileLoading, firebaseAuthToken, refreshProfile } = useProfile();
@@ -135,11 +135,11 @@ export default function WackADegen() {
       height: GAME_HEIGHT,
       scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, // Best scaling for fullscreen
       backgroundColor: "#000000",
-      scene: [WackADegenScene],
+      scene: [WhackADegenScene],
     };
     const game = new Phaser.Game(config);
     gameRef.current = game;
-    game.scene.start("WackADegenScene", {
+    game.scene.start("WhackADegenScene", {
       username: profile.username,
       avatarUrl: profile.avatarUrl,
       onGameOver: handleGameOver,
@@ -157,7 +157,7 @@ export default function WackADegen() {
       return;
     }
     try {
-      await saveWackADegenScore(profile, event.score);
+      await saveWhackADegenScore(profile, event.score);
       toast.success(`Score of ${event.score} saved!`);
     } catch (error) {
       toast.error("There was an issue saving your score.");
@@ -223,7 +223,7 @@ export default function WackADegen() {
           style={{ width: 32, height: 32, padding: 0 }}
           disabled={fullscreenLoading}
         >
-          <img src="/WackADegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
+          <img src="/WhackADegenAssets/fullscreen.png" alt="Fullscreen" style={{ width: 32, height: 32, filter: "drop-shadow(0 0 8px #FFD700)" }} />
         </button>
       </div>
       {/* Game Container */}

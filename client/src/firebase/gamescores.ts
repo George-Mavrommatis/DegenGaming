@@ -55,7 +55,7 @@ export async function fetchAccountRankingLeaderboard(limitCount = 100): Promise<
 // =========================================================================
 //  SAVE SCORE FUNCTION (Your original code - no changes needed here)
 // =========================================================================
-export const saveWackADegenScore = async (profile: ProfileData, score: number) => {
+export const saveWhackADegenScore = async (profile: ProfileData, score: number) => {
   if (!profile?.wallet) {
     throw new Error("User profile or wallet address is not available.");
   }
@@ -66,12 +66,12 @@ export const saveWackADegenScore = async (profile: ProfileData, score: number) =
   const year = now.getFullYear();
   const month = (now.getMonth() + 1).toString().padStart(2, '0');
   const monthlyLeaderboardId = `${year}-${month}`;
-  const allTimeScoreRef = doc(db, 'leaderboards/wack-a-degen/allTimeScores', profile.wallet);
-  const monthlyScoreRef = doc(db, `leaderboards/wack-a-degen/monthlyScores/${monthlyLeaderboardId}/scores`, profile.wallet);
+  const allTimeScoreRef = doc(db, 'leaderboards/whack-a-degen/allTimeScores', profile.wallet);
+  const monthlyScoreRef = doc(db, `leaderboards/whack-a-degen/monthlyScores/${monthlyLeaderboardId}/scores`, profile.wallet);
   const coinsEarned = Math.floor(score / 10);
   const gameRunData = {
-    gameId: 'wack-a-degen',
-    gameName: 'Wack a Degen',
+    gameId: 'whack-a-degen',
+    gameName: 'Whack a Degen',
     gameType: 'arcade',
     score: score,
     coinsEarned: coinsEarned,
@@ -108,7 +108,7 @@ export const saveWackADegenScore = async (profile: ProfileData, score: number) =
       const currentProfileData = userProfileSnap.data() as ProfileData;
       const recentGames = currentProfileData.recentGames || [];
       const newRecentGame = {
-        gameName: 'Wack a Degen',
+        gameName: 'Whack a Degen',
         score: score,
         playedAt: now.toISOString()
       };
@@ -116,7 +116,7 @@ export const saveWackADegenScore = async (profile: ProfileData, score: number) =
 
       transaction.update(userProfileRef, {
         'stats.totalGamesPlayed': increment(1),
-        'stats.bestScores.wackadegen': Math.max(score, currentProfileData.stats?.bestScores?.wackadegen || 0),
+        'stats.bestScores.whackadegen': Math.max(score, currentProfileData.stats?.bestScores?.whackadegen || 0),
         'accountXP': increment(score),
         'coins.arcade': increment(coinsEarned),
         'recentGames': updatedRecentGames,
@@ -144,7 +144,7 @@ export interface LeaderboardEntry {
 }
 
 /**
- * Fetches the leaderboard for Wack-a-Wegen, enriching score data with fresh user profiles.
+ * Fetches the leaderboard for Whack-a-Degen, enriching score data with fresh user profiles.
  * @param timeframe - The leaderboard period to fetch ('allTime' or 'monthly').
  * @param count - The number of top scores to fetch.
  * @returns A promise that resolves to an array of LeaderboardEntry objects.
@@ -161,9 +161,9 @@ export async function fetchLeaderboard(
       const year = now.getFullYear();
       const month = (now.getMonth() + 1).toString().padStart(2, '0');
       const monthlyLeaderboardId = `${year}-${month}`;
-      scoresCollectionPath = `leaderboards/wack-a-wegen/monthlyScores/${monthlyLeaderboardId}/scores`;
+      scoresCollectionPath = `leaderboards/whack-a-wegen/monthlyScores/${monthlyLeaderboardId}/scores`;
     } else {
-      scoresCollectionPath = 'leaderboards/wack-a-wegen/allTimeScores';
+      scoresCollectionPath = 'leaderboards/whack-a-wegen/allTimeScores';
     }
 
     // 1. Fetch the raw scores, ordered from highest to lowest.
@@ -203,7 +203,7 @@ export async function fetchLeaderboard(
               username: '', // Explicitly empty so the fallback logic works
               avatarUrl: '', // Explicitly empty
               // Add other required fields from ProfileData with default values
-              stats: { totalGamesPlayed: 0, bestScores: { wackawegen: 0 } },
+              stats: { totalGamesPlayed: 0, bestScores: { whackawegen: 0 } },
               coins: { arcade: 0 },
               createdAt: new Date(),
               lastPlayed: new Date(),

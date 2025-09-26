@@ -80,7 +80,7 @@ export default function LeaderboardsPage() {
         {tab === 'scores' && (
           <div className="flex flex-col sm:flex-row justify-between items-center mb-7 gap-3">
             <div className="w-full sm:w-auto bg-[#232946] p-3 rounded-lg text-lg font-bold text-orange-200 text-center shadow">
-              Wack-a-Wegen
+              Whack-a-Degen
             </div>
             <div className="flex bg-[#232946] rounded-lg p-1">
               <button
