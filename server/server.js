@@ -396,9 +396,9 @@ async function updateALLUsersOnlineStatus() {
 
 
 // --- Platform Stats Aggregation ---
-// This cron function ensures each category has "gamesPlayed: { allTime, lastMonth }" ONLY.
-async function updatePlatformStatsAggregatedInSol() {
-    console.log('Cron job: Running updatePlatformStatsAggregatedInSol...');
+// This cron function ensures each category and game has "ggCoinsGathered", "ggCoinsDistributed", and "gamesPlayed" ONLY.
+async function updatePlatformStatsAggregatedGGCoins() {
+    console.log('Cron job: Running updatePlatformStatsAggregatedGGCoins...');
     try {
         const registeredUsersSnapshot = await db.collection('users').get();
         const registeredUsers = registeredUsersSnapshot.size;
@@ -411,15 +411,18 @@ async function updatePlatformStatsAggregatedInSol() {
             registeredUsers,
             onlineUsers: 0,
             totalGamesPlayed: 0,
-            totalSolDistributed: 0,
+            totalGGCoinsDeposited: { allTime: 0, lastMonth: 0 },
+            totalGGCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
+            totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
+            totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
             lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
             currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
             lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
             categories: {
-                arcade: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                pvp:    { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                casino: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                picker: { solGathered: { allTime: 0, lastMonth: 0 }, solDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                arcade: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                pvp:    { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                casino: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
+                picker: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
             },
             games: {}
         };
@@ -430,13 +433,16 @@ async function updatePlatformStatsAggregatedInSol() {
 
         const gamesSnapshot = await db.collection('games').get();
         let totalGamesPlayed = 0;
-        let totalSolDistributed = 0;
+        let totalGGCoinsGathered = 0;
+        let totalGGCoinsDistributed = 0;
+        let totalGGCoinsDeposited = currentStats.totalGGCoinsDeposited?.allTime ?? 0;
+        let totalGGCoinsWithdrawn = currentStats.totalGGCoinsWithdrawn?.allTime ?? 0;
 
         const categoryKeys = Object.keys(currentStats.categories);
 
         categoryKeys.forEach(cat => {
-            currentStats.categories[cat].solGathered = { allTime: 0, lastMonth: 0 };
-            currentStats.categories[cat].solDistributed = { allTime: 0, lastMonth: 0 };
+            currentStats.categories[cat].ggCoinsGathered = { allTime: 0, lastMonth: 0 };
+            currentStats.categories[cat].ggCoinsDistributed = { allTime: 0, lastMonth: 0 };
             currentStats.categories[cat].gamesPlayed = { allTime: 0, lastMonth: 0 };
             currentStats.categories[cat].games = [];
         });
@@ -449,20 +455,19 @@ async function updatePlatformStatsAggregatedInSol() {
             catStats.games.push(gameDoc.id);
 
             // Defensive: support both map and number
-            const solGathered = g.solGathered ?? { allTime: 0, lastMonth: 0 };
-            const solDistributed = g.solDistributed ?? { allTime: 0, lastMonth: 0 };
-            catStats.solGathered.allTime += solGathered.allTime || 0;
-            catStats.solGathered.lastMonth += solGathered.lastMonth || 0;
-            catStats.solDistributed.allTime += solDistributed.allTime || 0;
-            catStats.solDistributed.lastMonth += solDistributed.lastMonth || 0;
+            const ggCoinsGathered = g.ggCoinsGathered ?? { allTime: 0, lastMonth: 0 };
+            const ggCoinsDistributed = g.ggCoinsDistributed ?? { allTime: 0, lastMonth: 0 };
+            catStats.ggCoinsGathered.allTime += ggCoinsGathered.allTime || 0;
+            catStats.ggCoinsGathered.lastMonth += ggCoinsGathered.lastMonth || 0;
+            catStats.ggCoinsDistributed.allTime += ggCoinsDistributed.allTime || 0;
+            catStats.ggCoinsDistributed.lastMonth += ggCoinsDistributed.lastMonth || 0;
 
             // --- Games Played aggregation ---
-            // Counts DISTINCT games played: allTime if any play count > 0, lastMonth if play count in last month > 0
-            if ((g.playsTotal ?? g.plays ?? 0) > 0) {
-                catStats.gamesPlayed.allTime += 1;
+            if ((g.gamesPlayed?.allTime ?? 0) > 0) {
+                catStats.gamesPlayed.allTime += g.gamesPlayed.allTime;
             }
-            if ((g.playsLastMonth ?? 0) > 0) {
-                catStats.gamesPlayed.lastMonth += 1;
+            if ((g.gamesPlayed?.lastMonth ?? 0) > 0) {
+                catStats.gamesPlayed.lastMonth += g.gamesPlayed.lastMonth;
             }
 
             // --- Per-game stats for frontend ---
@@ -470,22 +475,22 @@ async function updatePlatformStatsAggregatedInSol() {
                 gameId: gameDoc.id,
                 name: g.name ?? null,
                 category: cat,
-                solGathered: solGathered,
-                solDistributed: solDistributed,
-                playsTotal: g.playsTotal ?? g.plays ?? 0,
-                playsLastMonth: g.playsLastMonth ?? 0,
-                lastPayoutMonth: g.lastPayoutMonth ?? null,
-                lastPayoutAmount: g.lastPayoutAmount ?? null,
+                playCost: g.playCost ?? null,
+                ggCoinsGathered,
+                ggCoinsDistributed,
+                gamesPlayed: g.gamesPlayed ?? { allTime: 0, lastMonth: 0 },
                 image: g.image ?? null,
                 description: g.description ?? null,
             };
 
-            totalGamesPlayed += g.playsTotal ?? g.plays ?? 0;
-            totalSolDistributed += solDistributed.allTime || 0;
+            totalGamesPlayed += g.gamesPlayed?.allTime ?? 0;
+            totalGGCoinsGathered += ggCoinsGathered.allTime || 0;
+            totalGGCoinsDistributed += ggCoinsDistributed.allTime || 0;
         });
 
         currentStats.totalGamesPlayed = totalGamesPlayed;
-        currentStats.totalSolDistributed = totalSolDistributed;
+        currentStats.totalGGCoinsGathered = { allTime: totalGGCoinsGathered, lastMonth: totalGGCoinsGathered }; // You may want to aggregate lastMonth properly
+        currentStats.totalGGCoinsDistributed = { allTime: totalGGCoinsDistributed, lastMonth: totalGGCoinsDistributed };
         currentStats.onlineUsers = (await getOnlineUserIds()).length;
 
         await statsDocRef.set(currentStats, { merge: true });
@@ -495,15 +500,142 @@ async function updatePlatformStatsAggregatedInSol() {
     }
 }
 
-// Cron job to clean up online status every 5 minutes
-cron.schedule('*/5 * * * *', updateALLUsersOnlineStatus);
-
 // Cron job to aggregate platform stats every 30 minutes (or adjust as needed)
-cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedInSol);
+cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
 
 // Initial run for cron jobs on server start
-updateALLUsersOnlineStatus();
-updatePlatformStatsAggregatedInSol();
+updatePlatformStatsAggregatedGGCoins();
+
+// --- API Routes ---
+
+// Increment ggCoinsGathered for a game and category
+app.post('/api/games/increment-ggcoins-gathered', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body;
+  try {
+    const incrementValue = Number(amount);
+    if (isNaN(incrementValue) || incrementValue <= 0) {
+      return res.status(400).json({ success: false, error: "Invalid amount" });
+    }
+
+    // Game doc
+    const gameRef = db.collection('games').doc(gameId);
+    await gameRef.update({
+      'ggCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
+      'ggCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    // Platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.ggCoinsGathered.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
+      [`categories.${category}.ggCoinsGathered.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
+      'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
+      'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error incrementing ggCoinsGathered:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Increment ggCoinsDistributed for a game and category
+app.post('/api/games/increment-ggcoins-distributed', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body;
+  try {
+    const incrementValue = Number(amount);
+    if (isNaN(incrementValue) || incrementValue <= 0) {
+      return res.status(400).json({ success: false, error: "Invalid amount" });
+    }
+
+    // Game doc
+    const gameRef = db.collection('games').doc(gameId);
+    await gameRef.update({
+      'ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
+      'ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    // Platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.ggCoinsDistributed.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
+      [`categories.${category}.ggCoinsDistributed.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
+      'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
+      'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error incrementing ggCoinsDistributed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Increment gamesPlayed for a game and category
+app.post('/api/games/increment-games-played', protect, async (req, res) => {
+  const { gameId, category } = req.body;
+  try {
+    // Game doc
+    const gameRef = db.collection('games').doc(gameId);
+    const gameDoc = await gameRef.get();
+    if (!gameDoc.exists) {
+      await gameRef.set({
+        name: gameId,
+        category,
+        gamesPlayed: { allTime: 0, lastMonth: 0 }
+      });
+    }
+    await gameRef.update({
+      'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
+      'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
+    });
+
+    // Platform stats doc
+    const statsRef = db.collection('platform').doc('stats');
+    await statsRef.update({
+      [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
+      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error incrementing gamesPlayed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get Platform Stats (Public - no protect middleware)
+app.get('/platform-stats', async (req, res) => {
+    try {
+        const statsDoc = await db.collection('platform').doc('stats').get();
+        if (!statsDoc.exists) {
+            return res.status(200).json({
+                registeredUsers: 0,
+                onlineUsers: 0,
+                totalGamesPlayed: 0,
+                totalGGCoinsDeposited: { allTime: 0, lastMonth: 0 },
+                totalGGCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
+                totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
+                totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
+                lastUpdated: null,
+                currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
+                lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
+                categories: {
+                    arcade: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
+                    pvp: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
+                    casino: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
+                    picker: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
+                },
+                games: {}
+            });
+        }
+        res.status(200).json(statsDoc.data());
+    } catch (error) {
+        console.error('Error fetching platform stats:', error);
+        res.status(500).json({ message: 'Failed to fetch platform stats.' });
+    }
+});
 
 
 // --- API Routes ---
@@ -1597,15 +1729,6 @@ app.get('/leaderboards/:gameId', protect, async (req, res) => {
   res.status(200).json(leaderboardDoc.data());
 });
 
-
-
-
-// --- General Error Handling ---
-// This middleware should be last
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke on the server!');
-});
 
 
 // --- Server Start ---

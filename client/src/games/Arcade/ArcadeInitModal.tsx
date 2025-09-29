@@ -1,53 +1,64 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Modal from "react-modal";
 import { toast } from "react-toastify";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Connection } from "@solana/web3.js";
 import { useProfile } from "../../context/ProfileContext";
 import { api } from '../../services/api';
-import { getArcadeFreeEntryTokens } from "../../utilities/token";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../../firebase/firebaseConfig";
 
-const FIXED_SOL_ENTRY_FEE = 0.005;
 const FONT_FAMILY = "'WegensFont', Orbitron, Arial, sans-serif";
 
 const modalStyles = {
   overlay: { backgroundColor: "rgba(10, 10, 10, 0.90)", zIndex: 1000 },
   content: {
-    borderRadius: "20px",
-    border: "none",
+    borderRadius: "32px",
+    border: "2px solid #FFD700",
     background: "none",
     padding: 0,
     overflow: "visible",
     top: "50%", left: "50%", right: "auto", bottom: "auto",
     marginRight: "-50%",
     transform: "translate(-50%, -50%)",
-    minWidth: 440,
-    maxWidth: 660,
-    minHeight: 240, maxHeight: "95vh",
-    boxShadow: "0 4px 48px 0 rgba(0,0,0,0.7)",
+    minWidth: 720,
+    maxWidth: 1000,
+    minHeight: 440, maxHeight: "98vh",
+    boxShadow: "0 8px 64px 0 rgba(0,0,0,0.9)",
     fontFamily: FONT_FAMILY
   },
 };
 
 export default function ArcadeInitModal(props: any) {
   const {
-    isOpen, gameId, category, ticketPriceSol, destinationWallet, onSuccess, onError, onClose, gameTitle
+    isOpen, gameId, category, onSuccess, onError, onClose, gameTitle
   } = props;
 
-  const wallet = useWallet();
   const { profile, refreshProfile, firebaseAuthToken } = useProfile();
   const [step, setStep] = useState<"pay" | "paying" | "done" | "error">("pay");
-  const [txSig, setTxSig] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'SOL' | 'FREE' | null>(null);
-  const arcadeFreeEntryTokens = getArcadeFreeEntryTokens(profile);
+  const [paymentMethod, setPaymentMethod] = useState<'GGCOIN' | null>(null);
+  const [playCost, setPlayCost] = useState<number | null>(null);
 
-  const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL;
-  const connection = (!rpcUrl || typeof rpcUrl !== "string" || !rpcUrl.startsWith("http")) ? null : new Connection(rpcUrl, 'confirmed');
+  // Fetch playCost from Firestore (per game)
+  useEffect(() => {
+    async function fetchPlayCost() {
+      if (!gameId) return setPlayCost(null);
+      try {
+        const gameDoc = await getDoc(doc(db, "games", gameId));
+        if (gameDoc.exists()) {
+          setPlayCost(gameDoc.data().playCost ?? null);
+        } else {
+          setPlayCost(null);
+        }
+      } catch (err) {
+        setPlayCost(null);
+      }
+    }
+    fetchPlayCost();
+  }, [gameId]);
 
   // --- PAYMENT HANDLER ---
-  async function handlePay(method: 'SOL' | 'FREE') {
-    setPaymentMethod(method);
+  async function handlePayGGCoin() {
+    setPaymentMethod("GGCOIN");
     setStep("paying");
     setPaymentError(null);
 
@@ -60,71 +71,20 @@ export default function ArcadeInitModal(props: any) {
     }
 
     try {
-      if (method === "FREE") {
-        if (arcadeFreeEntryTokens <= 0) throw new Error("No Arcade Free Entry Tokens available.");
-        setStep("done");
-        // Do NOT generate a token here, just move forward
-        onSuccess({ paid: true, useArcadeFreeEntry: true });
-        return;
-      }
+      if (!profile || playCost == null) throw new Error("Could not fetch GG Coin balance or play cost.");
+      if ((profile.coins?.gg ?? 0) < playCost) throw new Error("Insufficient GG Coins.");
 
-      // --- SOL path ---
-      if (method === "SOL") {
-        if (!wallet.publicKey || !wallet.sendTransaction) {
-          throw new Error("Wallet not available. Please connect your wallet.");
-        }
-        if (!connection) throw new Error("Solana RPC connection not available.");
-        const tx = new Transaction();
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.lastValidBlockHeight = lastValidBlockHeight;
-        tx.feePayer = wallet.publicKey!;
-
-        tx.add(
-          SystemProgram.transfer({
-            fromPubkey: wallet.publicKey!,
-            toPubkey: new PublicKey(destinationWallet),
-            lamports: Math.ceil(ticketPriceSol * LAMPORTS_PER_SOL)
-          })
-        );
-
-        let transactionSignature = null;
-        try {
-          transactionSignature = await wallet.sendTransaction(tx, connection);
-        } catch (walletSendErr: any) {
-          if (walletSendErr?.message?.toLowerCase().includes("user rejected")) throw new Error("Transaction cancelled by user.");
-          throw walletSendErr;
-        }
-        const confirmation = await connection.confirmTransaction({
-          signature: transactionSignature,
-          blockhash,
-          lastValidBlockHeight,
-        }, "confirmed");
-
-        if (confirmation.value.err) {
-          if (confirmation.value.err.toString().toLowerCase().includes('insufficient')) throw new Error("Insufficient funds. Please check your wallet balance.");
-          throw new Error(`Transaction failed: ${confirmation.value.err.toString()}`);
-        }
-
-        setTxSig(transactionSignature);
-        toast.success("Payment successful on Solana!");
-
-        // Grant free arcade token as receipt & wait for profile update
-        await api.post('/tokens/generate', { tokenType: "arcade" }, {
-          headers: { Authorization: `Bearer ${firebaseAuthToken}` }
-        });
-        toast.success("1 Arcade Free Entry Token granted!");
-        await refreshProfile();
-
-        setStep("done");
-        onSuccess({ paid: true, useArcadeFreeEntry: false, txSig: transactionSignature });
-        return;
-      }
-
+      // Deduct GG Coins via backend API
+      await api.post(`/games/${gameId}/pay`, { amount: playCost }, {
+        headers: { Authorization: `Bearer ${firebaseAuthToken}` }
+      });
+      await refreshProfile();
+      setStep("done");
+      toast.success("Payment successful with GG Coins!");
+      onSuccess({ paid: true });
+      return;
     } catch (err: any) {
       let msg = err?.message || "Transaction failed. Please check your balance and try again.";
-      if (msg.toLowerCase().includes("insufficient funds")) msg = "Insufficient funds. Please check your wallet balance.";
-      else if (msg.toLowerCase().includes("user rejected transaction") || msg.toLowerCase().includes("transaction cancelled by user")) msg = "Transaction cancelled by user.";
       setStep("error");
       setPaymentError(msg);
       onError(msg);
@@ -132,12 +92,6 @@ export default function ArcadeInitModal(props: any) {
   }
 
   const handleCancel = () => onClose();
-
-  const safeWalletDisplay = (walletAddress: string) => {
-    if (!walletAddress || typeof walletAddress !== 'string') return 'Invalid Address';
-    if (walletAddress.length < 8) return walletAddress;
-    return `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-  };
 
   return (
     <Modal
@@ -148,71 +102,72 @@ export default function ArcadeInitModal(props: any) {
       contentLabel="Arcade Init Modal"
       shouldCloseOnOverlayClick={step !== "paying"}
     >
-      <div className="w-full mx-auto px-6 py-6 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[420px] border-2 border-yellow-600"
-        style={{ minWidth: 420, fontFamily: FONT_FAMILY }}>
+      <div
+        className="w-full mx-auto px-12 py-12 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black shadow-2xl flex flex-col items-center relative min-w-[720px] max-w-[1000px] border-2 border-yellow-400"
+        style={{ minWidth: 720, fontFamily: FONT_FAMILY }}
+      >
         {step !== "paying" && (
-          <button className="absolute right-4 top-4 text-gray-400 text-2xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
+          <button className="absolute right-8 top-8 text-gray-400 text-3xl font-bold hover:text-yellow-200 z-10" onClick={handleCancel}>×</button>
         )}
-        <h2 className="text-3xl font-extrabold mb-2 text-yellow-300 text-center font-orbitron">🎮 Play {gameTitle || "Game"}</h2>
-        <div className="mb-2 text-xs text-purple-300 uppercase font-semibold tracking-widest">{category}</div>
+        <h2 className="text-5xl font-extrabold mb-4 text-yellow-300 text-center font-orbitron flex items-center gap-4">
+          <span role="img" aria-label="controller">🎮</span>
+          {`PLAY ${gameTitle?.toUpperCase() || "GAME"}`}
+        </h2>
+        <div className="mb-4 text-lg text-purple-300 uppercase font-semibold tracking-widest">{category}</div>
         {step === "pay" && (
-          <div className="w-full flex flex-col items-center gap-3 mt-3">
-            <div className="text-base text-white font-medium">
-              Arcade Free Entry Tokens: <span className="text-lime-300 font-bold">{arcadeFreeEntryTokens}</span>
+          <div className="w-full flex flex-col items-center gap-6 mt-6">
+            <div className="text-2xl text-white font-bold">
+              Entry Fee:{" "}
+              <span className="font-black text-yellow-400 drop-shadow-lg">
+                {playCost !== null ? playCost : <span className="text-gray-400">...</span>} GG COINS
+              </span>
             </div>
-            <div className="text-lg text-white font-medium">
-              Entry Fee: <span className="font-bold text-lime-300">{ticketPriceSol.toFixed(3)} SOL</span>
+            <div className="text-2xl text-white font-bold">
+              Your GG Coins:{" "}
+              <span className="font-black text-lime-400 drop-shadow-lg">{profile?.coins?.gg ?? 0}</span>
             </div>
-            <div className="text-xs text-gray-400 mb-2 text-center">
-              To: <span className="font-mono text-slate-300">{safeWalletDisplay(destinationWallet)}</span>
-            </div>
-            {paymentError && <div className="bg-red-800 w-full rounded py-2 px-3 mb-1 text-center text-red-200 text-xs font-semibold shadow">{paymentError}</div>}
-            <div className="w-full space-y-3">
+            {paymentError && (
+              <div className="bg-red-800 w-full rounded py-3 px-4 mb-2 text-center text-red-200 text-xl font-semibold shadow">{paymentError}</div>
+            )}
+            <div className="w-full space-y-4 mt-4">
               <button
-                className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-lime-500 text-white text-lg font-bold font-orbitron shadow-lg hover:scale-105 transition-transform"
-                onClick={() => handlePay('SOL')}
-                disabled={step === "paying" || ticketPriceSol <= 0}
+                className={`w-full py-5 rounded-xl bg-gradient-to-r from-yellow-400 to-orange-400 text-white text-2xl font-extrabold font-orbitron shadow-xl hover:scale-105 transition-transform`}
+                onClick={handlePayGGCoin}
+                disabled={step === "paying" || playCost == null || (profile?.coins?.gg ?? 0) < playCost}
               >
-                Pay {ticketPriceSol.toFixed(3)} SOL
-              </button>
-              <button
-                className={`w-full py-3 rounded-lg bg-gradient-to-r from-sky-500 to-blue-500 text-white text-lg font-bold font-orbitron shadow-lg transition-transform ${arcadeFreeEntryTokens > 0 ? "" : "opacity-40 cursor-not-allowed"}`}
-                onClick={() => handlePay('FREE')}
-                disabled={step === "paying" || arcadeFreeEntryTokens <= 0}
-              >
-                Use Free Token! ({arcadeFreeEntryTokens} available)
+                Pay {playCost ?? "…"} GG COINS
               </button>
             </div>
-            <button className="w-full py-2 mt-2 rounded-lg bg-gray-700 text-gray-200 font-bold hover:bg-gray-600" onClick={handleCancel}>Cancel</button>
+            <button className="w-full py-3 mt-6 rounded-xl bg-gray-700 text-gray-100 font-extrabold text-xl hover:bg-gray-600" onClick={handleCancel}>Cancel</button>
           </div>
         )}
         {step === "paying" && (
-          <div className="w-full py-9 flex flex-col items-center">
-            <div className="w-8 h-8 border-4 border-t-transparent border-yellow-400 border-solid rounded-full animate-spin mb-4" />
-            <p className="text-base text-yellow-200 text-center animate-pulse font-medium">
-              {paymentMethod === 'FREE' ? "Checking free token…" : "Waiting for wallet confirmation…"}
+          <div className="w-full py-16 flex flex-col items-center">
+            <div className="w-12 h-12 border-4 border-t-transparent border-yellow-400 border-solid rounded-full animate-spin mb-8" />
+            <p className="text-2xl text-yellow-200 text-center animate-pulse font-bold">
+              Processing GG Coin payment…
             </p>
-            <p className="text-xs text-gray-400 text-center">
-              {paymentMethod === 'FREE' ? "Routing to game..." : "Please approve the transaction in your wallet."}
+            <p className="text-lg text-gray-400 text-center mt-4">
+              Please wait for confirmation.
             </p>
           </div>
         )}
         {step === "done" && (
-          <div className="w-full py-8 flex flex-col items-center">
-            <span className="text-5xl mb-2 text-yellow-400 animate-bounce">🎟️</span>
-            <div className="mt-2 text-green-300 font-orbitron font-black text-2xl text-center animate-pulse">
-              {paymentMethod === "FREE" ? "Free Entry Token Ready!" : "Payment received (SOL)!"}
+          <div className="w-full py-16 flex flex-col items-center">
+            <span className="text-6xl mb-4 text-yellow-400 animate-bounce">🎟️</span>
+            <div className="mt-2 text-green-300 font-orbitron font-black text-4xl text-center animate-pulse">
+              Payment received (GG Coins)!
             </div>
-            <p className="text-white text-center mt-2">Loading your game...</p>
+            <p className="text-2xl text-white text-center mt-6">Loading your game...</p>
           </div>
         )}
         {step === "error" && (
-          <div className="w-full py-9 flex flex-col items-center">
-            <span className="text-4xl mb-2 text-red-400">❌</span>
-            <p className="font-bold text-red-300 text-center text-lg">Game Initiation Failed</p>
-            <p className="mb-4 text-gray-300 text-sm text-center px-4 break-words">Error: {paymentError}</p>
-            <button className="w-full py-2 mb-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold shadow" onClick={() => setStep("pay")}>Try Again</button>
-            <button className="w-full py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-sm" onClick={handleCancel}>Cancel</button>
+          <div className="w-full py-16 flex flex-col items-center">
+            <span className="text-6xl mb-4 text-red-400">❌</span>
+            <p className="font-black text-red-300 text-center text-3xl">Game Initiation Failed</p>
+            <p className="mb-6 text-gray-300 text-xl text-center px-6 break-words">Error: {paymentError}</p>
+            <button className="w-full py-4 mb-3 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold text-xl shadow" onClick={() => setStep("pay")}>Try Again</button>
+            <button className="w-full py-4 rounded-xl bg-gray-700 hover:bg-gray-600 text-white text-xl" onClick={handleCancel}>Cancel</button>
           </div>
         )}
       </div>

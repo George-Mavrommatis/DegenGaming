@@ -5,35 +5,24 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useProfile } from "../context/ProfileContext";
 import { Link } from 'react-router-dom';
-import { collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "../firebase/firebaseConfig";
-import { FaEdit, FaHistory, FaGamepad, FaCoins } from 'react-icons/fa';
+import { FaEdit, FaHistory, FaGamepad, FaCoins, FaWallet } from 'react-icons/fa';
 import UserDashboard from "../components/UserDashboard";
+import Cashier from "../components/Cashier";
 
 const DEFAULT_AVATAR = "/placeholder-avatar.png";
+const GG_COIN_ICON = "/assets/ggcoin.png"; // Ensure this asset exists
 
 export default function Profile() {
-  const {
-    user,
-    profile,
-    updateUserProfile,
-    refreshProfile,
-    loading,
-    isAuthenticated
-  } = useProfile();
-
+  const { user, profile, updateUserProfile, refreshProfile, loading, isAuthenticated } = useProfile();
   const walletAdapter = useWallet();
 
   const [form, setForm] = useState<ProfileData>(DEFAULT_PROFILE);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
   const [usernameError, setUsernameError] = useState("");
   const [usernameChecking, setUsernameChecking] = useState(false);
   const usernameInputRef = useRef<HTMLInputElement>(null);
-
-  const tokenKeys = ["arcade", "picker", "casino", "pvp"] as const;
 
   useEffect(() => {
     if (!loading) {
@@ -100,11 +89,8 @@ export default function Profile() {
     }
     setUsernameChecking(true);
     try {
-      const q = query(collection(db, "users"), where("usernameLowercase", "==", trimmedUsername));
-      const querySnapshot = await getDocs(q);
-      const isTaken = !querySnapshot.empty && querySnapshot.docs[0].id !== user?.uid;
-      setUsernameError(isTaken ? "Username is already taken!" : "");
-      return !isTaken;
+      setUsernameError("");
+      return true;
     } catch (error) {
       setUsernameError("Error checking username. Please try again.");
       return false;
@@ -150,13 +136,11 @@ export default function Profile() {
         bio: form.bio,
         twitter: form.twitter,
         discord: form.discord,
-        telegram: form.telegram,
-        instagram: form.instagram,
         dmsOpen: !!form.dmsOpen,
         duelsOpen: !!form.duelsOpen,
       };
       await updateUserProfile(dataToSave);
-      await refreshProfile(); // Ensure instant update in Navbar and SocialPanel!
+      await refreshProfile();
       toast.success("Profile saved successfully!");
       setAvatarFile(null);
       setAvatarPreview(null);
@@ -170,7 +154,6 @@ export default function Profile() {
   if (loading) {
     return <div className="text-center text-white mt-20 text-xl font-bold animate-pulse">Loading Profile...</div>;
   }
-
   if (!isAuthenticated || !user) {
     return (
       <div className="text-center text-white mt-20">
@@ -180,57 +163,54 @@ export default function Profile() {
   }
 
   const displayedAvatar = avatarPreview || form.avatarUrl || DEFAULT_AVATAR;
-
-  const tokensObj = form.freeEntryTokens || {};
-  const tokens = {
-    arcade: Math.max(tokensObj.arcade ?? 0, tokensObj.arcadeTokens ?? 0),
-    picker: Math.max(tokensObj.picker ?? 0, tokensObj.pickerTokens ?? 0),
-    casino: Math.max(tokensObj.casino ?? 0, tokensObj.casinoTokens ?? 0),
-    pvp: Math.max(tokensObj.pvp ?? 0, tokensObj.pvpTokens ?? 0),
-  };
+  const ggCoins = form.coins?.gg ?? 0;
+  const xp = form.accountXP ?? 0;
+  const xpLevel = Math.floor(xp / 1000) + 1;
+  const xpPercent = Math.min(((xp % 1000) / 1000) * 100, 100);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8">
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 space-y-6">
-          <div className="bg-gray-800 rounded-lg p-6 text-center shadow-lg">
-            <div className="relative inline-block mb-4">
-              <img
-                src={displayedAvatar}
-                alt={`${form.username}'s avatar`}
-                className="w-32 h-32 rounded-full mx-auto border-4 border-purple-500 object-cover"
-                onError={(e) => { e.currentTarget.src = DEFAULT_AVATAR; }}
-              />
-              <label className="absolute bottom-1 right-1 bg-purple-600 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer hover:bg-purple-700 transition">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-[#221c2d] to-black flex flex-col items-center py-12 px-8 lg:px-16">
+      <div className="w-full max-w-screen-2xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-12">
+        {/* Profile Column */}
+        <div className="md:col-span-1 flex flex-col items-center gap-8">
+          <div className="w-full bg-[#232946] rounded-xl p-8 shadow-xl border border-purple-600 flex flex-col items-center">
+            <div className="relative mb-4">
+              <img src={displayedAvatar} alt="Avatar" className="w-36 h-36 rounded-full border-4 border-purple-400 shadow-lg object-cover" />
+              <label className="absolute bottom-2 right-2 bg-purple-600 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer hover:bg-purple-700 transition">
                 <FaEdit />
                 <input type="file" accept="image/*" onChange={handleAvatar} className="hidden" />
               </label>
             </div>
-            <h2 className="text-2xl font-bold font-orbitron">{form.username || "Guest Player"}</h2>
-            <p className="text-sm text-gray-400 break-all">{form.wallet || walletAdapter.publicKey?.toBase58() || "No Wallet Connected"}</p>
-          </div>
-
-          <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
-            <h3 className="text-xl font-semibold mb-4 font-orbitron">Free Entry Tokens</h3>
-            <div className="grid grid-cols-2 gap-4 text-center">
-              {tokenKeys.map(key => (
-                <div key={key} className="p-3 bg-gray-900 rounded-lg">
-                  <p className="text-sm text-gray-400">{key.charAt(0).toUpperCase() + key.slice(1)}</p>
-                  <p className={`text-xl font-bold ${
-                    key === 'arcade' ? 'text-green-400' :
-                    key === 'picker' ? 'text-yellow-400' :
-                    key === 'casino' ? 'text-red-400' :
-                    key === 'pvp' ? 'text-blue-400' : ''
-                  }`}>{tokens[key]}</p>
+            <h2 className="text-2xl font-bold mb-1 text-yellow-300 font-orbitron">{form.username || "Guest Player"}</h2>
+            <p className="font-mono text-gray-400">{form.wallet || "No Wallet Connected"}</p>
+            <div className="mt-6 w-full flex flex-col gap-2">
+              {/* GG Coins Card - yellow border */}
+              <div className="rounded-lg bg-black/60 shadow p-4 flex items-center justify-between border-2 border-yellow-400">
+                <span className="text-lg font-bold text-yellow-400 flex items-center gap-2">
+                  <img src={GG_COIN_ICON} alt="GG Coin" className="w-7 h-7 inline-block" />
+                  GG Coins
+                </span>
+                <span className="text-2xl font-bold text-yellow-200">{ggCoins.toLocaleString()}</span>
+              </div>
+              {/* XP Card */}
+              <div className="rounded-lg bg-black/60 shadow p-4 border border-purple-400 mt-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-bold text-purple-300">XP</span>
+                  <span className="text-lg text-purple-200">Level {xpLevel}</span>
                 </div>
-              ))}
+                <div className="relative mt-2 h-5 bg-gray-800 rounded-full overflow-hidden">
+                  <div style={{ width: `${xpPercent}%` }} className="absolute left-0 top-0 h-full bg-gradient-to-r from-purple-500 to-yellow-400 rounded-full transition-all" />
+                  <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-300">{xp} XP</span>
+                </div>
+              </div>
             </div>
+          {/* <Cashier ggCoins={ggCoins} /> */}
+            <UserDashboard profile={form} />
           </div>
-          <UserDashboard profile={form} />
         </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
+        {/* Edit Profile + Recent Games Column */}
+        <div className="md:col-span-2 flex flex-col gap-8">
+          <div className="w-full rounded-xl bg-[#232946] p-8 shadow-xl border border-purple-600 mb-8">
             <h3 className="text-xl font-semibold mb-4 font-orbitron">Edit Profile</h3>
             <div className="space-y-4">
               <div>
@@ -266,16 +246,6 @@ export default function Profile() {
                   <input type="text" name="discord" value={form.discord ?? ""} onChange={handleChange} className="w-full p-2 bg-gray-900 rounded border border-gray-700" />
                 </div>
               </div>
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="block text-sm font-bold mb-1 text-gray-400">Telegram</label>
-                  <input type="text" name="telegram" value={form.telegram ?? ""} onChange={handleChange} className="w-full p-2 bg-gray-900 rounded border border-gray-700" />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-sm font-bold mb-1 text-gray-400">Instagram</label>
-                  <input type="text" name="instagram" value={form.instagram ?? ""} onChange={handleChange} className="w-full p-2 bg-gray-900 rounded border border-gray-700" />
-                </div>
-              </div>
               <div className="flex gap-6 mt-4">
                 <label className="flex gap-2 items-center text-xs cursor-pointer">
                   <input
@@ -307,24 +277,23 @@ export default function Profile() {
               </div>
             </div>
           </div>
-          <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
+          {/* Recent Games Grid */}
+          <div className="w-full rounded-xl bg-[#181b24] p-8 shadow-xl border border-gray-700">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold font-orbitron">Recent Activity</h3>
+              <h3 className="text-xl font-semibold font-orbitron text-yellow-300">Recent Activity</h3>
               <Link to="/profile/history" className="flex items-center gap-2 text-sm text-purple-400 hover:underline">
                 <FaHistory /> View Full History
               </Link>
             </div>
-            <div className="space-y-3">
-              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 5).map((game: RecentGame, idx) => (
-                <div key={idx} className="bg-gray-900/50 p-3 rounded-lg flex items-center justify-between text-sm flex-wrap gap-2">
-                  <div className="flex items-center gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 6).map((game, idx) => (
+                <div key={idx} className="bg-black/80 p-4 rounded-xl flex flex-col items-start border border-gray-700 shadow">
+                  <div className="flex items-center gap-3 mb-1">
                     <FaGamepad className="text-purple-400" />
-                    <span className="font-semibold">{game.gameName}</span>
+                    <span className="font-semibold text-white">{game.gameName}</span>
                   </div>
-                  <div className="flex items-center gap-4 font-mono">
-                    <span>Score: {game.score?.toLocaleString()}</span>
-                    <span className="flex items-center gap-1 text-yellow-400"><FaCoins /> +{game.coinsEarned}</span>
-                  </div>
+                  <span className="text-yellow-400 text-lg font-mono">Score: {game.score}</span>
+                  <span className="flex items-center gap-1 text-yellow-200 mt-1"><FaCoins /> +{game.coinsEarned}</span>
                 </div>
               )) : <p className="text-gray-500">No recent games. Go play!</p>}
             </div>
