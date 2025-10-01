@@ -1,8 +1,8 @@
 // DegenGaming/server.js
-// Complete, Consolidated, and Corrected Backend Server (with chat and social features)
+// Original backend plus GG Coins multi-layer economy endpoints (games/categories/platform).
 
 import dotenv from 'dotenv';
-dotenv.config(); // Load environment variables from .env file
+dotenv.config();
 
 import fs from 'fs';
 import express from 'express';
@@ -14,25 +14,24 @@ import admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
-// Solana imports - ALL NECESSARY IMPORTS ARE HERE
 import {
-    Connection,
-    PublicKey,
-    clusterApiUrl,
-    Transaction,
-    Keypair,
-    sendAndConfirmTransaction,
+  Connection,
+  PublicKey,
+  Transaction,
+  Keypair,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 
 import splToken from '@solana/spl-token';
 const {
-    getOrCreateAssociatedTokenAccount,
-    mintTo,
-    createMint,
-    transfer,
-    getAccount,
-    TOKEN_PROGRAM_ID,
-    getAssociatedTokenAddress,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  createMint,
+  transfer,
+  getAccount,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddress,
 } = splToken;
 
 import bs58 from 'bs58';
@@ -41,322 +40,285 @@ import * as cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
-// --- Import Backend Services ---
-// IMPORTANT: This path assumes chatService.js is in the 'services' folder next to server.js
-// Make sure you have moved DegenGaming/src/services/chatService.js to DegenGaming/services/chatService.js
-import { initializeChatService, findOrCreateChat, sendMessage, getUserChats } from './services/chatService.js';
+import {
+  initializeChatService,
+  findOrCreateChat,
+  sendMessage,
+  getUserChats
+} from './services/chatService.js';
 
-
-// --- Firebase Admin SDK Initialization ---
+// -----------------------------------------------------------------------------
+// Firebase Init
+// -----------------------------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
-let db; // Firestore instance
-let auth; // Firebase Auth instance
+let db;
+let auth;
 
 try {
-    const serviceAccountData = fs.readFileSync(serviceAccountPath, 'utf8');
-    const serviceAccount = JSON.parse(serviceAccountData);
+  const serviceAccountData = fs.readFileSync(serviceAccountPath, 'utf8');
+  const serviceAccount = JSON.parse(serviceAccountData);
 
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        // No databaseURL as we are not using Firebase Realtime Database
-    });
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
 
-    db = getFirestore(); // Initialize Firestore
-    auth = getAuth();    // Initialize Auth
+  db = getFirestore();
+  auth = getAuth();
 
-    // Initialize the chatService with the Firestore DB and admin instance
-    initializeChatService(db, admin); // Pass db and admin to chatService
-
-    console.log("Firebase Admin SDK initialized successfully (Firestore, Auth).");
+  initializeChatService(db, admin);
+  console.log("Firebase Admin SDK initialized successfully (Firestore, Auth).");
 } catch (error) {
-    console.error("Failed to load Firebase service account key or initialize Firebase Admin SDK:", error);
-    if (error.code === 'ENOENT') {
-        console.error("Please ensure 'serviceAccountKey.json' exists in the same directory as server.js.");
-        console.error("Path attempted: " + serviceAccountPath);
-    }
-    process.exit(1); // Exit if Firebase cannot be initialized, as it's critical
+  console.error("Failed to initialize Firebase:", error);
+  process.exit(1);
 }
 
-
-// --- Solana Configuration ---
-const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL ; // Use a default devnet RPC
+// -----------------------------------------------------------------------------
+// Solana Config
+// -----------------------------------------------------------------------------
+const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL;
 const connection = new Connection(SOLANA_CLUSTER, 'confirmed');
 console.log(`Solana cluster: ${SOLANA_CLUSTER}`);
 
 const ADMIN_WALLET_PRIVATE_KEY_BASE58 = process.env.ADMIN_WALLET_PRIVATE_KEY_BASE58;
-let adminWalletKeypair; // Consistent naming: adminWalletKeypair
-
+let adminWalletKeypair = null;
 if (ADMIN_WALLET_PRIVATE_KEY_BASE58) {
-    try {
-        adminWalletKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_WALLET_PRIVATE_KEY_BASE58));
-        console.log(`Admin wallet loaded: ${adminWalletKeypair.publicKey.toBase58()}`);
-    } catch (e) {
-        console.error("Failed to load ADMIN_WALLET_PRIVATE_KEY_BASE58. Check the key format or if it's set in .env.", e.message);
-        adminWalletKeypair = null;
-        // Optionally, you might want to exit here if admin wallet is critical for startup
-        // process.exit(1);
-    }
-} else {
-    console.error("WARNING: ADMIN_WALLET_PRIVATE_KEY_BASE58 not set in .env. Solana operations will fail.");
+  try {
+    adminWalletKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_WALLET_PRIVATE_KEY_BASE58));
+    console.log(`Admin wallet loaded: ${adminWalletKeypair.publicKey.toBase58()}`);
+  } catch (e) {
+    console.error("Failed to load admin private key:", e.message);
     adminWalletKeypair = null;
+  }
+} else {
+  console.warn("ADMIN_WALLET_PRIVATE_KEY_BASE58 not set. Some SOL features disabled.");
 }
+const PLATFORM_SOL_ADDRESS = process.env.PLATFORM_SOL_ADDRESS || (adminWalletKeypair ? adminWalletKeypair.publicKey.toBase58() : null);
 
 let gameTokenMint = null;
-const GAME_TOKEN_DECIMALS = 9; // Decimals for your game token
+const GAME_TOKEN_DECIMALS = 9;
 
-
-// --- Express App Setup ---
+// -----------------------------------------------------------------------------
+// Express
+// -----------------------------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// CORS Options: Ensure all your frontend origins are listed
 const corsOptions = {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173', // Use CLIENT_URL from .env
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 };
 app.use(cors(corsOptions));
-app.use(express.json()); // Middleware to parse JSON body requests
-
+app.use(express.json());
 
 const server = http.createServer(app);
-const io = new SocketIOServer(server, {
-    cors: corsOptions // Apply CORS to Socket.IO as well
-});
+const io = new SocketIOServer(server, { cors: corsOptions });
 
-
-// --- Helper Functions (used across routes and Socket.IO) ---
-
-// Helper function to get a Firestore user document reference
-function getUserDocRef(uid) {
-    return db.collection('users').doc(uid);
-}
-
-// Helper function to get online user UIDs for real-time updates and API endpoints
-async function getOnlineUserIds() {
-    try {
-        const onlineUsersSnapshot = await db.collection('users')
-            .where('isOnline', '==', true)
-            .get();
-        const onlineUserIds = [];
-        onlineUsersSnapshot.forEach((doc) => {
-            if (doc.exists) {
-                onlineUserIds.push(doc.id); // doc.id is the UID in Firestore
-            }
-        });
-        return onlineUserIds;
-    } catch (error) {
-        console.error("Error fetching online user IDs from Firestore:", error);
-        return [];
-    }
-}
-
-// Helper to fetch user display data for friends/chat lists
-async function getUserDisplayData(uid) {
-    const userDoc = await db.collection('users').doc(uid).get();
-    if (userDoc.exists) {
-        const data = userDoc.data();
-        return {
-            uid: userDoc.id,
-            username: data.username,
-            avatarUrl: data.avatarUrl,
-            isOnline: data.isOnline || false, // Default to false if not set
-        };
-    }
-    return null;
-}
-
-
-// --- Socket.IO Connection Handling (Presence fully in Firestore) ---
-io.on('connection', (socket) => {
-    console.log('A user connected via Socket.IO');
-
-    // Store user ID on socket when they connect and identify themselves
-    socket.on('setUid', async (uid) => {
-        socket.data.uid = uid; // Attach UID to socket object
-        console.log(`Socket ${socket.id} identified as user ${uid}`);
-
-        try {
-            // Update isOnline and lastSeen in Firestore
-            await db.collection('users').doc(uid).update({
-                isOnline: true,
-                lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-            });
-            console.log(`User ${uid} connected and presence set in Firestore.`);
-
-            // Emit the updated list of online users to all clients
-            const onlineUserIds = await getOnlineUserIds();
-            io.emit('onlineUsersUpdate', onlineUserIds); // Emit to all connected clients
-        } catch (error) {
-            console.error(`Error setting online status for user ${uid} in Firestore:`, error);
-        }
-    });
-
-    socket.on('disconnect', async () => {
-        console.log('User disconnected from Socket.IO');
-        const uid = socket.data.uid; // Get UID from socket data
-        if (uid) {
-            try {
-                // Update lastSeen and isOnline in Firestore
-                await db.collection('users').doc(uid).update({
-                    isOnline: false,
-                    lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-                });
-                console.log(`User ${uid} disconnected and presence updated in Firestore.`);
-
-                // Emit the updated list of online users to all clients
-                const onlineUserIds = await getOnlineUserIds();
-                io.emit('onlineUsersUpdate', onlineUserIds);
-            } catch (error) {
-                console.error(`Error setting offline status for user ${uid} in Firestore:`, error);
-            }
-        }
-    });
-
-    // Game-related Socket.IO events (from your original code)
-    socket.on('joinGame', (gameId) => {
-        socket.join(gameId);
-        console.log(`Socket ${socket.id} joined game room: ${gameId}`);
-    });
-
-    socket.on('gameAction', (data) => {
-        const { gameId, actionType, payload } = data;
-        console.log(`Game action received for game ${gameId}: ${actionType}`);
-        // Emit game event to all sockets in the specific game room
-        io.to(gameId).emit('gameEvent', { actionType, payload, fromUser: socket.data.uid });
-    });
-
-    socket.on('leaveGame', (gameId) => {
-        socket.leave(gameId);
-        console.log(`Socket ${socket.id} left game room: ${gameId}`);
-    });
-
-    // Chat-related Socket.IO events
-    socket.on('chat:join', (chatId) => {
-        socket.join(chatId);
-        console.log(`User ${socket.data.uid} joined chat room ${chatId}`);
-    });
-
-    socket.on('chat:message', async (messageData) => {
-        const { chatId, text } = messageData;
-        const senderUid = socket.data.uid;
-
-        if (!senderUid) {
-            console.warn('chat:message received without a recognized sender UID.');
-            return;
-        }
-        if (!chatId || !text) {
-            console.warn('chat:message received with missing chatId or text.');
-            return;
-        }
-
-        try {
-            // Use the imported sendMessage function from chatService.js
-            await sendMessage(chatId, senderUid, text);
-
-            // Fetch sender's display info (username, avatar) for real-time broadcast
-            const senderDisplayData = await getUserDisplayData(senderUid);
-
-            // Broadcast the new message to all participants in the chat room
-            io.to(chatId).emit('chat:messageReceived', {
-                senderId: senderUid,
-                text: text,
-                createdAt: admin.firestore.Timestamp.now().toDate(), // Provide a Date object for frontend
-                senderUsername: senderDisplayData ? senderDisplayData.username : 'Unknown User',
-                senderAvatarUrl: senderDisplayData ? senderDisplayData.avatarUrl : '',
-            });
-            console.log(`Message sent in chat ${chatId} by ${senderUid}.`);
-        } catch (error) {
-            console.error('Error sending message via socket:', error);
-            // Optionally, emit an error back to the sender
-            socket.emit('chat:error', 'Failed to send message.');
-        }
-    });
-});
-
-
-// --- Solana Token Management Functions ---
-// (These functions are critical for your Solana interactions)
-
-
-// Transfers tokens from admin wallet to a recipient's ATA
-async function transferSolanaToken(recipientPublicKey, amount) {
-    if (!adminWalletKeypair || !gameTokenMint) {
-        console.error("Admin wallet or game token mint not initialized.");
-        return false;
-    }
-    try {
-        // Get or create admin's ATA
-        const adminATA = await getOrCreateAssociatedTokenAccount(
-            connection,
-            adminWalletKeypair,
-            gameTokenMint,
-            adminWalletKeypair.publicKey
-        );
-
-        // Get or create recipient's ATA
-        const recipientATA = await getOrCreateAssociatedTokenAccount(
-            connection,
-            adminWalletKeypair, // Payer if recipient ATA needs creation
-            gameTokenMint,
-            recipientPublicKey
-        );
-
-        // Transfer tokens
-        const signature = await transfer(
-            connection,
-            adminWalletKeypair, // Payer
-            adminATA.address, // Source ATA (admin's)
-            recipientATA.address, // Destination ATA (recipient's)
-            adminWalletKeypair.publicKey, // Source Owner (admin wallet)
-            amount // Amount to transfer
-        );
-        console.log(`Transferred ${amount} tokens from admin to ${recipientPublicKey.toBase58()}. Tx: ${signature}`);
-        return true;
-    } catch (error) {
-        console.error("Error transferring Solana token:", error);
-        return false;
-    }
-}
-
-// Gets the balance of a specific token account
-async function getTokenAccountBalance(tokenAccountPublicKey) {
-    try {
-        const accountInfo = await getAccount(connection, tokenAccountPublicKey, 'confirmed', TOKEN_PROGRAM_ID);
-        return Number(accountInfo.amount); // Returns raw amount (e.g., 1_000_000_000 for 1 token if decimals is 9)
-    } catch (error) {
-        // If account does not exist, balance is 0
-        if (error.message.includes('Account does not exist') || error.message.includes('could not find account')) {
-            return 0;
-        }
-        console.error("Error getting token account balance:", error);
-        return 0;
-    }
-}
-
-
-// --- Middleware to protect routes (Firebase Authentication) ---
-const protect = async (req, res, next) => {
-    let idToken;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-        idToken = req.headers.authorization.split(' ')[1];
-        try {
-            const decodedToken = await auth.verifyIdToken(idToken);
-            req.user = decodedToken; // Attach decoded Firebase user data to the request
-            next(); // Proceed to the next middleware or route handler
-        } catch (error) {
-            console.error("Firebase auth verification error (invalid/expired token):", error);
-            return res.status(401).json({ message: 'Unauthorized: Invalid or expired token.' });
-        }
-    } else {
-        return res.status(401).json({ message: 'Unauthorized: No token provided.' });
-    }
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+const CATEGORY_KEYS = ['arcade', 'pvp', 'casino', 'picker'];
+// Mapping from lowercase category key to categories collection doc ID (as shown in your screenshots)
+const CATEGORY_COLLECTION_ID_MAP = {
+  arcade: 'Arcade',
+  casino: 'Casino',
+  picker: 'Picker',
+  pvp: 'PvP',
 };
 
+const emptyStatsMap = { allTime: 0, lastMonth: 0 };
+
+function getUserDocRef(uid) {
+  return db.collection('users').doc(uid);
+}
+async function getOnlineUserIds() {
+  try {
+    const snap = await db.collection('users').where('isOnline', '==', true).get();
+    return snap.docs.map(d => d.id);
+  } catch (e) {
+    console.error('getOnlineUserIds error:', e);
+    return [];
+  }
+}
+async function getUserDisplayData(uid) {
+  const doc = await db.collection('users').doc(uid).get();
+  if (!doc.exists) return null;
+  const d = doc.data();
+  return {
+    uid: doc.id,
+    username: d.username,
+    avatarUrl: d.avatarUrl,
+    isOnline: d.isOnline || false,
+  };
+}
+function validateCategory(cat) {
+  return CATEGORY_KEYS.includes((cat || '').toLowerCase());
+}
+function getPeriodKeys(date = new Date()) {
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2,'0');
+  const current = `${year}-${month}`;
+  const prev = new Date(year, date.getMonth() - 1, 1);
+  const last = `${prev.getFullYear()}-${(prev.getMonth() + 1).toString().padStart(2,'0')}`;
+  return { current, last };
+}
+async function fetchSolPrice() {
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const j = await r.json();
+    return Number(j?.solana?.usd) || 0;
+  } catch (e) {
+    console.error('fetchSolPrice failed:', e);
+    return 0;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Socket.IO
+// -----------------------------------------------------------------------------
+io.on('connection', (socket) => {
+  socket.on('setUid', async (uid) => {
+    socket.data.uid = uid;
+    try {
+      await db.collection('users').doc(uid).update({
+        isOnline: true,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      io.emit('onlineUsersUpdate', await getOnlineUserIds());
+    } catch (e) {
+      console.error('setUid error:', e);
+    }
+  });
+
+  socket.on('disconnect', async () => {
+    const uid = socket.data.uid;
+    if (!uid) return;
+    try {
+      await db.collection('users').doc(uid).update({
+        isOnline: false,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      io.emit('onlineUsersUpdate', await getOnlineUserIds());
+    } catch (e) {
+      console.error('disconnect presence error:', e);
+    }
+  });
+
+  socket.on('joinGame', (gameId) => socket.join(gameId));
+  socket.on('leaveGame', (gameId) => socket.leave(gameId));
+  socket.on('gameAction', ({ gameId, actionType, payload }) => {
+    io.to(gameId).emit('gameEvent', { actionType, payload, fromUser: socket.data.uid });
+  });
+
+  socket.on('chat:join', chatId => socket.join(chatId));
+  socket.on('chat:message', async ({ chatId, text }) => {
+    const senderUid = socket.data.uid;
+    if (!senderUid || !chatId || !text) return;
+    try {
+      await sendMessage(chatId, senderUid, text);
+      const senderData = await getUserDisplayData(senderUid);
+      io.to(chatId).emit('chat:messageReceived', {
+        senderId: senderUid,
+        text,
+        createdAt: new Date(),
+        senderUsername: senderData?.username || 'Unknown',
+        senderAvatarUrl: senderData?.avatarUrl || '',
+      });
+    } catch (e) {
+      socket.emit('chat:error', 'Failed to send message.');
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Minimal Solana Token Helpers (existing)
+// -----------------------------------------------------------------------------
+async function transferSolanaToken(recipientPublicKey, amount) {
+  if (!adminWalletKeypair || !gameTokenMint) {
+    console.warn("transferSolanaToken: admin or mint not ready.");
+    return false;
+  }
+  try {
+    const adminATA = await getOrCreateAssociatedTokenAccount(
+      connection,
+      adminWalletKeypair,
+      gameTokenMint,
+      adminWalletKeypair.publicKey
+    );
+    const recipientATA = await getOrCreateAssociatedTokenAccount(
+      connection,
+      adminWalletKeypair,
+      gameTokenMint,
+      recipientPublicKey
+    );
+    await transfer(
+      connection,
+      adminWalletKeypair,
+      adminATA.address,
+      recipientATA.address,
+      adminWalletKeypair.publicKey,
+      amount
+    );
+    return true;
+  } catch (e) {
+    console.error('transferSolanaToken error:', e);
+    return false;
+  }
+}
+async function getTokenAccountBalance(tokenAccountPublicKey) {
+  try {
+    const info = await getAccount(connection, tokenAccountPublicKey, 'confirmed', TOKEN_PROGRAM_ID);
+    return Number(info.amount);
+  } catch (e) {
+    if (e.message.includes('does not exist')) return 0;
+    console.error('getTokenAccountBalance error:', e);
+    return 0;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Auth Middleware
+// -----------------------------------------------------------------------------
+const protect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  } else {
+    return res.status(401).json({ message: 'Unauthorized: No token provided.' });
+  }
+  try {
+    const decoded = await auth.verifyIdToken(token);
+    req.user = decoded;
+    next();
+  } catch (e) {
+    return res.status(401).json({ message: 'Unauthorized: Invalid or expired token.' });
+  }
+};
+
+// -----------------------------------------------------------------------------
+// Cron Jobs (legacy SOL stats left intact)
+// -----------------------------------------------------------------------------
+async function updateALLUsersOnlineStatus() {
+  try {
+    const threshold = admin.firestore.Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
+    const snap = await db.collection('users')
+      .where('isOnline', '==', true)
+      .where('lastSeen', '<', threshold)
+      .get();
+    const batch = db.batch();
+    snap.forEach(doc => {
+      batch.update(doc.ref, { isOnline: false, lastSeen: admin.firestore.FieldValue.serverTimestamp() });
+    });
+    await batch.commit();
+    io.emit('onlineUsersUpdate', await getOnlineUserIds());
+  } catch (e) {
+    console.error('updateALLUsersOnlineStatus error:', e);
+  }
+}
 
 // --- Cron Jobs & Scheduled Tasks ---
 
@@ -503,8 +465,7 @@ async function updatePlatformStatsAggregatedGGCoins() {
 // Cron job to aggregate platform stats every 30 minutes (or adjust as needed)
 cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
 
-// Initial run for cron jobs on server start
-updatePlatformStatsAggregatedGGCoins();
+
 
 // --- API Routes ---
 
@@ -796,6 +757,460 @@ app.post("/verify-wallet", async (req, res) => {
     }
 });
 
+// -----------------------------------------------------------------------------
+// GG COINS MULTI-LAYER ECONOMY SERVICE (NEW)
+// -----------------------------------------------------------------------------
+/**
+ * Ensure platform stats doc exists with minimal structure.
+ */
+async function ensurePlatformStatsBase() {
+  const statsRef = db.collection('platform').doc('stats');
+  const snap = await statsRef.get();
+  if (!snap.exists) {
+    const { current, last } = getPeriodKeys();
+    await statsRef.set({
+      registeredUsers: 0,
+      onlineUsers: 0,
+      totalGamesPlayed: 0,
+      totalGGCoinsDeposited: { ...emptyStatsMap },
+      totalGGCoinsWithdrawn: { ...emptyStatsMap },
+      totalGGCoinsGathered: { ...emptyStatsMap },
+      totalGGCoinsDistributed: { ...emptyStatsMap },
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      currentMonthPeriod: current,
+      lastMonthPeriod: last,
+      categories: {
+        arcade: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
+        pvp: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
+        casino: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
+        picker: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
+      },
+      games: {}
+    }, { merge: false });
+  }
+  return statsRef;
+}
+
+/**
+ * Ensure category document exists (categories collection).
+ */
+async function ensureCategoryDoc(t, lowerCat) {
+  const docId = CATEGORY_COLLECTION_ID_MAP[lowerCat];
+  if (!docId) return null;
+  const catRef = db.collection('categories').doc(docId);
+  const snap = await t.get(catRef);
+  if (!snap.exists) {
+    t.set(catRef, {
+      id: docId,
+      name: docId,
+      description: docId + " category",
+      ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+      ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+      gamesPlayed: { allTime: 0, lastMonth: 0 },
+      games: []
+    }, { merge: false });
+  }
+  return catRef;
+}
+
+/**
+ * Apply economy deltas (atomic).
+ * @param {object} opts
+ *   gameId
+ *   category (lowercase)
+ *   gatheredDelta (number >=0)
+ *   distributedDelta (number >=0)
+ *   incrementPlay (boolean) - whether to increment gamesPlayed
+ */
+async function applyEconomyDeltas({
+  gameId,
+  category,
+  gatheredDelta = 0,
+  distributedDelta = 0,
+  incrementPlay = false
+}) {
+  if (!gameId) throw new Error('Missing gameId');
+  if (!validateCategory(category)) throw new Error('Invalid category');
+
+  const lowerCat = category.toLowerCase();
+  await ensurePlatformStatsBase();
+
+  // Run transaction
+  await db.runTransaction(async (t) => {
+    const gameRef = db.collection('games').doc(gameId);
+    const statsRef = db.collection('platform').doc('stats');
+    const catRef = db.collection('categories').doc(CATEGORY_COLLECTION_ID_MAP[lowerCat]);
+
+    // Preload docs
+    const [gameSnap, statsSnap, catSnap] = await Promise.all([
+      t.get(gameRef),
+      t.get(statsRef),
+      t.get(catRef)
+    ]);
+
+    if (!gameSnap.exists) {
+      // Initialize the game doc with baseline if missing
+      t.set(gameRef, {
+        id: gameId,
+        category: CATEGORY_COLLECTION_ID_MAP[lowerCat] || lowerCat,
+        ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+        ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+        gamesPlayed: { allTime: 0, lastMonth: 0 },
+      }, { merge: true });
+    }
+
+    // Ensure category doc
+    if (!catSnap.exists) {
+      t.set(catRef, {
+        id: CATEGORY_COLLECTION_ID_MAP[lowerCat],
+        name: CATEGORY_COLLECTION_ID_MAP[lowerCat],
+        description: `${CATEGORY_COLLECTION_ID_MAP[lowerCat]} category`,
+        ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+        ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+        gamesPlayed: { allTime: 0, lastMonth: 0 },
+        games: [gameId]
+      }, { merge: true });
+    } else {
+      // Add game reference if not present
+      t.update(catRef, {
+        games: admin.firestore.FieldValue.arrayUnion(gameId)
+      });
+    }
+
+    // Defensive: ensure stats category child structure
+    const statsData = statsSnap.exists ? statsSnap.data() : {};
+    if (!(statsData.categories?.[lowerCat])) {
+      t.set(statsRef, {
+        categories: {
+          [lowerCat]: {
+            ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+            ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+            gamesPlayed: { allTime: 0, lastMonth: 0 },
+            games: []
+          }
+        }
+      }, { merge: true });
+    }
+
+    const increments = {};
+
+    if (gatheredDelta > 0) {
+      increments['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      increments['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      increments[`categories.${lowerCat}.ggCoinsGathered.allTime`] = admin.firestore.FieldValue.increment(gatheredDelta);
+      increments[`categories.${lowerCat}.ggCoinsGathered.lastMonth`] = admin.firestore.FieldValue.increment(gatheredDelta);
+      increments['totalGGCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      increments['totalGGCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+    }
+
+    if (distributedDelta > 0) {
+      increments['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      increments['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+      increments[`categories.${lowerCat}.ggCoinsDistributed.allTime`] = admin.firestore.FieldValue.increment(distributedDelta);
+      increments[`categories.${lowerCat}.ggCoinsDistributed.lastMonth`] = admin.firestore.FieldValue.increment(distributedDelta);
+      increments['totalGGCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      increments['totalGGCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+    }
+
+    if (incrementPlay) {
+      increments['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
+      increments['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
+      increments[`categories.${lowerCat}.gamesPlayed.allTime`] = admin.firestore.FieldValue.increment(1);
+      increments[`categories.${lowerCat}.gamesPlayed.lastMonth`] = admin.firestore.FieldValue.increment(1);
+      increments['totalGamesPlayed'] = admin.firestore.FieldValue.increment(1);
+    }
+
+    // Apply increments to game doc
+    const gameUpdate = {};
+    if (gatheredDelta > 0) {
+      gameUpdate['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      gameUpdate['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+    }
+    if (distributedDelta > 0) {
+      gameUpdate['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      gameUpdate['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+    }
+    if (incrementPlay) {
+      gameUpdate['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
+      gameUpdate['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
+    }
+
+    if (Object.keys(gameUpdate).length) {
+      t.set(gameRef, gameUpdate, { merge: true });
+    }
+
+    // Update categories collection doc fields
+    const catFieldUpdate = {};
+    if (gatheredDelta > 0) {
+      catFieldUpdate['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      catFieldUpdate['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+    }
+    if (distributedDelta > 0) {
+      catFieldUpdate['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      catFieldUpdate['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+    }
+    if (incrementPlay) {
+      catFieldUpdate['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
+      catFieldUpdate['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
+    }
+    if (Object.keys(catFieldUpdate).length) {
+      t.set(catRef, catFieldUpdate, { merge: true });
+    }
+
+    // Platform stats increments
+    if (Object.keys(increments).length) {
+      t.set(statsRef, {
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        ...Object.entries(increments).reduce((acc, [k, v]) => {
+          acc[k] = v;
+          return acc;
+        }, {})
+      }, { merge: true });
+    }
+  });
+}
+
+/**
+ * Fetch a snapshot summary after an update
+ */
+async function getEconomySnapshot(gameId, category) {
+  const lowerCat = category?.toLowerCase();
+  const gameRef = db.collection('games').doc(gameId);
+  const statsRef = db.collection('platform').doc('stats');
+  const catRef = lowerCat ? db.collection('categories').doc(CATEGORY_COLLECTION_ID_MAP[lowerCat]) : null;
+
+  const docs = await Promise.all([
+    gameRef.get(),
+    statsRef.get(),
+    catRef ? catRef.get() : Promise.resolve(null)
+  ]);
+
+  return {
+    game: docs[0].exists ? docs[0].data() : null,
+    categoryDoc: docs[2] && docs[2].exists ? docs[2].data() : null,
+    platformCategory: (docs[1].exists && lowerCat && docs[1].data().categories?.[lowerCat]) ? docs[1].data().categories[lowerCat] : null,
+    platformTotals: docs[1].exists ? {
+      totalGGCoinsGathered: docs[1].data().totalGGCoinsGathered || null,
+      totalGGCoinsDistributed: docs[1].data().totalGGCoinsDistributed || null,
+      totalGamesPlayed: docs[1].data().totalGamesPlayed || 0
+    } : null
+  };
+}
+
+// -----------------------------------------------------------------------------
+// ECONOMY ENDPOINTS (NEW)
+// -----------------------------------------------------------------------------
+
+// Player pays to play a game (gathered)
+app.post('/economy/play', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body;
+  if (!gameId || !category || typeof amount !== 'number' || amount <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid payload.' });
+  }
+  try {
+    await applyEconomyDeltas({
+      gameId,
+      category,
+      gatheredDelta: amount,
+      distributedDelta: 0,
+      incrementPlay: true
+    });
+    const snapshot = await getEconomySnapshot(gameId, category);
+    res.json({ success: true, type: 'play', amount, snapshot });
+  } catch (e) {
+    console.error('/economy/play error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// Platform distributes reward (distributed)
+app.post('/economy/reward', protect, async (req, res) => {
+  const { gameId, category, amount } = req.body;
+  if (!gameId || !category || typeof amount !== 'number' || amount <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid payload.' });
+  }
+  try {
+    await applyEconomyDeltas({
+      gameId,
+      category,
+      gatheredDelta: 0,
+      distributedDelta: amount,
+      incrementPlay: false
+    });
+    const snapshot = await getEconomySnapshot(gameId, category);
+    res.json({ success: true, type: 'reward', amount, snapshot });
+  } catch (e) {
+    console.error('/economy/reward error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// Bulk updates (array of entries)
+app.post('/economy/bulk', protect, async (req, res) => {
+  const { entries } = req.body;
+  if (!Array.isArray(entries) || !entries.length) {
+    return res.status(400).json({ success: false, message: 'entries array required.' });
+  }
+  const results = [];
+  for (const entry of entries) {
+    const { gameId, category, gathered = 0, distributed = 0, incrementPlay = false } = entry;
+    try {
+      if (!gameId || !category || (gathered <= 0 && distributed <= 0 && !incrementPlay)) {
+        results.push({ gameId, ok: false, error: 'Invalid entry' });
+        continue;
+      }
+      await applyEconomyDeltas({
+        gameId,
+        category,
+        gatheredDelta: gathered > 0 ? gathered : 0,
+        distributedDelta: distributed > 0 ? distributed : 0,
+        incrementPlay: !!incrementPlay
+      });
+      results.push({ gameId, ok: true });
+    } catch (e) {
+      results.push({ gameId, ok: false, error: e.message });
+    }
+  }
+  res.json({ success: true, results });
+});
+
+// Fetch snapshot for a single game/category
+app.post('/economy/snapshot', protect, async (req, res) => {
+  const { gameId, category } = req.body;
+  if (!gameId || !category) {
+    return res.status(400).json({ success: false, message: 'gameId & category required.' });
+  }
+  try {
+    const snapshot = await getEconomySnapshot(gameId, category);
+    res.json({ success: true, snapshot });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// -----------------------------------------------------------------------------
+// CASHIER ENDPOINTS (existing deposit/withdraw concept extended to update platform maps)
+// -----------------------------------------------------------------------------
+app.post('/cashier/deposit', protect, async (req, res) => {
+  const { txSignature, solAmount, solPriceOverride } = req.body;
+  if (!PLATFORM_SOL_ADDRESS) {
+    return res.status(500).json({ message: 'Platform SOL address not configured.' });
+  }
+  try {
+    let resolvedSolAmount = 0;
+    if (txSignature) {
+      const tx = await connection.getTransaction(txSignature, { commitment: 'confirmed' });
+      if (!tx) return res.status(400).json({ message: 'Transaction not found.' });
+      const accountKeys = tx.transaction.message.accountKeys.map(k => k.toBase58());
+      const idx = accountKeys.indexOf(PLATFORM_SOL_ADDRESS);
+      if (idx === -1) return res.status(400).json({ message: 'Platform address not involved.' });
+      const pre = tx.meta?.preBalances?.[idx] ?? 0;
+      const post = tx.meta?.postBalances?.[idx] ?? 0;
+      const delta = post - pre;
+      if (delta <= 0) return res.status(400).json({ message: 'No net SOL received.' });
+      resolvedSolAmount = delta / LAMPORTS_PER_SOL;
+    } else if (typeof solAmount === 'number' && solAmount > 0) {
+      resolvedSolAmount = solAmount;
+    } else {
+      return res.status(400).json({ message: 'Provide txSignature or positive solAmount.' });
+    }
+
+    const solPrice = solPriceOverride || await fetchSolPrice();
+    if (solPrice <= 0) return res.status(500).json({ message: 'Could not resolve SOL price.' });
+    const ggCredit = Number((resolvedSolAmount * solPrice).toFixed(2));
+
+    await db.runTransaction(async (t) => {
+      const userRef = getUserDocRef(req.user.uid);
+      const statsRef = db.collection('platform').doc('stats');
+      const userSnap = await t.get(userRef);
+      if (!userSnap.exists) throw new Error('User not found.');
+      const currentGG = Number(userSnap.data()?.coins?.gg ?? 0);
+      t.update(userRef, { 'coins.gg': currentGG + ggCredit });
+      t.set(statsRef, {
+        totalGGCoinsDeposited: {
+          allTime: admin.firestore.FieldValue.increment(ggCredit),
+          lastMonth: admin.firestore.FieldValue.increment(ggCredit),
+        }
+      }, { merge: true });
+    });
+
+    res.json({
+      success: true,
+      mode: txSignature ? 'on-chain-verified' : 'manual',
+      solAmount: resolvedSolAmount,
+      solPriceUsed: solPrice,
+      ggCoinsCredited: ggCredit,
+      txSignature: txSignature || null
+    });
+  } catch (e) {
+    console.error('/cashier/deposit error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+app.post('/cashier/withdraw', protect, async (req, res) => {
+  const { ggAmount, destinationWallet, solPriceOverride } = req.body;
+  if (!adminWalletKeypair) return res.status(500).json({ message: 'Admin wallet unavailable.' });
+  if (typeof ggAmount !== 'number' || ggAmount <= 0) return res.status(400).json({ message: 'Invalid ggAmount.' });
+
+  try {
+    const solPrice = solPriceOverride || await fetchSolPrice();
+    if (solPrice <= 0) return res.status(500).json({ message: 'Failed to resolve SOL price.' });
+    const solNeeded = ggAmount / solPrice;
+    const lamportsNeeded = Math.round(solNeeded * LAMPORTS_PER_SOL);
+    if (lamportsNeeded <= 0) return res.status(400).json({ message: 'Withdrawal < 1 lamport.' });
+
+    let txSig = null;
+    await db.runTransaction(async (t) => {
+      const userRef = getUserDocRef(req.user.uid);
+      const statsRef = db.collection('platform').doc('stats');
+      const userSnap = await t.get(userRef);
+      if (!userSnap.exists) throw new Error('User not found.');
+      const userData = userSnap.data();
+      const currentGG = Number(userData?.coins?.gg ?? 0);
+      if (currentGG < ggAmount) throw new Error('Insufficient GG Coins.');
+      const wallet = destinationWallet || userData.wallet;
+      if (!wallet) throw new Error('Destination wallet missing.');
+      // Prepare SOL transfer
+      const toPubkey = new PublicKey(wallet);
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: adminWalletKeypair.publicKey,
+          toPubkey,
+          lamports: lamportsNeeded
+        })
+      );
+      tx.feePayer = adminWalletKeypair.publicKey;
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+      tx.recentBlockhash = blockhash;
+      tx.sign(adminWalletKeypair);
+      const raw = tx.serialize();
+      txSig = await connection.sendRawTransaction(raw, { skipPreflight: false });
+      await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'confirmed');
+
+      t.update(userRef, { 'coins.gg': currentGG - ggAmount });
+      t.set(statsRef, {
+        totalGGCoinsWithdrawn: {
+          allTime: admin.firestore.FieldValue.increment(ggAmount),
+          lastMonth: admin.firestore.FieldValue.increment(ggAmount),
+        }
+      }, { merge: true });
+    });
+
+    res.json({
+      success: true,
+      ggCoinsDebited: ggAmount,
+      solAmountSent: solNeeded,
+      lamportsSent: lamportsNeeded,
+      solPriceUsed: solPrice,
+      txSignature: txSig
+    });
+  } catch (e) {
+    console.error('/cashier/withdraw error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 
 //Get USERS 
 // Fetch all users for Picker onboarding (Protected)
@@ -883,26 +1298,7 @@ app.get('/users/:uid', protect, async (req, res) => {
     }
 });
 
-// Fetch all users for Picker onboarding (Protected)
-app.get('/api/usernames', protect, async (req, res) => {
-    try {
-        const usersSnapshot = await db.collection('users').get();
-        const users = [];
-        usersSnapshot.forEach(doc => {
-            const data = doc.data();
-            users.push({
-                key: doc.id,
-                username: data.username || '',
-                avatarUrl: data.avatarUrl || '',
-                wallet: data.wallet || '',
-            });
-        });
-        res.status(200).json(users);
-    } catch (error) {
-        console.error('Error fetching usernames:', error);
-        res.status(500).json({ message: 'Failed to fetch usernames.' });
-    }
-});
+
 
 // Get Free Entry Tokens (Protected)
 app.get('/user/free-entry-tokens', protect, async (req, res) => {
@@ -1729,7 +2125,58 @@ app.get('/leaderboards/:gameId', protect, async (req, res) => {
   res.status(200).json(leaderboardDoc.data());
 });
 
+const defaultMap = { allTime: 0, lastMonth: 0 };
 
+async function fixGamesCollection() {
+  const gamesSnapshot = await db.collection('games').get();
+  let updated = 0;
+  for (const gameDoc of gamesSnapshot.docs) {
+    const data = gameDoc.data();
+    let updateData = {};
+    let needsUpdate = false;
+
+    // Remove old sol fields
+    if ('solDistributed' in data) {
+      updateData['solDistributed'] = admin.firestore.FieldValue.delete();
+      needsUpdate = true;
+    }
+    if ('solGathered' in data) {
+      updateData['solGathered'] = admin.firestore.FieldValue.delete();
+      needsUpdate = true;
+    }
+
+    // Ensure required GG Coins maps
+    if (!data.ggCoinsGathered || typeof data.ggCoinsGathered.allTime !== 'number' || typeof data.ggCoinsGathered.lastMonth !== 'number') {
+      updateData['ggCoinsGathered'] = defaultMap;
+      needsUpdate = true;
+    }
+    if (!data.ggCoinsDistributed || typeof data.ggCoinsDistributed.allTime !== 'number' || typeof data.ggCoinsDistributed.lastMonth !== 'number') {
+      updateData['ggCoinsDistributed'] = defaultMap;
+      needsUpdate = true;
+    }
+    if (!data.gamesPlayed || typeof data.gamesPlayed.allTime !== 'number' || typeof data.gamesPlayed.lastMonth !== 'number') {
+      updateData['gamesPlayed'] = defaultMap;
+      needsUpdate = true;
+    }
+    if (needsUpdate) {
+      await gameDoc.ref.update(updateData);
+      updated++;
+      console.log(`Updated game: ${gameDoc.id}`);
+    }
+  }
+  console.log(`Games collection: updated ${updated} documents.`);
+}
+
+
+async function run() {
+ ensurePlatformStatsBase();
+    ensureCategoryDoc();
+    fixGamesCollection();
+}
+
+run().catch(err => {
+  console.error("Migration failed:", err);
+});
 
 // --- Server Start ---
 // Starts the Express server and performs initial setup tasks
@@ -1739,5 +2186,5 @@ server.listen(PORT, async () => {
     // Run initial cron jobs
     
     updateALLUsersOnlineStatus();
-    updatePlatformStatsAggregatedInSol();
+    updatePlatformStatsAggregatedGGCoins();
 });

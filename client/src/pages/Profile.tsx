@@ -204,7 +204,7 @@ export default function Profile() {
                 </div>
               </div>
             </div>
-          {/* <Cashier ggCoins={ggCoins} /> */}
+          <Cashier ggCoins={ggCoins} /> 
             <UserDashboard profile={form} />
           </div>
         </div>
