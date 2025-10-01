@@ -1,120 +1,98 @@
-import { db, auth } from "./firebaseConfig";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import type { ProfileData } from "../types/profile";
-import { DEFAULT_PROFILE } from "../types/profile";
-import { useState, useEffect } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
+/**
+ * userProfile.ts
+ * Minimal local profile helpers. All friend logic is server-side now.
+ *
+ * If a new wallet user logs in and no profile doc exists the backend
+ * should create it via /verify-wallet. This hook still ensures fallback.
+ */
 
-// This is a direct hook for the Firebase user object.
+import { db, auth } from './firebaseConfig';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { useEffect, useState } from 'react';
+
+export interface MinimalProfile {
+  uid: string;
+  username?: string;
+  avatarUrl?: string;
+  wallet?: string;
+  createdAt?: string;
+  coins?: { gg?: number };
+  friends?: string[];
+  friendRequestsSent?: string[];
+  friendRequestsReceived?: string[];
+  isOnline?: boolean;
+  lastSeen?: any;
+}
+
+const DEFAULT_PROFILE: Partial<MinimalProfile> = {
+  friends: [],
+  friendRequestsSent: [],
+  friendRequestsReceived: []
+};
+
 export function useFirebaseUser() {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
       setInitializing(false);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
   return { user, initializing };
 }
 
-
-export async function ensureUserProfile(uid: string, walletPublicKey: string) {
+/**
+ * ensureUserProfile - client fallback only if backend failed to make doc.
+ */
+export async function ensureUserProfile(uid: string, walletPublicKey?: string) {
   const userRef = doc(db, 'users', uid);
-  const userSnap = await getDoc(userRef);
-
-  if (!userSnap.exists()) {
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) {
     await setDoc(userRef, {
       ...DEFAULT_PROFILE,
-      wallet: walletPublicKey,
-      createdAt: new Date().toISOString(),
-      friends: [],
-      friendRequests: [],
-      sentInvitations: [],
-      dmsOpen: true,
-      duelsOpen: true,
-      duelInvitations: [],
-      pvpRoomInvites: [],
-    });
-  } else {
-    const data = userSnap.data() || {};
-    const update: any = {};
-
-    if (!Array.isArray(data.friends)) update.friends = [];
-    if (!Array.isArray(data.friendRequests)) update.friendRequests = [];
-    if (!Array.isArray(data.sentInvitations)) update.sentInvitations = [];
-    if (!Array.isArray(data.duelInvitations)) update.duelInvitations = [];
-    if (!Array.isArray(data.pvpRoomInvites)) update.pvpRoomInvites = [];
-    if (typeof data.dmsOpen !== "boolean") update.dmsOpen = true;
-    if (typeof data.duelsOpen !== "boolean") update.duelsOpen = true;
-    update.wallet = walletPublicKey;
-    update.lastLogin = new Date().toISOString();
-
-    if (Object.keys(update).length > 0) await updateDoc(userRef, update);
-  }
-}
-
-export async function ensureUserHasArrays(uid: string) {
-  const userRef = doc(db, 'users', uid);
-  const userSnap = await getDoc(userRef);
-  if (!userSnap.exists()) {
-    await setDoc(userRef, {
-      friends: [],
-      friendRequests: [],
-      sentInvitations: [],
-      duelInvitations: [],
-      pvpRoomInvites: [],
+      uid,
+      wallet: walletPublicKey || null,
+      createdAt: new Date().toISOString()
     }, { merge: true });
-    return;
-  }
-  const data = userSnap.data() || {};
-  const patch: any = {};
-  if (!Array.isArray(data.friends)) patch.friends = [];
-  if (!Array.isArray(data.friendRequests)) patch.friendRequests = [];
-  if (!Array.isArray(data.sentInvitations)) patch.sentInvitations = [];
-  if (!Array.isArray(data.duelInvitations)) patch.duelInvitations = [];
-  if (!Array.isArray(data.pvpRoomInvites)) patch.pvpRoomInvites = [];
-  if (Object.keys(patch).length > 0) {
-    await updateDoc(userRef, patch);
+  } else if (walletPublicKey) {
+    // Ensure wallet stored if newly linked
+    await updateDoc(userRef, { wallet: walletPublicKey });
   }
 }
 
-
-export async function getProfileData(uid: string): Promise<ProfileData | null> {
-  const ref = doc(db, "users", uid);
+export async function getProfileData(uid: string): Promise<MinimalProfile | null> {
+  const ref = doc(db, 'users', uid);
   const snap = await getDoc(ref);
-  return snap.exists() ? (snap.data() as ProfileData) : null;
+  return snap.exists() ? (snap.data() as MinimalProfile) : null;
 }
 
-export async function updateProfileData(uid: string, data: Partial<ProfileData>) {
-  const ref = doc(db, "users", uid);
+export async function updateProfileData(uid: string, data: Partial<MinimalProfile>) {
+  const ref = doc(db, 'users', uid);
   await updateDoc(ref, { ...data, updatedAt: new Date().toISOString() });
 }
 
 export function useProfile() {
-  const { user, initializing: authInitializing } = useFirebaseUser();
-  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const { user, initializing: authInit } = useFirebaseUser();
+  const [profile, setProfile] = useState<MinimalProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchProfile = async () => {
+    const run = async () => {
       if (user) {
-        const profileData = await getProfileData(user.uid);
-        setProfile(profileData);
-
+        const p = await getProfileData(user.uid);
+        setProfile(p);
       } else {
         setProfile(null);
       }
       setLoading(false);
     };
+    if (!authInit) run();
+  }, [user, authInit]);
 
-    if (!authInitializing) {
-      fetchProfile();
-    }
-  }, [user, authInitializing]);
-
-  return { profile, user, loading: authInitializing || loading };
+  return { profile, user, loading: authInit || loading };
 }

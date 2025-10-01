@@ -1,202 +1,275 @@
-// DegenGamingFrontend/src/services/api.ts
-// Compare this with your branch, ensure all these methods are present and correct.
+/**
+ * DegenGaming Frontend API Layer (Aligned with fixed server)
+ *
+ * Features:
+ *  - Public endpoint detection (minimal)
+ *  - Auth token injection (waits for Firebase auth state once if desired)
+ *  - One-time 401 retry with forced token refresh
+ *  - Full coverage of server endpoints (economy, cashier, friends, chats, leaderboard, picker sessions, etc.)
+ *  - Chunking handled server-side; client just calls straight endpoints
+ *  - Light types for core payloads
+ *
+ * NOTE: Previous build error fixed by removing duplicate 'apiCall' symbol.
+ */
 
-import axios from 'axios';
-import { getAuth } from 'firebase/auth';
+import axios, {
+  AxiosError,
+  AxiosRequestConfig,
+  InternalAxiosRequestConfig
+} from 'axios';
+import { getAuth, onAuthStateChanged, User } from 'firebase/auth';
 import { toast } from 'react-toastify';
-import { ChatListItem } from '../utilities/chat'; 
+import { ChatListItem } from '../utilities/chat';
 
-// Define your API base URL.
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+const DEBUG = import.meta.env.VITE_API_DEBUG === 'true';
+const WAIT_FOR_AUTH_INIT = true;
 
+// Public endpoints (exact match or pattern-coded)
+const PUBLIC_SET = new Set([
+  '/',
+  '/register',
+  '/login',
+  '/verify-wallet',
+  '/platform-stats',
+  '/api/prices',
+]);
+
+function isPublic(url?: string): boolean {
+  if (!url) return false;
+  const p = url.startsWith('/') ? url : `/${url}`;
+  if (PUBLIC_SET.has(p)) return true;
+  if (p.startsWith('/leaderboards/')) return true; // allow leaderboard viewing public
+  return false;
+}
+
+// Wait for auth state (to avoid race on first load)
+let authInit = false;
+let authReadyResolver: (() => void) | null = null;
+const authReadyPromise = new Promise<void>(resolve => { authReadyResolver = resolve; });
+
+function initAuthListener() {
+  if (authInit) return;
+  authInit = true;
+  const auth = getAuth();
+  onAuthStateChanged(auth, () => {
+    if (authReadyResolver) {
+      authReadyResolver();
+      authReadyResolver = null;
+    }
+  });
+}
+initAuthListener();
+
+// Types
+export interface EconomyPlayPayload { gameId: string; category: string; amount: number; }
+export interface EconomyRewardPayload { gameId: string; category: string; amount: number; }
+export interface EconomyBulkEntry { gameId: string; category: string; gathered?: number; distributed?: number; incrementPlay?: boolean; }
+export interface CashierDepositPayload { txSignature?: string; solAmount?: number; solPriceOverride?: number; }
+export interface CashierWithdrawPayload { ggAmount: number; destinationWallet?: string; solPriceOverride?: number; }
+export interface PickerSessionCreate { gameId: string; paymentSignature?: string; currency: string; }
+export interface VerifyWalletPayload { address: string; signedMessage: string; nonce: string; }
+
+// Axios instance
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: { 'Content-Type': 'application/json' }
 });
 
-apiClient.interceptors.request.use(async (config) => {
-  const auth = getAuth();
-  const user = auth.currentUser;
+// Augment Axios config for retry metadata
+declare module 'axios' {
+  export interface InternalAxiosRequestConfig {
+    _retry401?: boolean;
+  }
+}
 
-  const publicPaths = [
-    '/', '/register', '/login', '/platform-stats', 
-    '/leaderboards', 
-    '/games', 
-    '/categories' 
-  ]; 
-
-  const requestPath = config.url?.startsWith('/') ? config.url.substring(1) : config.url;
-  const isPublicPath = publicPaths.some(path => {
-    const publicPathClean = path.startsWith('/') ? path.substring(1) : path;
-    return requestPath?.startsWith(publicPathClean) && 
-           (requestPath.length === publicPathClean.length || requestPath[publicPathClean.length] === '/' || requestPath.includes('?'));
-  });
-
-  if (!isPublicPath && user) {
-    try {
-      const idToken = await user.getIdToken();
-      config.headers.Authorization = `Bearer ${idToken}`;
-    } catch (error) {
-      console.error("Error getting Firebase ID token (in interceptor):", error);
-      toast.error("Authentication failed. Please refresh or log in again.");
+// Request interceptor: attach token if needed
+apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  if (!isPublic(config.url)) {
+    if (WAIT_FOR_AUTH_INIT) {
+      await authReadyPromise;
     }
-  } else if (!isPublicPath && !user) {
-    console.warn(`Attempted to access protected route (${config.url}) without authenticated user. Backend will likely return 401.`);
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (user) {
+      try {
+        const token = await user.getIdToken(); // normal refresh path
+        config.headers.Authorization = `Bearer ${token}`;
+      } catch (e) {
+        console.error('[api] getIdToken failed:', e);
+      }
+    } else if (DEBUG) {
+      console.warn('[api] No currentUser for protected request:', config.url);
+    }
   }
   return config;
-}, (error) => {
-  return Promise.reject(error);
 });
 
+// Response interceptor: one-time 401 retry with forced refresh
 apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    let errorMessage = "An unexpected error occurred.";
-    if (error.response) {
-      errorMessage = error.response.data?.message || `Error ${error.response.status}: ${error.response.statusText}`;
+  res => res,
+  async (error: AxiosError) => {
+    const original = error.config as InternalAxiosRequestConfig | undefined;
+    const status = error.response?.status;
 
-      if (error.response.status === 401) {
-        errorMessage = "Session expired or unauthorized. Please log in again.";
-      } else if (error.response.status === 403) {
-        errorMessage = "You don't have permission to perform this action.";
-      } else if (error.response.status === 404) {
-        errorMessage = `Resource not found at ${error.config.url}. Check backend route or URL.`;
-      } else if (error.response.status >= 500) {
-        errorMessage = "Server error. Please try again later.";
+    if (status === 401 && original && !original._retry401 && !isPublic(original.url)) {
+      try {
+        original._retry401 = true;
+        const auth = getAuth();
+        const user: User | null = auth.currentUser;
+        if (user) {
+          await user.getIdToken(true); // force refresh
+          const refreshed = await user.getIdToken();
+          original.headers = { ...(original.headers || {}), Authorization: `Bearer ${refreshed}` };
+          if (DEBUG) console.log('[api] Retrying request after forced token refresh:', original.url);
+          return apiClient(original);
+        }
+      } catch (refreshErr) {
+        if (DEBUG) console.error('[api] Forced refresh failed:', refreshErr);
       }
-      console.error('API Error (Response):', error.response.data || error.response.statusText, error.response);
-    } else if (error.request) {
-      errorMessage = "No response from server. Check internet connection or server status.";
-      console.error('API Error (Request):', error.request);
-    } else {
-      errorMessage = `Request setup error: ${error.message}`;
-      console.error('API Error (Message):', error.message);
     }
 
-    toast.error(errorMessage);
+    // Generic error messaging
+    let message = 'Unexpected error.';
+    if (status === 401) message = error.response?.data?.message || 'Unauthorized / session expired.';
+    else if (status === 403) message = 'Forbidden.';
+    else if (status === 404) message = `Not found: ${original?.url}`;
+    else if (status && status >= 500) message = 'Server error.';
+    else if (error.code === 'ECONNABORTED') message = 'Request timeout.';
+    else if (!error.response) message = 'Network error.';
+
+    toast.error(message);
+    if (DEBUG) {
+      console.error('[api] Error:', {
+        url: original?.url,
+        status,
+        data: error.response?.data,
+        message: error.message
+      });
+    }
     return Promise.reject(error);
   }
 );
 
+// Config-based generic request (renamed from apiCall to avoid symbol collision)
+export async function apiRequest<T = any>(config: AxiosRequestConfig): Promise<T> {
+  const res = await apiClient.request<T>(config);
+  return res.data;
+}
+
+/* -------------------------------------------------------------------------- */
+/* API Service                                                                */
+/* -------------------------------------------------------------------------- */
 export const apiService = {
-  register: async (userData: any) => {
-    const response = await apiClient.post('/register', userData);
-    return response.data;
-  },
-  login: async (credentials: any) => {
-    const response = await apiClient.post('/login', credentials);
-    return response.data;
-  },
+  // Auth / Wallet
+  register: (data: { email: string; password: string; username: string }) =>
+    apiCall('/register', data),
+  login: (credentials: any) =>
+    apiCall('/login', credentials),
+  verifyWallet: (payload: VerifyWalletPayload) =>
+    apiCall('/verify-wallet', payload),
 
-  getProfile: async () => {
-    const response = await apiClient.get('/profile');
-    return response.data;
-  },
-  updateProfile: async (profileData: any) => {
-    const response = await apiClient.put('/profile', profileData);
-    return response.data;
-  },
+  // Profile / Users
+  getProfile: () => apiCall('/profile'),
+  updateProfile: (data: any) => apiCall('/profile', data, 'PUT'),
+  getUserByUid: (uid: string) => apiCall(`/users/${uid}`, undefined, 'GET'),
+  getUsernames: () => apiCall('/api/usernames'),
 
-  getGames: async () => {
-    const response = await apiClient.get('/games');
-    return response.data;
-  },
-  getCategories: async () => {
-    const response = await apiClient.get('/categories');
-    return response.data;
-  },
+  // Games & Categories
+  getGames: () => apiCall('/games'),
+  getCategories: () => apiCall('/categories'),
 
-  initiateGame: async (gameData: any) => {
-    const response = await apiClient.post('/initiate-game', gameData);
-    return response.data;
-  },
+  // Legacy / placeholder
+  playGame: (payload: { gameId: string; wagerAmount: number; prediction?: any }) =>
+    apiCall('/play', payload),
+  processReward: (payload: { gameId: string; amount?: number; isWinnerClaim?: boolean }) =>
+    apiCall('/process-reward', payload),
+  updateGameState: (payload: { gameId: string; transactionSignature: string; status: string }) =>
+    apiCall('/game-state-update', payload),
 
-  getFreeEntryTokens: async () => { // ADD THIS METHOD
-    const response = await apiClient.get('/user/free-entry-tokens');
-    return response.data;
-  },
+  // Economy
+  economyPlay: (p: EconomyPlayPayload) => apiCall('/economy/play', p),
+  economyReward: (p: EconomyRewardPayload) => apiCall('/economy/reward', p),
+  economyBulk: (entries: EconomyBulkEntry[]) => apiCall('/economy/bulk', { entries }),
+  economySnapshot: (gameId: string, category: string) =>
+    apiCall('/economy/snapshot', { gameId, category }),
 
-  getPlatformStats: async () => {
-    const response = await apiClient.get('/platform-stats');
-    return response.data;
-  },
+  // Direct increments
+  incrementGGCoinsGathered: (gameId: string, category: string, amount: number) =>
+    apiCall('/api/games/increment-ggcoins-gathered', { gameId, category, amount }),
+  incrementGGCoinsDistributed: (gameId: string, category: string, amount: number) =>
+    apiCall('/api/games/increment-ggcoins-distributed', { gameId, category, amount }),
+  incrementGamesPlayed: (gameId: string, category: string) =>
+    apiCall('/api/games/increment-games-played', { gameId, category }),
+  incrementSolGathered: (gameId: string, category: string, amount: number) =>
+    apiCall('/api/games/increment-sol-gathered', { gameId, category, amount }),
 
-  sendFriendRequest: async (targetUsername: string) => {
-    const response = await apiClient.post('/friend-request/send', { targetUsername });
-    return response.data;
-  },
-  acceptFriendRequest: async (senderId: string) => {
-    const response = await apiClient.post('/friend-request/accept', { senderId });
-    return response.data;
-  },
-  rejectFriendRequest: async (senderId: string) => {
-    const response = await apiClient.post('/friend-request/reject', { senderId });
-    return response.data;
-  },
-  getFriends: async () => {
-    const response = await apiClient.get('/friends');
-    return response.data;
-  },
-  getSentFriendRequests: async () => { // ADD THIS METHOD
-    const response = await apiClient.get('/friend-requests/sent');
-    return response.data;
-  },
-  getReceivedFriendRequests: async () => {
-    const response = await apiClient.get('/friend-requests/received');
-    return response.data;
-  },
+  // Cashier
+  cashierDeposit: (p: CashierDepositPayload) => apiCall('/cashier/deposit', p),
+  cashierWithdraw: (p: CashierWithdrawPayload) => apiCall('/cashier/withdraw', p),
 
-  findOrCreateChat: async (targetUid: string): Promise<ChatListItem> => {
-    const response = await apiClient.post<ChatListItem>('/chats/findOrCreate', { targetUid });
-    return response.data;
-  },
-  sendChatMessage: async (chatId: string, text: string) => {
-    const response = await apiClient.post(`/chats/${chatId}/messages`, { text });
-    return response.data;
-  },
-  getUserChats: async (): Promise<ChatListItem[]> => {
-    const response = await apiClient.get<ChatListItem[]>('/chats');
-    return response.data;
-  },
+  // Picker sessions
+  createPickerSession: (p: PickerSessionCreate) =>
+    apiCall('/api/picker/create-session', p),
+  validatePickerSession: (id: string) =>
+    apiCall(`/api/picker/validate-session/${id}`, undefined, 'GET'),
 
-  getLeaderboard: async (gameId: string) => {
-    const response = await apiClient.get(`/leaderboards/${gameId}`); 
-    return response.data;
-  },
+  // Free entry tokens
+  getFreeEntryTokens: () => apiCall('/user/free-entry-tokens'),
+  generateToken: (tokenType: string) => apiCall('/tokens/generate', { tokenType }),
+  consumeToken: (tokenType: string) => apiCall('/tokens/consume', { tokenType }),
 
+  // Platform / Online / Price
+  getPlatformStats: () => apiCall('/platform-stats'),
+  getOnlineUsers: () => apiCall('/onlineUsers'),
+  getSolPrice: () => apiCall('/api/prices'),
+
+  // Leaderboards
+  submitScore: (gameId: string, score: number) =>
+    apiCall('/leaderboards/submit-score', { gameId, score }),
+  getLeaderboard: (gameId: string) =>
+    apiCall(`/leaderboards/${gameId}`, undefined, 'GET'),
+
+  // Friends
+  sendFriendRequest: (targetUsername: string) =>
+    apiCall('/friend-request/send', { targetUsername }),
+  acceptFriendRequest: (senderId: string) =>
+    apiCall('/friend-request/accept', { senderId }),
+  rejectFriendRequest: (senderId: string) =>
+    apiCall('/friend-request/reject', { senderId }),
+  removeFriend: (friendId: string) =>
+    apiCall('/friends/remove', { friendId }),
+  getFriends: () => apiCall('/friends'),
+  getSentFriendRequests: () => apiCall('/friend-requests/sent'),
+  getReceivedFriendRequests: () => apiCall('/friend-requests/received'),
+
+  // Chats
+  getUserChats: (): Promise<ChatListItem[]> => apiCall('/chats'),
+  findOrCreateChat: (targetUid: string) =>
+    apiCall('/chats/findOrCreate', { targetUid }),
+  sendChatMessage: (chatId: string, text: string) =>
+    apiCall(`/chats/${chatId}/messages`, { text }),
+
+  // Placeholder (not implemented on server)
   getGameHistory: async () => {
-    const response = await apiClient.get('/user/game-history');
-    return response.data;
+    console.warn('[api] /user/game-history not implemented.');
+    return { message: 'Not implemented' };
   },
-
-
-  /**
-   * Increment solGathered for a game and category
-   */
-   incrementSolGathered: async (gameId: string, category: string, amount: number) => {
-    const response = await apiClient.post('/api/games/increment-sol-gathered', {
-      gameId,
-      category,
-      amount
-    });
-    return response.data;
-  },
-
-  /**
-   * Increment gamesPlayed for a game and category
-   */
-  incrementGamesPlayed: async (gameId: string, category: string) => {
-    const response = await apiClient.post('/api/games/increment-games-played', {
-      gameId,
-      category
-    });
-    return response.data;
-  },
-  
 };
 
-
+// Generic convenience wrapper (final retained version)
+function apiCall<T = any>(
+  url: string,
+  data?: any,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'POST'
+): Promise<T> {
+  const cfg: AxiosRequestConfig = { url, method };
+  if (method === 'GET') {
+    cfg.params = data;
+  } else if (data !== undefined) {
+    cfg.data = data;
+  }
+  return apiClient.request<T>(cfg).then(r => r.data);
+}
 
 export const api = apiClient;

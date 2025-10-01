@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useProfile } from '../context/ProfileContext';
-import { toast } from 'react-toastify';
+/**
+ * MessagingPanel
+ * Now uses API for chat list & creation; messages stream via subscribeToMessages.
+ */
+import React, { useEffect, useState, useCallback } from 'react';
+import { useProfile } from '../firebase/userProfile';
+import { apiService } from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import ChatWindow from './ChatWindow';
-import { ChatListItem } from '../utilities/chat';
-
-// Firestore imports
-import { db } from '../firebase/firebaseConfig';
-import { collection, query, where, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
+import { subscribeToMessages, ChatListItem, ChatMessage, toDate } from '../utilities/chat';
+import { toast } from 'react-toastify';
 
 interface FriendForChat {
   uid: string;
@@ -21,152 +22,112 @@ interface MessagingPanelProps {
 }
 
 const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => {
-  const { currentUser } = useProfile();
+  const { user } = useProfile();
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [selectedChat, setSelectedChat] = useState<ChatListItem | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [subUnsub, setSubUnsub] = useState<(() => void) | null>(null);
 
-  // Helper to get friend user data by UID
-  const getFriendProfile = async (uid: string): Promise<FriendForChat | null> => {
-    try {
-      const friendDoc = await getDoc(doc(db, 'users', uid));
-      if (friendDoc.exists()) {
-        const fData = friendDoc.data();
-        return {
-          uid,
-          username: fData.username || uid,
-          avatarUrl: fData.avatarUrl || '/avatars/default.png',
-          isOnline: fData.isOnline || false,
-        };
-      }
-    } catch (e) {
-      console.error("MessagingPanel: Error fetching friend profile:", e);
-    }
-    return null;
-  };
-
-  // Fetch all chats for user, resolve friend data for each chat
-  const fetchChats = useCallback(async () => {
-    if (!currentUser) {
+  const loadChats = useCallback(async () => {
+    if (!user) {
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      // Remove orderBy for instant compatibility (or create Firestore index if you want to keep it)
-      const q = query(
-        collection(db, "chats"),
-        where("participants", "array-contains", currentUser.uid)
-      );
-      const snap = await getDocs(q);
-      const chatDocs = snap.docs;
-
-      // For each chat, resolve the other participant's profile
-      const chatsWithFriendData = await Promise.all(chatDocs.map(async docSnap => {
-        const data = docSnap.data();
-        const otherUid = (data.participants as string[]).find(uid => uid !== currentUser.uid);
-        let friend: FriendForChat | null = null;
-        if (otherUid) {
-          friend = await getFriendProfile(otherUid);
-        }
-        return {
-          chatId: docSnap.id,
-          ...data,
-          friend,
-          createdAt: new Date(
-            typeof data.createdAt === 'number'
-              ? (data.createdAt > 1e12 ? data.createdAt : data.createdAt * 1000)
-              : (data.createdAt?.toDate ? data.createdAt.toDate() : Date.now())
-          ),
-          lastMessage: data.lastMessage
-            ? {
-                ...data.lastMessage,
-                sentAt: new Date(
-                  typeof data.lastMessage.sentAt === 'number'
-                    ? (data.lastMessage.sentAt > 1e12 ? data.lastMessage.sentAt : data.lastMessage.sentAt * 1000)
-                    : (data.lastMessage.sentAt?.toDate ? data.lastMessage.sentAt.toDate() : Date.now())
-                ),
-              }
-            : undefined,
-        };
+      const list = await apiService.getUserChats();
+      // Convert date-like fields into Date objects
+      const mapped: ChatListItem[] = (list || []).map((c: any) => ({
+        chatId: c.chatId,
+        participants: c.participants || [],
+        friend: c.friend || null,
+        lastMessage: c.lastMessage
+          ? { ...c.lastMessage, sentAt: toDate(c.lastMessage.sentAt) }
+          : null,
+        createdAt: toDate(c.createdAt),
+        lastMessageAt: c.lastMessageAt ? toDate(c.lastMessageAt) : null,
+        usedFallback: c.usedFallback
       }));
-
-      // Sort chats by createdAt descending (since orderBy was removed)
-      chatsWithFriendData.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-
-      setChats(chatsWithFriendData);
-      console.log("MessagingPanel: Chats fetched from Firestore:", chatsWithFriendData.length);
-    } catch (error) {
-      console.error("MessagingPanel: Failed to fetch chats from Firestore:", error);
+      // Order by lastMessageAt desc fallback createdAt
+      mapped.sort((a,b)=>{
+        const aTime = (a.lastMessageAt || a.createdAt).getTime();
+        const bTime = (b.lastMessageAt || b.createdAt).getTime();
+        return bTime - aTime;
+      });
+      setChats(mapped);
+    } catch (e) {
+      console.error('[MessagingPanel] loadChats error:', e);
+      toast.error('Failed to load chats.');
     } finally {
       setLoading(false);
     }
-  }, [currentUser]);
+  }, [user]);
 
-  // Initial fetch and interval
+  // Load chats on mount / user change
   useEffect(() => {
-    fetchChats();
-    const interval = setInterval(fetchChats, 30 * 1000);
-    return () => clearInterval(interval);
-  }, [fetchChats]);
+    loadChats();
+  }, [loadChats]);
 
-  // Open chat directly if friendToChatWith is set
+  // If friendToChatWith is passed (e.g., from friends panel), find/create chat
   useEffect(() => {
-    const handleInitialChat = async () => {
-      if (friendToChatWith && currentUser) {
-        setLoading(true);
+    const proceed = async () => {
+      if (friendToChatWith && user) {
         try {
-          // Find existing chat with only these two participants
-          let foundChat: ChatListItem | null = null;
-          for (const chat of chats) {
-            if (
-              chat.friend &&
-              chat.friend.uid === friendToChatWith.uid &&
-              Array.isArray(chat.participants) &&
-              chat.participants.length === 2
-            ) {
-              foundChat = chat;
-              break;
-            }
+          // See if chat already exists in state
+            const existing = chats.find(c => c.friend?.uid === friendToChatWith.uid);
+          if (existing) {
+            handleSelectChat(existing);
+            return;
           }
-          if (foundChat) {
-            setSelectedChat(foundChat);
-          } else {
-            // Create new chat document
-            const newChatRef = doc(collection(db, "chats"));
-            const now = Date.now();
-            const newChatData = {
-              participants: [currentUser.uid, friendToChatWith.uid],
-              createdAt: now,
-              lastMessage: null,
+          // Create using backend
+          const newChat = await apiService.findOrCreateChat(friendToChatWith.uid);
+          await loadChats();
+          const found = (await apiService.getUserChats()).find((c: any)=> c.chatId === newChat.chatId);
+          if (found) {
+            const normalized: ChatListItem = {
+              chatId: found.chatId,
+              participants: found.participants || [],
+              friend: found.friend || null,
+              lastMessage: found.lastMessage
+                ? { ...found.lastMessage, sentAt: toDate(found.lastMessage.sentAt) }
+                : null,
+              createdAt: toDate(found.createdAt),
+              lastMessageAt: found.lastMessageAt ? toDate(found.lastMessageAt) : null
             };
-            await setDoc(newChatRef, newChatData);
-            const friend = await getFriendProfile(friendToChatWith.uid);
-            setSelectedChat({
-              chatId: newChatRef.id,
-              ...newChatData,
-              friend,
-              createdAt: new Date(now),
-            } as ChatListItem);
-            // Refetch chats
-            fetchChats();
+            handleSelectChat(normalized);
           }
-        } catch (error) {
-          console.error("MessagingPanel: Error finding/creating chat for prop:", error);
-          toast.error("Failed to open chat with friend.");
-          setSelectedChat(null);
-        } finally {
-          setLoading(false);
+        } catch (e) {
+          console.error('[MessagingPanel] friendToChatWith error:', e);
+          toast.error('Failed to open chat.');
         }
       }
     };
-    handleInitialChat();
-    // eslint-disable-next-line
-  }, [friendToChatWith, currentUser]);
+    proceed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [friendToChatWith, user]);
 
-  const handleSelectChat = (chatItem: ChatListItem) => {
-    setSelectedChat(chatItem);
+  const handleSelectChat = (chat: ChatListItem) => {
+    // Tear down previous subscription
+    subUnsub?.();
+    setSelectedChat(chat);
+    const unsub = subscribeToMessages(
+      chat.chatId,
+      (msgs) => setMessages(msgs),
+      (err) => console.error('[MessagingPanel] subscribe error:', err)
+    );
+    setSubUnsub(()=>unsub);
   };
+
+  useEffect(() => {
+    return () => {
+      subUnsub?.();
+    };
+  }, [subUnsub]);
+
+  if (!user) {
+    return <div className="text-center py-4 text-gray-400 text-sm">Log in to view messages.</div>;
+  }
 
   if (loading) {
     return (
@@ -182,8 +143,13 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
       {selectedChat ? (
         <ChatWindow
           chatId={selectedChat.chatId}
-          friend={selectedChat.friend}
-          onBack={() => setSelectedChat(null)}
+          friend={selectedChat.friend || undefined}
+          messages={messages}
+          onBack={() => {
+            subUnsub?.();
+            setSelectedChat(null);
+            setMessages([]);
+          }}
         />
       ) : (
         <div className="flex-1 overflow-y-auto custom-scrollbar">
@@ -194,7 +160,7 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
             </p>
           ) : (
             <ul className="space-y-3">
-              {chats.map((chat) => (
+              {chats.map(chat => (
                 <li
                   key={chat.chatId}
                   className="flex items-center justify-between bg-slate-700 p-3 rounded-lg shadow-sm cursor-pointer hover:bg-slate-600 transition-colors duration-200"
@@ -202,19 +168,17 @@ const MessagingPanel: React.FC<MessagingPanelProps> = ({ friendToChatWith }) => 
                 >
                   <div className="flex items-center gap-3">
                     <img
-                      src={chat.friend?.avatarUrl || "/avatars/default.png"}
+                      src={chat.friend?.avatarUrl || '/avatars/default.png'}
                       className="w-10 h-10 rounded-full object-cover border-2 border-purple-500"
-                      alt={chat.friend?.username || ""}
-                      onError={(e) => {
-                        e.currentTarget.src = '/avatars/default.png';
-                      }}
+                      alt={chat.friend?.username || ''}
+                      onError={(e)=>{ e.currentTarget.src='/avatars/default.png'; }}
                     />
                     <div>
-                      <span className="font-semibold block">{chat.friend?.username || "Unknown"}</span>
+                      <span className="font-semibold block">{chat.friend?.username || 'Unknown'}</span>
                       {chat.lastMessage ? (
                         <p className="text-sm text-gray-300 truncate w-48">
-                          {chat.lastMessage.from === currentUser?.uid ? 'You: ' : ''}
-                          {chat.lastMessage.text} - {chat.lastMessage.sentAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {chat.lastMessage.from === user.uid ? 'You: ' : ''}
+                          {chat.lastMessage.text} – {chat.lastMessage.sentAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
                         </p>
                       ) : (
                         <p className="text-sm text-gray-400">No messages yet.</p>

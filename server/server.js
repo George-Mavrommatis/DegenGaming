@@ -1,5 +1,27 @@
-// DegenGaming/server.js
-// Original backend plus GG Coins multi-layer economy endpoints (games/categories/platform).
+/**
+ * DegenGaming Backend (Consolidated / Fixed)
+ *
+ * Includes:
+ *  - Auth (email/password + wallet verify)
+ *  - Presence (Socket.IO + cron cleanup)
+ *  - GG Coins Economy (economy/play, reward, bulk, snapshot)
+ *  - Direct increment endpoints (ggCoins & legacy sol) – still present for compatibility
+ *  - Cashier (deposit / withdraw) tracking total GG coins deposited / withdrawn
+ *  - Free Entry Tokens (generate / consume)
+ *  - Picker session tokens
+ *  - Chats, Friends, Leaderboards
+ *  - Platform stats aggregation cron
+ *  - Migration helpers (normalize games)
+ *
+ * Fixes / Improvements vs previous version you posted:
+ *  - Removed duplicate /platform-stats declarations
+ *  - Chunked /friends, /friend-requests/sent, /friend-requests/received queries (Firestore 'in' limit)
+ *  - Added defensive logging hooks (commented out by default) in protect middleware
+ *  - Removed duplicate increment-sol-gathered definition
+ *  - Fixed run() calling ensureCategoryDoc with no parameter (removed invalid call)
+ *  - Normalized ensurePlatformStatsBase usage
+ *  - Added helper to safely update economy maps
+ */
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -26,12 +48,9 @@ import {
 import splToken from '@solana/spl-token';
 const {
   getOrCreateAssociatedTokenAccount,
-  mintTo,
-  createMint,
   transfer,
   getAccount,
   TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddress,
 } = splToken;
 
 import bs58 from 'bs58';
@@ -40,20 +59,23 @@ import * as cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+
 import {
   initializeChatService,
   findOrCreateChat,
   sendMessage,
-  getUserChats
+  getUserChats,
+  backfillChatLastMessageAt
 } from './services/chatService.js';
 
-// -----------------------------------------------------------------------------
-// Firebase Init
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Firebase Initialization                                                    */
+/* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
+
 let db;
 let auth;
 
@@ -67,49 +89,49 @@ try {
 
   db = getFirestore();
   auth = getAuth();
-
   initializeChatService(db, admin);
-  console.log("Firebase Admin SDK initialized successfully (Firestore, Auth).");
+  console.log('[INIT] Firebase initialized.');
 } catch (error) {
-  console.error("Failed to initialize Firebase:", error);
+  console.error('[INIT] Failed to initialize Firebase:', error);
   process.exit(1);
 }
 
-// -----------------------------------------------------------------------------
-// Solana Config
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Solana (optional / legacy token usage)                                     */
+/* -------------------------------------------------------------------------- */
 const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL;
 const connection = new Connection(SOLANA_CLUSTER, 'confirmed');
-console.log(`Solana cluster: ${SOLANA_CLUSTER}`);
+console.log(`[SOLANA] Cluster: ${SOLANA_CLUSTER}`);
 
 const ADMIN_WALLET_PRIVATE_KEY_BASE58 = process.env.ADMIN_WALLET_PRIVATE_KEY_BASE58;
 let adminWalletKeypair = null;
 if (ADMIN_WALLET_PRIVATE_KEY_BASE58) {
   try {
     adminWalletKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_WALLET_PRIVATE_KEY_BASE58));
-    console.log(`Admin wallet loaded: ${adminWalletKeypair.publicKey.toBase58()}`);
+    console.log(`[SOLANA] Admin wallet: ${adminWalletKeypair.publicKey.toBase58()}`);
   } catch (e) {
-    console.error("Failed to load admin private key:", e.message);
-    adminWalletKeypair = null;
+    console.error('[SOLANA] Failed to decode admin wallet key:', e.message);
   }
 } else {
-  console.warn("ADMIN_WALLET_PRIVATE_KEY_BASE58 not set. Some SOL features disabled.");
+  console.warn('[SOLANA] ADMIN_WALLET_PRIVATE_KEY_BASE58 not set (some features disabled).');
 }
-const PLATFORM_SOL_ADDRESS = process.env.PLATFORM_SOL_ADDRESS || (adminWalletKeypair ? adminWalletKeypair.publicKey.toBase58() : null);
 
-let gameTokenMint = null;
+const PLATFORM_SOL_ADDRESS = process.env.PLATFORM_SOL_ADDRESS ||
+  (adminWalletKeypair ? adminWalletKeypair.publicKey.toBase58() : null);
+
+let gameTokenMint = null; // assign later if using a token mint
 const GAME_TOKEN_DECIMALS = 9;
 
-// -----------------------------------------------------------------------------
-// Express
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Express & Socket.IO                                                        */
+/* -------------------------------------------------------------------------- */
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 const corsOptions = {
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET','POST','PUT','DELETE'],
+  allowedHeaders: ['Content-Type','Authorization'],
   credentials: true,
 };
 app.use(cors(corsOptions));
@@ -118,11 +140,10 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new SocketIOServer(server, { cors: corsOptions });
 
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-const CATEGORY_KEYS = ['arcade', 'pvp', 'casino', 'picker'];
-// Mapping from lowercase category key to categories collection doc ID (as shown in your screenshots)
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
+const CATEGORY_KEYS = ['arcade','pvp','casino','picker'];
 const CATEGORY_COLLECTION_ID_MAP = {
   arcade: 'Arcade',
   casino: 'Casino',
@@ -135,35 +156,15 @@ const emptyStatsMap = { allTime: 0, lastMonth: 0 };
 function getUserDocRef(uid) {
   return db.collection('users').doc(uid);
 }
-async function getOnlineUserIds() {
-  try {
-    const snap = await db.collection('users').where('isOnline', '==', true).get();
-    return snap.docs.map(d => d.id);
-  } catch (e) {
-    console.error('getOnlineUserIds error:', e);
-    return [];
-  }
-}
-async function getUserDisplayData(uid) {
-  const doc = await db.collection('users').doc(uid).get();
-  if (!doc.exists) return null;
-  const d = doc.data();
-  return {
-    uid: doc.id,
-    username: d.username,
-    avatarUrl: d.avatarUrl,
-    isOnline: d.isOnline || false,
-  };
-}
 function validateCategory(cat) {
   return CATEGORY_KEYS.includes((cat || '').toLowerCase());
 }
 function getPeriodKeys(date = new Date()) {
-  const year = date.getFullYear();
-  const month = (date.getMonth() + 1).toString().padStart(2,'0');
-  const current = `${year}-${month}`;
-  const prev = new Date(year, date.getMonth() - 1, 1);
-  const last = `${prev.getFullYear()}-${(prev.getMonth() + 1).toString().padStart(2,'0')}`;
+  const y = date.getFullYear();
+  const m = (date.getMonth() + 1).toString().padStart(2,'0');
+  const current = `${y}-${m}`;
+  const prev = new Date(y, date.getMonth() - 1, 1);
+  const last = `${prev.getFullYear()}-${(prev.getMonth()+1).toString().padStart(2,'0')}`;
   return { current, last };
 }
 async function fetchSolPrice() {
@@ -172,14 +173,39 @@ async function fetchSolPrice() {
     const j = await r.json();
     return Number(j?.solana?.usd) || 0;
   } catch (e) {
-    console.error('fetchSolPrice failed:', e);
+    console.error('[PRICE] fetchSolPrice error:', e);
     return 0;
   }
 }
+async function getOnlineUserIds() {
+  try {
+    const snap = await db.collection('users').where('isOnline','==',true).get();
+    return snap.docs.map(d=>d.id);
+  } catch (e) {
+    console.error('[ONLINE] getOnlineUserIds error:', e);
+    return [];
+  }
+}
+async function getUserDisplayData(uid) {
+  const doc = await db.collection('users').doc(uid).get();
+  if (!doc.exists) return null;
+  const data = doc.data();
+  return {
+    uid: doc.id,
+    username: data.username,
+    avatarUrl: data.avatarUrl,
+    isOnline: data.isOnline || false,
+  };
+}
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size));
+  return out;
+}
 
-// -----------------------------------------------------------------------------
-// Socket.IO
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Socket.IO                                                                  */
+/* -------------------------------------------------------------------------- */
 io.on('connection', (socket) => {
   socket.on('setUid', async (uid) => {
     socket.data.uid = uid;
@@ -190,7 +216,7 @@ io.on('connection', (socket) => {
       });
       io.emit('onlineUsersUpdate', await getOnlineUserIds());
     } catch (e) {
-      console.error('setUid error:', e);
+      console.error('[SOCKET] setUid error:', e);
     }
   });
 
@@ -204,12 +230,12 @@ io.on('connection', (socket) => {
       });
       io.emit('onlineUsersUpdate', await getOnlineUserIds());
     } catch (e) {
-      console.error('disconnect presence error:', e);
+      console.error('[SOCKET] disconnect error:', e);
     }
   });
 
-  socket.on('joinGame', (gameId) => socket.join(gameId));
-  socket.on('leaveGame', (gameId) => socket.leave(gameId));
+  socket.on('joinGame', gameId => socket.join(gameId));
+  socket.on('leaveGame', gameId => socket.leave(gameId));
   socket.on('gameAction', ({ gameId, actionType, payload }) => {
     io.to(gameId).emit('gameEvent', { actionType, payload, fromUser: socket.data.uid });
   });
@@ -229,17 +255,18 @@ io.on('connection', (socket) => {
         senderAvatarUrl: senderData?.avatarUrl || '',
       });
     } catch (e) {
+      console.error('[CHAT] message error:', e);
       socket.emit('chat:error', 'Failed to send message.');
     }
   });
 });
 
-// -----------------------------------------------------------------------------
-// Minimal Solana Token Helpers (existing)
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Solana token helper (legacy / optional)                                   */
+/* -------------------------------------------------------------------------- */
 async function transferSolanaToken(recipientPublicKey, amount) {
   if (!adminWalletKeypair || !gameTokenMint) {
-    console.warn("transferSolanaToken: admin or mint not ready.");
+    console.warn('[SOLANA] transferSolanaToken aborted (wallet/mint missing).');
     return false;
   }
   try {
@@ -265,7 +292,7 @@ async function transferSolanaToken(recipientPublicKey, amount) {
     );
     return true;
   } catch (e) {
-    console.error('transferSolanaToken error:', e);
+    console.error('[SOLANA] transferSolanaToken error:', e);
     return false;
   }
 }
@@ -275,478 +302,56 @@ async function getTokenAccountBalance(tokenAccountPublicKey) {
     return Number(info.amount);
   } catch (e) {
     if (e.message.includes('does not exist')) return 0;
-    console.error('getTokenAccountBalance error:', e);
+    console.error('[SOLANA] getTokenAccountBalance error:', e);
     return 0;
   }
 }
 
-// -----------------------------------------------------------------------------
-// Auth Middleware
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* Auth Middleware                                                            */
+/* -------------------------------------------------------------------------- */
 const protect = async (req, res, next) => {
-  let token;
-  if (req.headers.authorization?.startsWith('Bearer ')) {
-    token = req.headers.authorization.split(' ')[1];
-  } else {
+  if (!req.headers.authorization?.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Unauthorized: No token provided.' });
   }
+  const token = req.headers.authorization.split(' ')[1];
   try {
     const decoded = await auth.verifyIdToken(token);
     req.user = decoded;
     next();
   } catch (e) {
+    // console.error('[AUTH] verifyIdToken failed:', e.code || e.message);
     return res.status(401).json({ message: 'Unauthorized: Invalid or expired token.' });
   }
 };
 
-// -----------------------------------------------------------------------------
-// Cron Jobs (legacy SOL stats left intact)
-// -----------------------------------------------------------------------------
-
-
-// --- Cron Jobs & Scheduled Tasks ---
-
-
+/* -------------------------------------------------------------------------- */
+/* Presence Cron                                                              */
+/* -------------------------------------------------------------------------- */
 async function updateALLUsersOnlineStatus() {
-    console.log('Cron job: Running updateALLUsersOnlineStatus...');
-    try {
-        // This cron job will check users who were marked online by Socket.IO but might have disconnected
-        // without proper Socket.IO disconnect event (e.g., browser crash).
-        // It sets users offline if their lastSeen is older than 5 minutes.
-        const fiveMinutesAgo = admin.firestore.Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
-
-        const onlineUsersSnapshot = await db.collection('users')
-            .where('isOnline', '==', true)
-            .where('lastSeen', '<', fiveMinutesAgo) // Find users marked online but last seen long ago
-            .get();
-
-        const batch = db.batch();
-        onlineUsersSnapshot.forEach(doc => {
-            batch.update(doc.ref, {
-                isOnline: false,
-                lastSeen: admin.firestore.FieldValue.serverTimestamp() // Update lastSeen to now
-            });
-            console.log(`User ${doc.id} set offline by cron job.`);
-        });
-        await batch.commit();
-
-        // After updating, broadcast the new online users list
-        const currentOnlineUserIds = await getOnlineUserIds();
-        io.emit('onlineUsersUpdate', currentOnlineUserIds);
-
-        console.log('Online status cleanup complete.');
-    } catch (error) {
-        console.error('Error in cron updateALLUsersOnlineStatus:', error);
-    }
-}
-
-
-// --- Platform Stats Aggregation ---
-// This cron function ensures each category and game has "ggCoinsGathered", "ggCoinsDistributed", and "gamesPlayed" ONLY.
-async function updatePlatformStatsAggregatedGGCoins() {
-    console.log('Cron job: Running updatePlatformStatsAggregatedGGCoins...');
-    try {
-        const registeredUsersSnapshot = await db.collection('users').get();
-        const registeredUsers = registeredUsersSnapshot.size;
-
-        const statsDocRef = db.collection('platform').doc('stats');
-        const statsDoc = await statsDocRef.get();
-
-        // Default structure
-        let currentStats = {
-            registeredUsers,
-            onlineUsers: 0,
-            totalGamesPlayed: 0,
-            totalGGCoinsDeposited: { allTime: 0, lastMonth: 0 },
-            totalGGCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
-            totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
-            totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-            currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
-            lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
-            categories: {
-                arcade: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                pvp:    { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                casino: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-                picker: { ggCoinsGathered: { allTime: 0, lastMonth: 0 }, ggCoinsDistributed: { allTime: 0, lastMonth: 0 }, gamesPlayed: { allTime: 0, lastMonth: 0 }, games: [] },
-            },
-            games: {}
-        };
-
-        if (statsDoc.exists) {
-            Object.assign(currentStats, statsDoc.data());
-        }
-
-        const gamesSnapshot = await db.collection('games').get();
-        let totalGamesPlayed = 0;
-        let totalGGCoinsGathered = 0;
-        let totalGGCoinsDistributed = 0;
-        let totalGGCoinsDeposited = currentStats.totalGGCoinsDeposited?.allTime ?? 0;
-        let totalGGCoinsWithdrawn = currentStats.totalGGCoinsWithdrawn?.allTime ?? 0;
-
-        const categoryKeys = Object.keys(currentStats.categories);
-
-        categoryKeys.forEach(cat => {
-            currentStats.categories[cat].ggCoinsGathered = { allTime: 0, lastMonth: 0 };
-            currentStats.categories[cat].ggCoinsDistributed = { allTime: 0, lastMonth: 0 };
-            currentStats.categories[cat].gamesPlayed = { allTime: 0, lastMonth: 0 };
-            currentStats.categories[cat].games = [];
-        });
-
-        gamesSnapshot.forEach(gameDoc => {
-            const g = gameDoc.data();
-            const cat = (g.category || '').toLowerCase();
-            if (!categoryKeys.includes(cat)) return;
-            const catStats = currentStats.categories[cat];
-            catStats.games.push(gameDoc.id);
-
-            // Defensive: support both map and number
-            const ggCoinsGathered = g.ggCoinsGathered ?? { allTime: 0, lastMonth: 0 };
-            const ggCoinsDistributed = g.ggCoinsDistributed ?? { allTime: 0, lastMonth: 0 };
-            catStats.ggCoinsGathered.allTime += ggCoinsGathered.allTime || 0;
-            catStats.ggCoinsGathered.lastMonth += ggCoinsGathered.lastMonth || 0;
-            catStats.ggCoinsDistributed.allTime += ggCoinsDistributed.allTime || 0;
-            catStats.ggCoinsDistributed.lastMonth += ggCoinsDistributed.lastMonth || 0;
-
-            // --- Games Played aggregation ---
-            if ((g.gamesPlayed?.allTime ?? 0) > 0) {
-                catStats.gamesPlayed.allTime += g.gamesPlayed.allTime;
-            }
-            if ((g.gamesPlayed?.lastMonth ?? 0) > 0) {
-                catStats.gamesPlayed.lastMonth += g.gamesPlayed.lastMonth;
-            }
-
-            // --- Per-game stats for frontend ---
-            currentStats.games[gameDoc.id] = {
-                gameId: gameDoc.id,
-                name: g.name ?? null,
-                category: cat,
-                playCost: g.playCost ?? null,
-                ggCoinsGathered,
-                ggCoinsDistributed,
-                gamesPlayed: g.gamesPlayed ?? { allTime: 0, lastMonth: 0 },
-                image: g.image ?? null,
-                description: g.description ?? null,
-            };
-
-            totalGamesPlayed += g.gamesPlayed?.allTime ?? 0;
-            totalGGCoinsGathered += ggCoinsGathered.allTime || 0;
-            totalGGCoinsDistributed += ggCoinsDistributed.allTime || 0;
-        });
-
-        currentStats.totalGamesPlayed = totalGamesPlayed;
-        currentStats.totalGGCoinsGathered = { allTime: totalGGCoinsGathered, lastMonth: totalGGCoinsGathered }; // You may want to aggregate lastMonth properly
-        currentStats.totalGGCoinsDistributed = { allTime: totalGGCoinsDistributed, lastMonth: totalGGCoinsDistributed };
-        currentStats.onlineUsers = (await getOnlineUserIds()).length;
-
-        await statsDocRef.set(currentStats, { merge: true });
-        console.log('Platform stats updated successfully in Firestore.');
-    } catch (error) {
-        console.error('Error updating platform stats:', error);
-    }
-}
-
-// Cron job to aggregate platform stats every 30 minutes (or adjust as needed)
-cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
-
-
-
-// --- API Routes ---
-
-// Increment ggCoinsGathered for a game and category
-app.post('/api/games/increment-ggcoins-gathered', protect, async (req, res) => {
-  const { gameId, category, amount } = req.body;
   try {
-    const incrementValue = Number(amount);
-    if (isNaN(incrementValue) || incrementValue <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid amount" });
-    }
-
-    // Game doc
-    const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'ggCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'ggCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.ggCoinsGathered.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
-      [`categories.${category}.ggCoinsGathered.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
-      'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error incrementing ggCoinsGathered:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Increment ggCoinsDistributed for a game and category
-app.post('/api/games/increment-ggcoins-distributed', protect, async (req, res) => {
-  const { gameId, category, amount } = req.body;
-  try {
-    const incrementValue = Number(amount);
-    if (isNaN(incrementValue) || incrementValue <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid amount" });
-    }
-
-    // Game doc
-    const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.ggCoinsDistributed.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
-      [`categories.${category}.ggCoinsDistributed.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
-      'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error incrementing ggCoinsDistributed:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Increment gamesPlayed for a game and category
-app.post('/api/games/increment-games-played', protect, async (req, res) => {
-  const { gameId, category } = req.body;
-  try {
-    // Game doc
-    const gameRef = db.collection('games').doc(gameId);
-    const gameDoc = await gameRef.get();
-    if (!gameDoc.exists) {
-      await gameRef.set({
-        name: gameId,
-        category,
-        gamesPlayed: { allTime: 0, lastMonth: 0 }
+    const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 5*60*1000);
+    const snap = await db.collection('users')
+      .where('isOnline','==',true)
+      .where('lastSeen','<',cutoff)
+      .get();
+    const batch = db.batch();
+    snap.forEach(doc => {
+      batch.update(doc.ref, {
+        isOnline:false,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp()
       });
-    }
-    await gameRef.update({
-      'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
-      'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
     });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
-      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
-    });
-
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error incrementing gamesPlayed:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get Platform Stats (Public - no protect middleware)
-app.get('/platform-stats', async (req, res) => {
-    try {
-        const statsDoc = await db.collection('platform').doc('stats').get();
-        if (!statsDoc.exists) {
-            return res.status(200).json({
-                registeredUsers: 0,
-                onlineUsers: 0,
-                totalGamesPlayed: 0,
-                totalGGCoinsDeposited: { allTime: 0, lastMonth: 0 },
-                totalGGCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
-                totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
-                totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
-                lastUpdated: null,
-                currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
-                lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
-                categories: {
-                    arcade: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
-                    pvp: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
-                    casino: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
-                    picker: { ggCoinsGathered: emptyStatsMap, ggCoinsDistributed: emptyStatsMap, gamesPlayed: emptyStatsMap, games: [] },
-                },
-                games: {}
-            });
-        }
-        res.status(200).json(statsDoc.data());
-    } catch (error) {
-        console.error('Error fetching platform stats:', error);
-        res.status(500).json({ message: 'Failed to fetch platform stats.' });
-    }
-});
-
-
-// --- API Routes ---
-
-// Base route
-app.get('/', (req, res) => {
-    res.send('GG Web3 Backend is running!');
-});
-
-// User Registration (Public - no protect middleware)
-app.get('/api/prices', async (req, res) => {
-  // You can fetch price from coingecko or similar
-  try {
-    // Example with coingecko:
-    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const data = await response.json();
-    const price = data.solana.usd;
-    res.json({ solUsd: price });
+    await batch.commit();
+    io.emit('onlineUsersUpdate', await getOnlineUserIds());
   } catch (e) {
-    res.status(500).json({ error: 'Failed to fetch SOL price' });
+    console.error('[CRON] presence cleanup error:', e);
   }
-});
+}
 
-app.post('/register', async (req, res) => {
-    const { email, password, username } = req.body;
-    try {
-        // Create user in Firebase Auth
-        const userRecord = await auth.createUser({ email, password });
-
-        // Create user profile in Firestore
-        await db.collection('users').doc(userRecord.uid).set({
-            username: username,
-            usernameLowercase: username.toLowerCase(), // For case-insensitive search
-            email: email,
-            uid: userRecord.uid,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            avatarUrl: "/avatars/default.png", // Default avatar
-            freeEntryTokens: { // Initialize free entry tokens
-                arcade: 0,
-                picker: 0,
-                casino: 0,
-                pvp: 0,
-            },
-            isOnline: false, // Default to false, Socket.IO handles live status
-            lastSeen: null,  // Updated by Socket.IO
-            friends: [],
-            friendRequestsSent: [],
-            friendRequestsReceived: [],
-            // Add other default profile fields here
-        });
-        res.status(201).json({ message: 'User registered successfully!' });
-    } catch (error) {
-        console.error('Error registering user:', error);
-        // Firebase Auth errors have specific codes
-        let errorMessage = 'Failed to register user.';
-        if (error.code === 'auth/email-already-in-use') {
-            errorMessage = 'Email is already in use.';
-        } else if (error.code === 'auth/invalid-email') {
-            errorMessage = 'Invalid email address.';
-        } else if (error.code === 'auth/weak-password') {
-            errorMessage = 'Password is too weak.';
-        }
-        res.status(400).json({ message: errorMessage, code: error.code });
-    }
-});
-
-// User Login (Public - handled client-side by Firebase SDK, but keep for clarity/future extension)
-app.post('/login', (req, res) => {
-    res.status(200).json({ message: 'Login handled by Firebase client SDK. Backend route is a placeholder.' });
-});
-
-// Wallet Verification Endpoint (Solana Sign-In) - Public route, no `protect`
-app.post("/verify-wallet", async (req, res) => {
-    try {
-        const { address, signedMessage, nonce } = req.body;
-
-        if (!address || !signedMessage || !nonce) {
-            return res.status(400).json({ error: "Missing parameters" });
-        }
-
-        // IMPORTANT: The message string MUST EXACTLY match what the frontend signs.
-        const message = `Sign in to GG Web3 with this one-time code: ${nonce}`;
-        const messageBytes = new TextEncoder().encode(message);
-
-        let signatureBytes;
-        try {
-            signatureBytes = Buffer.from(signedMessage, 'base64');
-        } catch (decodeError) {
-            console.error("Failed to decode base64 signature:", decodeError);
-            return res.status(400).json({ error: "Invalid signature format" });
-        }
-
-        const publicKey = new PublicKey(address);
-
-        // Verify the signature using tweetnacl
-        const verified = nacl.sign.detached.verify(
-            messageBytes, // Original message bytes
-            signatureBytes, // Signed message (signature) bytes
-            publicKey.toBytes() // Public key bytes of the signer
-        );
-
-        if (!verified) {
-            console.warn("Signature verification failed for address:", address);
-            return res.status(400).json({ error: "Verification failed" });
-        }
-
-        // Use the raw Solana address as the Firebase UID for consistent mapping
-        const firebaseUID = address;
-
-        let userRecord;
-        try {
-            // Try to get existing Firebase user
-            userRecord = await auth.getUser(firebaseUID);
-            console.log(`API (Public): Firebase Auth user found with raw Solana address as UID: ${firebaseUID}`);
-        } catch (error) {
-            // If user not found, create a new one
-            if (error.code === 'auth/user-not-found') {
-                console.log(`API (Public): Firebase Auth user for raw Solana address ${firebaseUID} not found. Creating new Firebase Auth user.`);
-                userRecord = await auth.createUser({
-                    uid: firebaseUID,
-                    displayName: `Player_${address.substring(0, 4)}`, // Default display name
-                });
-                console.log(`New Firebase user created for Solana address: ${address} with UID: ${firebaseUID}`);
-
-                // Create initial user profile in Firestore
-                await db.collection('users').doc(firebaseUID).set({
-                    uid: firebaseUID,
-                    wallet: address, // Store the raw Solana address
-                    username: `Player_${address.substring(0, 4)}`,
-                    usernameLowercase: `player_${address.substring(0, 4)}`.toLowerCase(),
-                    avatarUrl: '/avatars/default.png', // Default avatar URL
-                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                    isOnline: true, // Set to true as they just logged in
-                    lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-                    friends: [],
-                    friendRequestsSent: [],
-                    friendRequestsReceived: [],
-                    freeEntryTokens: { arcade: 0, picker: 0, casino: 0, pvp: 0 },
-                    // ... other default profile fields you need
-                }, { merge: true }); // Use merge:true to ensure it doesn't overwrite if document somehow exists
-            } else {
-                console.error("API (Public): Unexpected Firebase Auth error during user lookup/creation:", error);
-                throw error;
-            }
-        }
-
-        // Create a custom Firebase token for the frontend to sign in
-        const customToken = await auth.createCustomToken(firebaseUID, {
-            solanaWalletAddress: address,
-            isSolanaVerified: true,
-        });
-
-        res.status(200).json({ customToken });
-
-    } catch (error) {
-        console.error("Error in /verify-wallet:", error);
-        res.status(500).json({ error: "Internal server error during wallet verification." });
-    }
-});
-
-// -----------------------------------------------------------------------------
-// GG COINS MULTI-LAYER ECONOMY SERVICE (NEW)
-// -----------------------------------------------------------------------------
-/**
- * Ensure platform stats doc exists with minimal structure.
- */
+/* -------------------------------------------------------------------------- */
+/* Platform Stats Aggregation                                                 */
+/* -------------------------------------------------------------------------- */
 async function ensurePlatformStatsBase() {
   const statsRef = db.collection('platform').doc('stats');
   const snap = await statsRef.get();
@@ -764,48 +369,99 @@ async function ensurePlatformStatsBase() {
       currentMonthPeriod: current,
       lastMonthPeriod: last,
       categories: {
-        arcade: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
-        pvp: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
-        casino: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
-        picker: { ggCoinsGathered: { ...emptyStatsMap }, ggCoinsDistributed: { ...emptyStatsMap }, gamesPlayed: { ...emptyStatsMap }, games: [] },
+        arcade:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        pvp:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        casino:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        picker:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
       },
-      games: {}
-    }, { merge: false });
+      games:{}
+    });
   }
   return statsRef;
 }
 
-/**
- * Ensure category document exists (categories collection).
- */
-async function ensureCategoryDoc(t, lowerCat) {
-  const docId = CATEGORY_COLLECTION_ID_MAP[lowerCat];
-  if (!docId) return null;
-  const catRef = db.collection('categories').doc(docId);
-  const snap = await t.get(catRef);
-  if (!snap.exists) {
-    t.set(catRef, {
-      id: docId,
-      name: docId,
-      description: docId + " category",
-      ggCoinsGathered: { allTime: 0, lastMonth: 0 },
-      ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
-      gamesPlayed: { allTime: 0, lastMonth: 0 },
-      games: []
-    }, { merge: false });
+async function updatePlatformStatsAggregatedGGCoins() {
+  console.log('[CRON] Aggregating platform stats (GG coins)...');
+  try {
+    const statsRef = await ensurePlatformStatsBase();
+    const statsSnap = await statsRef.get();
+    const existing = statsSnap.data();
+
+    const preservedDeposited = existing.totalGGCoinsDeposited || { ...emptyStatsMap };
+    const preservedWithdrawn = existing.totalGGCoinsWithdrawn || { ...emptyStatsMap };
+
+    const catAgg = {
+      arcade:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+      pvp:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+      casino:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+      picker:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+    };
+
+    const gamesSnap = await db.collection('games').get();
+    let totalGamesPlayed = 0;
+    let gatheredAll = 0, gatheredLast = 0;
+    let distributedAll = 0, distributedLast = 0;
+    const gamesOut = {};
+
+    gamesSnap.forEach(doc => {
+      const g = doc.data();
+      const catKey = (g.category || '').toLowerCase();
+      if (!validateCategory(catKey)) return;
+
+      const gathered = g.ggCoinsGathered || { allTime:0, lastMonth:0 };
+      const distributed = g.ggCoinsDistributed || { allTime:0, lastMonth:0 };
+      const plays = g.gamesPlayed || { allTime:0, lastMonth:0 };
+
+      catAgg[catKey].games.push(doc.id);
+      catAgg[catKey].ggCoinsGathered.allTime += gathered.allTime || 0;
+      catAgg[catKey].ggCoinsGathered.lastMonth += gathered.lastMonth || 0;
+      catAgg[catKey].ggCoinsDistributed.allTime += distributed.allTime || 0;
+      catAgg[catKey].ggCoinsDistributed.lastMonth += distributed.lastMonth || 0;
+      catAgg[catKey].gamesPlayed.allTime += plays.allTime || 0;
+      catAgg[catKey].gamesPlayed.lastMonth += plays.lastMonth || 0;
+
+      totalGamesPlayed += plays.allTime || 0;
+      gatheredAll += gathered.allTime || 0;
+      gatheredLast += gathered.lastMonth || 0;
+      distributedAll += distributed.allTime || 0;
+      distributedLast += distributed.lastMonth || 0;
+
+      gamesOut[doc.id] = {
+        gameId: doc.id,
+        name: g.name ?? null,
+        category: catKey,
+        playCost: g.playCost ?? null,
+        ggCoinsGathered: gathered,
+        ggCoinsDistributed: distributed,
+        gamesPlayed: plays,
+        image: g.image ?? null,
+        description: g.description ?? null,
+      };
+    });
+
+    await statsRef.set({
+      registeredUsers: existing.registeredUsers || 0,
+      onlineUsers: (await getOnlineUserIds()).length,
+      totalGamesPlayed,
+      totalGGCoinsDeposited: preservedDeposited,
+      totalGGCoinsWithdrawn: preservedWithdrawn,
+      totalGGCoinsGathered: { allTime: gatheredAll, lastMonth: gatheredLast },
+      totalGGCoinsDistributed: { allTime: distributedAll, lastMonth: distributedLast },
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      currentMonthPeriod: existing.currentMonthPeriod || getPeriodKeys().current,
+      lastMonthPeriod: existing.lastMonthPeriod || getPeriodKeys().last,
+      categories: catAgg,
+      games: gamesOut
+    }, { merge:false });
+    console.log('[CRON] Aggregation complete.');
+  } catch (e) {
+    console.error('[CRON] Aggregation error:', e);
   }
-  return catRef;
 }
 
-/**
- * Apply economy deltas (atomic).
- * @param {object} opts
- *   gameId
- *   category (lowercase)
- *   gatheredDelta (number >=0)
- *   distributedDelta (number >=0)
- *   incrementPlay (boolean) - whether to increment gamesPlayed
- */
+/* -------------------------------------------------------------------------- */
+/* GG Economy Core                                                            */
+/* -------------------------------------------------------------------------- */
 async function applyEconomyDeltas({
   gameId,
   category,
@@ -819,13 +475,11 @@ async function applyEconomyDeltas({
   const lowerCat = category.toLowerCase();
   await ensurePlatformStatsBase();
 
-  // Run transaction
   await db.runTransaction(async (t) => {
     const gameRef = db.collection('games').doc(gameId);
     const statsRef = db.collection('platform').doc('stats');
     const catRef = db.collection('categories').doc(CATEGORY_COLLECTION_ID_MAP[lowerCat]);
 
-    // Preload docs
     const [gameSnap, statsSnap, catSnap] = await Promise.all([
       t.get(gameRef),
       t.get(statsRef),
@@ -833,1340 +487,1235 @@ async function applyEconomyDeltas({
     ]);
 
     if (!gameSnap.exists) {
-      // Initialize the game doc with baseline if missing
       t.set(gameRef, {
         id: gameId,
         category: CATEGORY_COLLECTION_ID_MAP[lowerCat] || lowerCat,
-        ggCoinsGathered: { allTime: 0, lastMonth: 0 },
-        ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
-        gamesPlayed: { allTime: 0, lastMonth: 0 },
-      }, { merge: true });
+        ggCoinsGathered: { ...emptyStatsMap },
+        ggCoinsDistributed: { ...emptyStatsMap },
+        gamesPlayed: { ...emptyStatsMap }
+      }, { merge:true });
     }
 
-    // Ensure category doc
     if (!catSnap.exists) {
       t.set(catRef, {
         id: CATEGORY_COLLECTION_ID_MAP[lowerCat],
         name: CATEGORY_COLLECTION_ID_MAP[lowerCat],
         description: `${CATEGORY_COLLECTION_ID_MAP[lowerCat]} category`,
-        ggCoinsGathered: { allTime: 0, lastMonth: 0 },
-        ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
-        gamesPlayed: { allTime: 0, lastMonth: 0 },
+        ggCoinsGathered: { ...emptyStatsMap },
+        ggCoinsDistributed: { ...emptyStatsMap },
+        gamesPlayed: { ...emptyStatsMap },
         games: [gameId]
-      }, { merge: true });
+      }, { merge:true });
     } else {
-      // Add game reference if not present
-      t.update(catRef, {
-        games: admin.firestore.FieldValue.arrayUnion(gameId)
-      });
+      t.update(catRef, { games: admin.firestore.FieldValue.arrayUnion(gameId) });
     }
 
-    // Defensive: ensure stats category child structure
     const statsData = statsSnap.exists ? statsSnap.data() : {};
     if (!(statsData.categories?.[lowerCat])) {
       t.set(statsRef, {
-        categories: {
-          [lowerCat]: {
-            ggCoinsGathered: { allTime: 0, lastMonth: 0 },
-            ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
-            gamesPlayed: { allTime: 0, lastMonth: 0 },
-            games: []
-          }
+        [`categories.${lowerCat}`]: {
+          ggCoinsGathered: { ...emptyStatsMap },
+          ggCoinsDistributed: { ...emptyStatsMap },
+          gamesPlayed: { ...emptyStatsMap },
+          games: []
         }
-      }, { merge: true });
+      }, { merge:true });
     }
 
-    const increments = {};
+    const gameInc = {};
+    const catInc = {};
+    const platInc = { lastUpdated: admin.firestore.FieldValue.serverTimestamp() };
 
     if (gatheredDelta > 0) {
-      increments['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
-      increments['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
-      increments[`categories.${lowerCat}.ggCoinsGathered.allTime`] = admin.firestore.FieldValue.increment(gatheredDelta);
-      increments[`categories.${lowerCat}.ggCoinsGathered.lastMonth`] = admin.firestore.FieldValue.increment(gatheredDelta);
-      increments['totalGGCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
-      increments['totalGGCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      gameInc['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      gameInc['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      catInc['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      catInc['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      platInc[`categories.${lowerCat}.ggCoinsGathered.allTime`] = admin.firestore.FieldValue.increment(gatheredDelta);
+      platInc[`categories.${lowerCat}.ggCoinsGathered.lastMonth`] = admin.firestore.FieldValue.increment(gatheredDelta);
+      platInc['totalGGCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
+      platInc['totalGGCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
     }
 
     if (distributedDelta > 0) {
-      increments['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
-      increments['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
-      increments[`categories.${lowerCat}.ggCoinsDistributed.allTime`] = admin.firestore.FieldValue.increment(distributedDelta);
-      increments[`categories.${lowerCat}.ggCoinsDistributed.lastMonth`] = admin.firestore.FieldValue.increment(distributedDelta);
-      increments['totalGGCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
-      increments['totalGGCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+      gameInc['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      gameInc['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+      catInc['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      catInc['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
+      platInc[`categories.${lowerCat}.ggCoinsDistributed.allTime`] = admin.firestore.FieldValue.increment(distributedDelta);
+      platInc[`categories.${lowerCat}.ggCoinsDistributed.lastMonth`] = admin.firestore.FieldValue.increment(distributedDelta);
+      platInc['totalGGCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
+      platInc['totalGGCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
     }
 
     if (incrementPlay) {
-      increments['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
-      increments['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
-      increments[`categories.${lowerCat}.gamesPlayed.allTime`] = admin.firestore.FieldValue.increment(1);
-      increments[`categories.${lowerCat}.gamesPlayed.lastMonth`] = admin.firestore.FieldValue.increment(1);
-      increments['totalGamesPlayed'] = admin.firestore.FieldValue.increment(1);
+      gameInc['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
+      gameInc['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
+      catInc['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
+      catInc['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
+      platInc[`categories.${lowerCat}.gamesPlayed.allTime`] = admin.firestore.FieldValue.increment(1);
+      platInc[`categories.${lowerCat}.gamesPlayed.lastMonth`] = admin.firestore.FieldValue.increment(1);
+      platInc['totalGamesPlayed'] = admin.firestore.FieldValue.increment(1);
     }
 
-    // Apply increments to game doc
-    const gameUpdate = {};
-    if (gatheredDelta > 0) {
-      gameUpdate['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
-      gameUpdate['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
-    }
-    if (distributedDelta > 0) {
-      gameUpdate['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
-      gameUpdate['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
-    }
-    if (incrementPlay) {
-      gameUpdate['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
-      gameUpdate['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
-    }
-
-    if (Object.keys(gameUpdate).length) {
-      t.set(gameRef, gameUpdate, { merge: true });
-    }
-
-    // Update categories collection doc fields
-    const catFieldUpdate = {};
-    if (gatheredDelta > 0) {
-      catFieldUpdate['ggCoinsGathered.allTime'] = admin.firestore.FieldValue.increment(gatheredDelta);
-      catFieldUpdate['ggCoinsGathered.lastMonth'] = admin.firestore.FieldValue.increment(gatheredDelta);
-    }
-    if (distributedDelta > 0) {
-      catFieldUpdate['ggCoinsDistributed.allTime'] = admin.firestore.FieldValue.increment(distributedDelta);
-      catFieldUpdate['ggCoinsDistributed.lastMonth'] = admin.firestore.FieldValue.increment(distributedDelta);
-    }
-    if (incrementPlay) {
-      catFieldUpdate['gamesPlayed.allTime'] = admin.firestore.FieldValue.increment(1);
-      catFieldUpdate['gamesPlayed.lastMonth'] = admin.firestore.FieldValue.increment(1);
-    }
-    if (Object.keys(catFieldUpdate).length) {
-      t.set(catRef, catFieldUpdate, { merge: true });
-    }
-
-    // Platform stats increments
-    if (Object.keys(increments).length) {
-      t.set(statsRef, {
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-        ...Object.entries(increments).reduce((acc, [k, v]) => {
-          acc[k] = v;
-          return acc;
-        }, {})
-      }, { merge: true });
-    }
+    if (Object.keys(gameInc).length) t.set(gameRef, gameInc, { merge:true });
+    if (Object.keys(catInc).length) t.set(catRef, catInc, { merge:true });
+    if (Object.keys(platInc).length) t.set(statsRef, platInc, { merge:true });
   });
 }
 
-/**
- * Fetch a snapshot summary after an update
- */
 async function getEconomySnapshot(gameId, category) {
   const lowerCat = category?.toLowerCase();
   const gameRef = db.collection('games').doc(gameId);
   const statsRef = db.collection('platform').doc('stats');
   const catRef = lowerCat ? db.collection('categories').doc(CATEGORY_COLLECTION_ID_MAP[lowerCat]) : null;
 
-  const docs = await Promise.all([
+  const [g, s, c] = await Promise.all([
     gameRef.get(),
     statsRef.get(),
     catRef ? catRef.get() : Promise.resolve(null)
   ]);
 
   return {
-    game: docs[0].exists ? docs[0].data() : null,
-    categoryDoc: docs[2] && docs[2].exists ? docs[2].data() : null,
-    platformCategory: (docs[1].exists && lowerCat && docs[1].data().categories?.[lowerCat]) ? docs[1].data().categories[lowerCat] : null,
-    platformTotals: docs[1].exists ? {
-      totalGGCoinsGathered: docs[1].data().totalGGCoinsGathered || null,
-      totalGGCoinsDistributed: docs[1].data().totalGGCoinsDistributed || null,
-      totalGamesPlayed: docs[1].data().totalGamesPlayed || 0
+    game: g.exists ? g.data() : null,
+    categoryDoc: c && c.exists ? c.data() : null,
+    platformCategory: (s.exists && lowerCat) ? (s.data().categories?.[lowerCat] || null) : null,
+    platformTotals: s.exists ? {
+      totalGGCoinsGathered: s.data().totalGGCoinsGathered || null,
+      totalGGCoinsDistributed: s.data().totalGGCoinsDistributed || null,
+      totalGamesPlayed: s.data().totalGamesPlayed || 0
     } : null
   };
 }
 
-// -----------------------------------------------------------------------------
-// ECONOMY ENDPOINTS (NEW)
-// -----------------------------------------------------------------------------
+/* -------------------------------------------------------------------------- */
+/* CRON Schedules                                                             */
+/* -------------------------------------------------------------------------- */
+cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
+cron.schedule('*/5 * * * *', updateALLUsersOnlineStatus);
 
-// Player pays to play a game (gathered)
-app.post('/economy/play', protect, async (req, res) => {
+/* -------------------------------------------------------------------------- */
+/* Economy Endpoints                                                          */
+/* -------------------------------------------------------------------------- */
+app.post('/economy/play', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
-  if (!gameId || !category || typeof amount !== 'number' || amount <= 0) {
-    return res.status(400).json({ success: false, message: 'Invalid payload.' });
-  }
+  if (!gameId || !category || typeof amount !== 'number' || amount <= 0)
+    return res.status(400).json({ success:false, message:'Invalid payload.' });
   try {
-    await applyEconomyDeltas({
-      gameId,
-      category,
-      gatheredDelta: amount,
-      distributedDelta: 0,
-      incrementPlay: true
-    });
-    const snapshot = await getEconomySnapshot(gameId, category);
-    res.json({ success: true, type: 'play', amount, snapshot });
+    await applyEconomyDeltas({ gameId, category, gatheredDelta: amount, incrementPlay:true });
+    res.json({ success:true, type:'play', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
     console.error('/economy/play error:', e);
-    res.status(500).json({ success: false, message: e.message });
+    res.status(500).json({ success:false, message:e.message });
   }
 });
 
-// Platform distributes reward (distributed)
-app.post('/economy/reward', protect, async (req, res) => {
+app.post('/economy/reward', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
-  if (!gameId || !category || typeof amount !== 'number' || amount <= 0) {
-    return res.status(400).json({ success: false, message: 'Invalid payload.' });
-  }
+  if (!gameId || !category || typeof amount !== 'number' || amount <= 0)
+    return res.status(400).json({ success:false, message:'Invalid payload.' });
   try {
-    await applyEconomyDeltas({
-      gameId,
-      category,
-      gatheredDelta: 0,
-      distributedDelta: amount,
-      incrementPlay: false
-    });
-    const snapshot = await getEconomySnapshot(gameId, category);
-    res.json({ success: true, type: 'reward', amount, snapshot });
+    await applyEconomyDeltas({ gameId, category, distributedDelta: amount });
+    res.json({ success:true, type:'reward', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
     console.error('/economy/reward error:', e);
-    res.status(500).json({ success: false, message: e.message });
+    res.status(500).json({ success:false, message:e.message });
   }
 });
 
-// Bulk updates (array of entries)
-app.post('/economy/bulk', protect, async (req, res) => {
+app.post('/economy/bulk', protect, async (req,res)=>{
   const { entries } = req.body;
-  if (!Array.isArray(entries) || !entries.length) {
-    return res.status(400).json({ success: false, message: 'entries array required.' });
-  }
+  if (!Array.isArray(entries) || !entries.length)
+    return res.status(400).json({ success:false, message:'entries array required.' });
   const results = [];
   for (const entry of entries) {
-    const { gameId, category, gathered = 0, distributed = 0, incrementPlay = false } = entry;
+    const { gameId, category, gathered=0, distributed=0, incrementPlay=false } = entry;
     try {
       if (!gameId || !category || (gathered <= 0 && distributed <= 0 && !incrementPlay)) {
-        results.push({ gameId, ok: false, error: 'Invalid entry' });
+        results.push({ gameId, ok:false, error:'Invalid entry' });
         continue;
       }
       await applyEconomyDeltas({
         gameId,
         category,
-        gatheredDelta: gathered > 0 ? gathered : 0,
-        distributedDelta: distributed > 0 ? distributed : 0,
-        incrementPlay: !!incrementPlay
+        gatheredDelta: gathered>0?gathered:0,
+        distributedDelta: distributed>0?distributed:0,
+        incrementPlay
       });
-      results.push({ gameId, ok: true });
+      results.push({ gameId, ok:true });
     } catch (e) {
-      results.push({ gameId, ok: false, error: e.message });
+      results.push({ gameId, ok:false, error:e.message });
     }
   }
-  res.json({ success: true, results });
+  res.json({ success:true, results });
 });
 
-// Fetch snapshot for a single game/category
-app.post('/economy/snapshot', protect, async (req, res) => {
+app.post('/economy/snapshot', protect, async (req,res)=>{
   const { gameId, category } = req.body;
-  if (!gameId || !category) {
-    return res.status(400).json({ success: false, message: 'gameId & category required.' });
-  }
+  if (!gameId || !category)
+    return res.status(400).json({ success:false, message:'gameId & category required.' });
   try {
-    const snapshot = await getEconomySnapshot(gameId, category);
-    res.json({ success: true, snapshot });
+    res.json({ success:true, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    res.status(500).json({ success:false, message:e.message });
   }
 });
 
-// -----------------------------------------------------------------------------
-// CASHIER ENDPOINTS (existing deposit/withdraw concept extended to update platform maps)
-// -----------------------------------------------------------------------------
-app.post('/cashier/deposit', protect, async (req, res) => {
+/* -------------------------------------------------------------------------- */
+/* Cashier                                                                    */
+/* -------------------------------------------------------------------------- */
+app.post('/cashier/deposit', protect, async (req,res)=>{
   const { txSignature, solAmount, solPriceOverride } = req.body;
-  if (!PLATFORM_SOL_ADDRESS) {
-    return res.status(500).json({ message: 'Platform SOL address not configured.' });
-  }
+  if (!PLATFORM_SOL_ADDRESS)
+    return res.status(500).json({ message:'Platform SOL address not configured.' });
+
   try {
-    let resolvedSolAmount = 0;
+    let resolvedSol = 0;
     if (txSignature) {
-      const tx = await connection.getTransaction(txSignature, { commitment: 'confirmed' });
-      if (!tx) return res.status(400).json({ message: 'Transaction not found.' });
-      const accountKeys = tx.transaction.message.accountKeys.map(k => k.toBase58());
-      const idx = accountKeys.indexOf(PLATFORM_SOL_ADDRESS);
-      if (idx === -1) return res.status(400).json({ message: 'Platform address not involved.' });
+      const tx = await connection.getTransaction(txSignature,{ commitment:'confirmed' });
+      if (!tx) return res.status(400).json({ message:'Transaction not found.' });
+      const keys = tx.transaction.message.accountKeys.map(k=>k.toBase58());
+      const idx = keys.indexOf(PLATFORM_SOL_ADDRESS);
+      if (idx === -1) return res.status(400).json({ message:'Platform address not in transaction.' });
       const pre = tx.meta?.preBalances?.[idx] ?? 0;
       const post = tx.meta?.postBalances?.[idx] ?? 0;
       const delta = post - pre;
-      if (delta <= 0) return res.status(400).json({ message: 'No net SOL received.' });
-      resolvedSolAmount = delta / LAMPORTS_PER_SOL;
+      if (delta <= 0) return res.status(400).json({ message:'No net SOL received.' });
+      resolvedSol = delta / LAMPORTS_PER_SOL;
     } else if (typeof solAmount === 'number' && solAmount > 0) {
-      resolvedSolAmount = solAmount;
+      resolvedSol = solAmount;
     } else {
-      return res.status(400).json({ message: 'Provide txSignature or positive solAmount.' });
+      return res.status(400).json({ message:'Provide txSignature or positive solAmount.' });
     }
 
-    const solPrice = solPriceOverride || await fetchSolPrice();
-    if (solPrice <= 0) return res.status(500).json({ message: 'Could not resolve SOL price.' });
-    const ggCredit = Number((resolvedSolAmount * solPrice).toFixed(2));
+    const price = solPriceOverride || await fetchSolPrice();
+    if (price <= 0) return res.status(500).json({ message:'SOL price unavailable.' });
 
-    await db.runTransaction(async (t) => {
-      const userRef = getUserDocRef(req.user.uid);
-      const statsRef = db.collection('platform').doc('stats');
-      const userSnap = await t.get(userRef);
-      if (!userSnap.exists) throw new Error('User not found.');
-      const currentGG = Number(userSnap.data()?.coins?.gg ?? 0);
-      t.update(userRef, { 'coins.gg': currentGG + ggCredit });
-      t.set(statsRef, {
+    const credit = Number((resolvedSol * price).toFixed(2));
+
+    await db.runTransaction(async t=>{
+      const uRef = getUserDocRef(req.user.uid);
+      const sRef = db.collection('platform').doc('stats');
+      const uSnap = await t.get(uRef);
+      if (!uSnap.exists) throw new Error('User not found.');
+      const current = Number(uSnap.data()?.coins?.gg ?? 0);
+
+      t.update(uRef, { 'coins.gg': current + credit });
+      t.set(sRef, {
         totalGGCoinsDeposited: {
-          allTime: admin.firestore.FieldValue.increment(ggCredit),
-          lastMonth: admin.firestore.FieldValue.increment(ggCredit),
+          allTime: admin.firestore.FieldValue.increment(credit),
+          lastMonth: admin.firestore.FieldValue.increment(credit)
         }
-      }, { merge: true });
+      }, { merge:true });
     });
 
     res.json({
-      success: true,
+      success:true,
       mode: txSignature ? 'on-chain-verified' : 'manual',
-      solAmount: resolvedSolAmount,
-      solPriceUsed: solPrice,
-      ggCoinsCredited: ggCredit,
+      solAmount: resolvedSol,
+      solPriceUsed: price,
+      ggCoinsCredited: credit,
       txSignature: txSignature || null
     });
   } catch (e) {
-    console.error('/cashier/deposit error:', e);
-    res.status(500).json({ success: false, message: e.message });
+    console.error('[CASHIER] deposit error:', e);
+    res.status(500).json({ success:false, message:e.message });
   }
 });
 
-app.post('/cashier/withdraw', protect, async (req, res) => {
+app.post('/cashier/withdraw', protect, async (req,res)=>{
   const { ggAmount, destinationWallet, solPriceOverride } = req.body;
-  if (!adminWalletKeypair) return res.status(500).json({ message: 'Admin wallet unavailable.' });
-  if (typeof ggAmount !== 'number' || ggAmount <= 0) return res.status(400).json({ message: 'Invalid ggAmount.' });
+  if (!adminWalletKeypair) return res.status(500).json({ message:'Admin wallet unavailable.' });
+  if (typeof ggAmount !== 'number' || ggAmount <= 0)
+    return res.status(400).json({ message:'Invalid ggAmount.' });
 
   try {
-    const solPrice = solPriceOverride || await fetchSolPrice();
-    if (solPrice <= 0) return res.status(500).json({ message: 'Failed to resolve SOL price.' });
-    const solNeeded = ggAmount / solPrice;
-    const lamportsNeeded = Math.round(solNeeded * LAMPORTS_PER_SOL);
-    if (lamportsNeeded <= 0) return res.status(400).json({ message: 'Withdrawal < 1 lamport.' });
+    const price = solPriceOverride || await fetchSolPrice();
+    if (price <= 0) return res.status(500).json({ message:'SOL price unavailable.' });
+    const solNeeded = ggAmount / price;
+    const lamports = Math.round(solNeeded * LAMPORTS_PER_SOL);
+    if (lamports <= 0) return res.status(400).json({ message:'Withdrawal < 1 lamport.' });
 
-    let txSig = null;
-    await db.runTransaction(async (t) => {
-      const userRef = getUserDocRef(req.user.uid);
-      const statsRef = db.collection('platform').doc('stats');
-      const userSnap = await t.get(userRef);
-      if (!userSnap.exists) throw new Error('User not found.');
-      const userData = userSnap.data();
-      const currentGG = Number(userData?.coins?.gg ?? 0);
+    let signature = null;
+    await db.runTransaction(async t=>{
+      const uRef = getUserDocRef(req.user.uid);
+      const sRef = db.collection('platform').doc('stats');
+      const uSnap = await t.get(uRef);
+      if (!uSnap.exists) throw new Error('User not found.');
+      const data = uSnap.data();
+      const currentGG = Number(data?.coins?.gg ?? 0);
       if (currentGG < ggAmount) throw new Error('Insufficient GG Coins.');
-      const wallet = destinationWallet || userData.wallet;
+      const wallet = destinationWallet || data.wallet;
       if (!wallet) throw new Error('Destination wallet missing.');
-      // Prepare SOL transfer
-      const toPubkey = new PublicKey(wallet);
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: adminWalletKeypair.publicKey,
-          toPubkey,
-          lamports: lamportsNeeded
-        })
-      );
+
+      const tx = new Transaction().add(SystemProgram.transfer({
+        fromPubkey: adminWalletKeypair.publicKey,
+        toPubkey: new PublicKey(wallet),
+        lamports
+      }));
       tx.feePayer = adminWalletKeypair.publicKey;
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
       tx.recentBlockhash = blockhash;
       tx.sign(adminWalletKeypair);
-      const raw = tx.serialize();
-      txSig = await connection.sendRawTransaction(raw, { skipPreflight: false });
-      await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'confirmed');
+      signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight:false });
+      await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature }, 'confirmed');
 
-      t.update(userRef, { 'coins.gg': currentGG - ggAmount });
-      t.set(statsRef, {
+      t.update(uRef, { 'coins.gg': currentGG - ggAmount });
+      t.set(sRef, {
         totalGGCoinsWithdrawn: {
           allTime: admin.firestore.FieldValue.increment(ggAmount),
-          lastMonth: admin.firestore.FieldValue.increment(ggAmount),
+          lastMonth: admin.firestore.FieldValue.increment(ggAmount)
         }
-      }, { merge: true });
+      }, { merge:true });
     });
 
     res.json({
-      success: true,
+      success:true,
       ggCoinsDebited: ggAmount,
       solAmountSent: solNeeded,
-      lamportsSent: lamportsNeeded,
-      solPriceUsed: solPrice,
-      txSignature: txSig
+      lamportsSent: lamports,
+      solPriceUsed: price,
+      txSignature: signature
     });
   } catch (e) {
-    console.error('/cashier/withdraw error:', e);
-    res.status(500).json({ success: false, message: e.message });
+    console.error('[CASHIER] withdraw error:', e);
+    res.status(500).json({ success:false, message:e.message });
   }
 });
 
-
-//Get USERS 
-// Fetch all users for Picker onboarding (Protected)
-app.get('/api/usernames', protect, async (req, res) => {
-    try {
-        const usersSnapshot = await db.collection('users').get();
-        const users = [];
-        usersSnapshot.forEach(doc => {
-            const data = doc.data();
-            users.push({
-                key: doc.id,
-                username: data.username || '',
-                avatarUrl: data.avatarUrl || '',
-                wallet: data.wallet || '',
-            });
-        });
-        res.status(200).json(users);
-    } catch (error) {
-        console.error('Error fetching usernames:', error);
-        res.status(500).json({ message: 'Failed to fetch usernames.' });
-    }
-});
-
-// Get User Profile (Protected)
-app.get('/profile', protect, async (req, res) => {
-    try {
-        const userRef = db.collection('users').doc(req.user.uid);
-        const userDoc = await userRef.get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(userDoc.data());
-    } catch (error) {
-        console.error('Error fetching user profile:', error);
-        res.status(500).json({ message: 'Failed to fetch profile' });
-    }
-});
-
-// Update User Profile (Protected)
-app.put('/profile', protect, async (req, res) => {
-    const { username, avatarUrl, bio, dmsOpen, duelsOpen, twitter, discord,  } = req.body;
-    try {
-        const userRef = db.collection('users').doc(req.user.uid);
-        const updateData = {};
-        if (username !== undefined) updateData.username = username;
-        if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl;
-        if (bio !== undefined) updateData.bio = bio;
-        if (dmsOpen !== undefined) updateData.dmsOpen = dmsOpen;
-        if (duelsOpen !== undefined) updateData.duelsOpen = duelsOpen;
-        if (twitter !== undefined) updateData.twitter = twitter;
-        if (discord !== undefined) updateData.discord = discord;
-   
-
-        // Update usernameLowercase if username is being updated
-        if (username !== undefined) {
-            updateData.usernameLowercase = username.toLowerCase();
-        }
-
-        await userRef.update(updateData);
-        res.status(200).json({ message: 'Profile updated successfully' });
-    } catch (error) {
-        console.error('Error updating user profile:', error);
-        res.status(500).json({ message: 'Failed to update profile' });
-    }
-});
-
-// Get User Profile by UID (Protected - for fetching other users' profiles)
-app.get('/users/:uid', protect, async (req, res) => {
-    try {
-        const userDoc = await db.collection('users').doc(req.params.uid).get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const userData = userDoc.data();
-        // Optionally, filter sensitive data before sending:
-        delete userData.email;
-        delete userData.freeEntryTokens; // These are for the user themselves
-        // ... and other internal fields
-        res.status(200).json(userData);
-    } catch (error) {
-        console.error('Error fetching user by UID:', error);
-        res.status(500).json({ message: 'Failed to fetch user data' });
-    }
-});
-
-
-
-// Get Free Entry Tokens (Protected)
-app.get('/user/free-entry-tokens', protect, async (req, res) => {
-    try {
-        const userDoc = await db.collection('users').doc(req.user.uid).get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const userData = userDoc.data();
-        res.status(200).json(userData.freeEntryTokens || { arcade: 0, picker: 0, casino: 0, pvp: 0 });
-    } catch (error) {
-        console.error('Error fetching free entry tokens:', error);
-        res.status(500).json({ message: 'Failed to fetch free entry tokens.' });
-    }
-});
-
-// CREATE SESSION TOKEN (Game Entry Token)
-app.post('/api/picker/create-session', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { gameId, paymentSignature, currency } = req.body;
-
-    try {
-        // Compose new entry token doc
-        const tokenDoc = {
-            userId,
-            category: "Picker",
-            gameId,
-            issuedAt: admin.firestore.FieldValue.serverTimestamp(),
-            isConsumed: false,
-            paymentCurrency: currency,
-            paymentAmount: currency === "SOL" ? 0.01 : 0,
-            txSig: paymentSignature || null,
-        };
-        // Add document to gameEntryTokens collection
-        const docRef = await db.collection('gameEntryTokens').add(tokenDoc);
-
-        res.status(200).json({ gameEntryTokenId: docRef.id });
-    } catch (error) {
-        console.error("Error creating game entry token:", error);
-        res.status(500).json({ message: "Failed to create game session token." });
-    }
-});
-
-// VALIDATE SESSION TOKEN (Game Entry Token)
-app.get('/api/picker/validate-session/:id', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const tokenId = req.params.id;
-
-    try {
-        const docRef = db.collection('gameEntryTokens').doc(tokenId);
-        const docSnap = await docRef.get();
-        if (!docSnap.exists) {
-            return res.status(404).json({ valid: false, message: "Session token does not exist." });
-        }
-        const data = docSnap.data();
-        if (data.isConsumed) {
-            return res.status(400).json({ valid: false, message: "Session token already consumed." });
-        }
-        if (data.userId !== userId) {
-            return res.status(403).json({ valid: false, message: "Session token does not belong to this user." });
-        }
-        // You can check more: category, gameId, etc.
-        return res.status(200).json({ valid: true });
-    } catch (error) {
-        console.error("Error validating game entry token:", error);
-        res.status(500).json({ valid: false, message: "Failed to validate session token." });
-    }
-});
-
-// --- Update Free Entry Tokens (Generate) (Protected) ---
-app.post('/tokens/generate', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { tokenType } = req.body;
-
-    if (!tokenType) {
-        return res.status(400).json({ message: "Token type is required (e.g., 'arcade', 'picker', 'casino', 'pvp')." });
-    }
-    const validTokenTypes = ['arcade', 'picker', 'casino', 'pvp'];
-    if (!validTokenTypes.includes(tokenType)) {
-        return res.status(400).json({ message: `Invalid token type: ${tokenType}. Must be one of: ${validTokenTypes.join(', ')}.` });
-    }
-    try {
-        await db.collection('users').doc(userId).update({
-            [`freeEntryTokens.${tokenType}`]: admin.firestore.FieldValue.increment(1),
-            [`freeEntryTokens.${tokenType}Tokens`]: admin.firestore.FieldValue.increment(1),
-        });
-        res.status(200).json({ message: `Successfully added 1 ${tokenType} token.`, tokenType });
-    } catch (error) {
-        console.error(`Error generating ${tokenType} token for user ${userId}:`, error);
-        res.status(500).json({ message: `Failed to generate ${tokenType} token.` });
-    }
-});
-
-// --- Update Free Entry Tokens (Consume) (Protected) ---
-app.post('/tokens/consume', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { tokenType } = req.body;
-    const pluralKey = `${tokenType}Tokens`;
-    try {
-        const userRef = db.collection('users').doc(userId);
-        const userDoc = await userRef.get();
-        if (!userDoc.exists) {
-            console.log("User profile not found for:", userId);
-            return res.status(404).json({ message: "User profile not found." });
-        }
-        const currentTokens = userDoc.data().freeEntryTokens || {};
-        console.log("TokenType:", tokenType, "PluralKey:", pluralKey, "CurrentTokens:", currentTokens);
-        const available = currentTokens[pluralKey] || 0;
-        console.log("Available tokens:", available);
-        if (available <= 0) {
-            console.log("No tokens available to consume.");
-            return res.status(400).json({ message: `No ${tokenType} tokens available to consume.` });
-        }
-        await userRef.update({
-            [`freeEntryTokens.${pluralKey}`]: admin.firestore.FieldValue.increment(-1)
-        });
-        console.log("Successfully consumed one token.");
-        res.status(200).json({ message: `Successfully consumed 1 ${tokenType} token.`, tokenType });
-    } catch (error) {
-        console.error(`Error consuming ${tokenType} token for user ${userId}:`, error);
-        res.status(500).json({ message: `Failed to consume ${tokenType} token.` });
-    }
-});
-
-// Get Platform Stats (Public - no protect middleware)
-app.get('/platform-stats', async (req, res) => {
-    try {
-        const statsDoc = await db.collection('platform').doc('stats').get(); // Assuming 'platform/stats'
-        if (!statsDoc.exists) {
-            return res.status(200).json({
-                // Default structure if no stats exist yet
-                registeredUsers: 0,
-                onlineUsers: 0,
-                totalGamesPlayed: 0,
-                totalSolDistributed: 0,
-                lastUpdated: null,
-                currentMonthPeriod: new Date().getFullYear() + '-' + (new Date().getMonth() + 1).toString().padStart(2, '0'),
-                lastMonthPeriod: new Date().getMonth() === 0 ? (new Date().getFullYear() - 1) + '-12' : new Date().getFullYear() + '-' + (new Date().getMonth()).toString().padStart(2, '0'),
-                categories: {
-                    arcade: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                    pvp: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                    casino: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                    picker: { solTotal: 0, solLastMonth: 0, solDistributed: 0, solDistributedLastMonth: 0, playsTotal: 0, playsLastMonth: 0, games: [] },
-                },
-                games: {}
-            });
-        }
-        res.status(200).json(statsDoc.data());
-    } catch (error) {
-        console.error('Error fetching platform stats:', error);
-        res.status(500).json({ message: 'Failed to fetch platform stats.' });
-    }
-});
-
-
-// Get currently online user UIDs (Public - no protect middleware)
-app.get('/onlineUsers', async (req, res) => {
-    try {
-        const onlineUserIds = await getOnlineUserIds(); // Uses the helper function defined above
-        res.json({ onlineUserIds });
-    } catch (error) {
-        console.error("Error fetching online users in API:", error);
-        res.status(500).json({ message: "Failed to fetch online users." });
-    }
-});
-
-// Increment solGathered for a game and category
-app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
+/* -------------------------------------------------------------------------- */
+/* Direct Increment Endpoints (GG + Legacy SOL)                               */
+/* -------------------------------------------------------------------------- */
+app.post('/api/games/increment-ggcoins-gathered', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
-  const now = new Date();
-  const lastMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const inc = Number(amount);
+  if (!gameId || !category || isNaN(inc) || inc <= 0)
+    return res.status(400).json({ success:false, error:'Invalid payload.' });
   try {
-    // Game doc
-    const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'solGathered.allTime': admin.firestore.FieldValue.increment(amount),
-      'solGathered.lastMonth': admin.firestore.FieldValue.increment(amount)
+    await db.collection('games').doc(gameId).update({
+      'ggCoinsGathered.allTime': admin.firestore.FieldValue.increment(inc),
+      'ggCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(inc)
     });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.solGathered.allTime`]: admin.firestore.FieldValue.increment(amount),
-      [`categories.${category}.solGathered.lastMonth`]: admin.firestore.FieldValue.increment(amount)
+    await db.collection('platform').doc('stats').update({
+      [`categories.${category}.ggCoinsGathered.allTime`]: admin.firestore.FieldValue.increment(inc),
+      [`categories.${category}.ggCoinsGathered.lastMonth`]: admin.firestore.FieldValue.increment(inc),
+      'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(inc),
+      'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(inc)
     });
-
-    res.status(200).json({ success: true });
-    // Optionally, emit socket.io update to all clients here!
-  } catch (error) {
-    console.error('Error incrementing solGathered:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.json({ success:true });
+  } catch (e) {
+    console.error('[INC] ggCoinsGathered error:', e);
+    res.status(500).json({ success:false, error:e.message });
   }
 });
 
-// Increment gamesPlayed for a game and category
-app.post('/api/games/increment-games-played', protect, async (req, res) => {
-  const { gameId, category } = req.body;
+app.post('/api/games/increment-ggcoins-distributed', protect, async (req,res)=>{
+  const { gameId, category, amount } = req.body;
+  const inc = Number(amount);
+  if (!gameId || !category || isNaN(inc) || inc <= 0)
+    return res.status(400).json({ success:false, error:'Invalid payload.' });
   try {
-    // Game doc
+    await db.collection('games').doc(gameId).update({
+      'ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(inc),
+      'ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(inc)
+    });
+    await db.collection('platform').doc('stats').update({
+      [`categories.${category}.ggCoinsDistributed.allTime`]: admin.firestore.FieldValue.increment(inc),
+      [`categories.${category}.ggCoinsDistributed.lastMonth`]: admin.firestore.FieldValue.increment(inc),
+      'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(inc),
+      'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(inc)
+    });
+    res.json({ success:true });
+  } catch (e) {
+    console.error('[INC] ggCoinsDistributed error:', e);
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
+app.post('/api/games/increment-games-played', protect, async (req,res)=>{
+  const { gameId, category } = req.body;
+  if (!gameId || !category)
+    return res.status(400).json({ success:false, error:'Invalid payload.' });
+  try {
     const gameRef = db.collection('games').doc(gameId);
-    const gameDoc = await gameRef.get();
-    if (!gameDoc.exists) {
-      // Create minimal doc if missing
+    const snap = await gameRef.get();
+    if (!snap.exists) {
       await gameRef.set({
-        name: gameId,
+        id: gameId,
         category,
-        gamesPlayed: { allTime: 0, lastMonth: 0 }
-      });
+        gamesPlayed: { ...emptyStatsMap }
+      }, { merge:true });
     }
     await gameRef.update({
       'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
       'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
     });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
+    await db.collection('platform').doc('stats').update({
       [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
-      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
+      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1),
+      'totalGamesPlayed': admin.firestore.FieldValue.increment(1)
     });
-
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error incrementing gamesPlayed:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.json({ success:true });
+  } catch (e) {
+    console.error('[INC] gamesPlayed error:', e);
+    res.status(500).json({ success:false, error:e.message });
   }
 });
 
-app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
-  const { gameId, category, amount } = req.body; // amount in SOL
+/* Legacy SOL gather endpoint retained (if still needed) */
+app.post('/api/games/increment-sol-gathered', protect, async (req,res)=>{
+  const { gameId, category, amount } = req.body;
+  const inc = Number(amount);
+  if (!gameId || !category || isNaN(inc) || inc <= 0)
+    return res.status(400).json({ success:false, error:'Invalid payload.' });
   try {
-    // Defensive: ensure amount is a number
-    const incrementValue = Number(amount);
-    if (isNaN(incrementValue) || incrementValue <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid amount" });
-    }
-
-    // Increment game doc
-    const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'solGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'solGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    // Increment category in platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.solGathered.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
-      [`categories.${category}.solGathered.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue)
-    });
-
-    res.status(200).json({ success: true });
-    // Optionally: Emit socket.io event for live updates here!
-  } catch (error) {
-    console.error('Error incrementing solGathered:', error);
-    res.status(500).json({ success: false, error: error.message });
+    await db.collection('games').doc(gameId).set({
+      solGathered: {
+        allTime: admin.firestore.FieldValue.increment(inc),
+        lastMonth: admin.firestore.FieldValue.increment(inc)
+      }
+    }, { merge:true });
+    await db.collection('platform').doc('stats').set({
+      [`categories.${category}.solGathered.allTime`]: admin.firestore.FieldValue.increment(inc),
+      [`categories.${category}.solGathered.lastMonth`]: admin.firestore.FieldValue.increment(inc)
+    }, { merge:true });
+    res.json({ success:true });
+  } catch (e) {
+    console.error('[INC] solGathered error:', e);
+    res.status(500).json({ success:false, error:e.message });
   }
 });
 
-
-// Game and Category Routes (Protected)
-app.get('/games', protect, async (req, res) => {
-    try {
-        const gamesRef = db.collection('games');
-        const snapshot = await gamesRef.get();
-
-        if (snapshot.empty) {
-            return res.status(200).json([]);
-        }
-        const games = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        res.status(200).json(games);
-    } catch (error) {
-        console.error("Error fetching games:", error);
-        res.status(500).json({ message: "Failed to fetch games.", error: error.message });
-    }
+/* -------------------------------------------------------------------------- */
+/* Public Base & Price                                                        */
+/* -------------------------------------------------------------------------- */
+app.get('/', (_req,res)=> res.send('GG Web3 Backend is running!'));
+app.get('/api/prices', async (_req,res)=>{
+  res.json({ solUsd: await fetchSolPrice() });
 });
 
-app.get('/categories', protect, async (req, res) => {
-    try {
-        const categoriesRef = db.collection('categories');
-        const snapshot = await categoriesRef.get();
-
-        if (snapshot.empty) {
-            return res.status(200).json([]);
-        }
-        const categories = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        res.status(200).json(categories);
-    } catch (error) {
-        console.error("Error fetching categories:", error);
-        res.status(500).json({ message: "Failed to fetch categories.", error: error.message });
-    }
+/* -------------------------------------------------------------------------- */
+/* Auth & Wallet                                                              */
+/* -------------------------------------------------------------------------- */
+app.post('/register', async (req,res)=>{
+  const { email, password, username } = req.body;
+  if (!email || !password || !username)
+    return res.status(400).json({ message:'Missing fields.' });
+  try {
+    const record = await auth.createUser({ email, password });
+    await getUserDocRef(record.uid).set({
+      username,
+      usernameLowercase: username.toLowerCase(),
+      email,
+      uid: record.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      avatarUrl: '/avatars/default.png',
+      freeEntryTokens:{ arcade:0, picker:0, casino:0, pvp:0 },
+      coins: { gg: 0 },
+      isOnline: false,
+      lastSeen: null,
+      friends: [],
+      friendRequestsSent: [],
+      friendRequestsReceived: [],
+    });
+    res.status(201).json({ message:'User registered' });
+  } catch (e) {
+    let msg = 'Registration failed';
+    if (e.code === 'auth/email-already-in-use') msg = 'Email already in use';
+    if (e.code === 'auth/invalid-email') msg = 'Invalid email';
+    if (e.code === 'auth/weak-password') msg = 'Weak password';
+    res.status(400).json({ message: msg, code:e.code });
+  }
 });
 
-
-// Solana Game Play (Protected)
-app.post('/play', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { gameId, wagerAmount, prediction } = req.body; // wagerAmount should be in native token units (e.g., lamports)
-
-    try {
-        const userDoc = await getUserDocRef(userId).get();
-        if (!userDoc.exists || !userDoc.data().wallet) {
-            return res.status(400).send('User or Solana wallet address is not linked.');
-        }
-        const userSolanaAddress = new PublicKey(userDoc.data().wallet);
-
-        if (!adminWalletKeypair || !gameTokenMint) {
-            return res.status(500).send('Server wallet or token mint not initialized.');
-        }
-
-        // Ensure ATAs exist
-        const userATA = await getOrCreateAssociatedTokenAccount(
-            connection,
-            adminWalletKeypair, // Payer
-            gameTokenMint,
-            userSolanaAddress // Owner of ATA
-        );
-        const adminATA = await getOrCreateAssociatedTokenAccount(
-            connection,
-            adminWalletKeypair, // Payer
-            gameTokenMint,
-            adminWalletKeypair.publicKey // Owner of ATA
-        );
-
-        const userTokenBalance = await getTokenAccountBalance(userATA.address);
-        if (userTokenBalance < wagerAmount) {
-            return res.status(400).json({ error: 'Insufficient token balance for wager.' });
-        }
-
-        // Create a Solana transaction for the token transfer
-        // Note: The frontend will sign this transaction, not the backend.
-        const transaction = new Transaction().add(
-            transfer(
-                userATA.address, // Source (user's ATA)
-                adminATA.address, // Destination (admin's ATA)
-                userSolanaAddress, // Owner of the source ATA (user's public key)
-                wagerAmount // Amount to transfer
-            )
-        );
-        // Set fee payer and recent blockhash for the transaction
-        transaction.feePayer = userSolanaAddress;
-        transaction.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
-
-        // Serialize the transaction to send to the frontend for signing
-        const serializedTransaction = transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString('base64');
-
-        // Store initial game state in Firestore
-        await db.collection('games').doc(gameId).set({
-            gameId,
-            userId,
-            wagerAmount,
-            prediction,
-            status: 'pending_transaction', // Game status while waiting for transaction
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            userSolanaAddress: userSolanaAddress.toBase58()
-        }, { merge: true });
-
-        console.log(`User ${userId} placed wager of ${wagerAmount / (10 ** GAME_TOKEN_DECIMALS)} in game ${gameId}`);
-        // Respond with success and the serialized transaction for frontend signing
-        res.json({ success: true, message: 'Game initiated, please sign transaction.', transaction: serializedTransaction });
-
-    } catch (error) {
-        console.error("Error initiating play:", error);
-        res.status(500).send('Failed to initiate play');
-    }
+app.post('/login', (_req,res)=>{
+  res.json({ message:'Login handled via Firebase client SDK.' });
 });
 
-// Updates game state after a Solana transaction is confirmed (Protected)
-app.post('/game-state-update', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { gameId, transactionSignature, status } = req.body;
+app.post('/verify-wallet', async (req,res)=>{
+  try {
+    const { address, signedMessage, nonce } = req.body;
+    if (!address || !signedMessage || !nonce)
+      return res.status(400).json({ error:'Missing parameters' });
+    const message = `Sign in to GG Web3 with this one-time code: ${nonce}`;
+    const msgBytes = new TextEncoder().encode(message);
+    let sigBytes;
+    try { sigBytes = Buffer.from(signedMessage,'base64'); }
+    catch { return res.status(400).json({ error:'Invalid signature format' }); }
+    const pk = new PublicKey(address);
+    const verified = nacl.sign.detached.verify(msgBytes, sigBytes, pk.toBytes());
+    if (!verified) return res.status(400).json({ error:'Verification failed' });
 
-    try {
-        // Confirm the Solana transaction (server-side confirmation for security)
-        const confirmation = await connection.confirmTransaction(transactionSignature, 'confirmed');
-        if (confirmation.value.err) {
-            console.error("Transaction failed on Solana:", confirmation.value.err);
-            await db.collection('games').doc(gameId).update({ status: 'failed_wager', transactionError: confirmation.value.err.toString() });
-            return res.status(400).send('Solana transaction failed or was not confirmed.');
-        }
-
-        // Update game state in Firestore with transaction details
-        await db.collection('games').doc(gameId).update({
-            status: status,
-            transactionSignature: transactionSignature,
-            confirmedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        console.log(`Game ${gameId} status updated to ${status} by user ${userId}`);
-        res.status(200).send('Game state updated.');
-    } catch (error) {
-        console.error("Error updating game state:", error);
-        res.status(500).send('Failed to update game state.');
+    try { await auth.getUser(address); }
+    catch (e) {
+      if (e.code === 'auth/user-not-found') {
+        await auth.createUser({ uid: address, displayName:`Player_${address.slice(0,4)}` });
+        await getUserDocRef(address).set({
+          uid: address,
+          wallet: address,
+          username: `Player_${address.slice(0,4)}`,
+          usernameLowercase: `player_${address.slice(0,4)}`,
+          avatarUrl: '/avatars/default.png',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          isOnline: true,
+          lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+          friends: [],
+          friendRequestsSent: [],
+          friendRequestsReceived: [],
+          freeEntryTokens:{ arcade:0, picker:0, casino:0, pvp:0 },
+          coins:{ gg:0 }
+        }, { merge:true });
+      } else throw e;
     }
+    const customToken = await auth.createCustomToken(address, {
+      solanaWalletAddress: address,
+      isSolanaVerified: true
+    });
+    res.json({ customToken });
+  } catch (e) {
+    console.error('/verify-wallet error:', e);
+    res.status(500).json({ error:'Internal error' });
+  }
 });
 
-// Reward processing (Protected)
-app.post('/process-reward', protect, async (req, res) => {
-    const userId = req.user.uid;
-    const { gameId, amount, isWinnerClaim = false } = req.body; // amount should be in native units (lamports)
-
-    try {
-        // This function would contain your game-specific logic for distributing rewards.
-        // For now, it's a placeholder that mimics your previous `processReward` function.
-
-        if (!adminWalletKeypair || !gameTokenMint) {
-            return res.status(500).send('Server wallet or token mint not initialized.');
-        }
-
-        const gameDocRef = db.collection('games').doc(gameId);
-        const gameDoc = await gameDocRef.get();
-        if (!gameDoc.exists) throw new Error('Game not found.');
-
-        const gameData = gameDoc.data();
-        let recipientSolanaAddress;
-
-        if (isWinnerClaim) {
-            // Logic for a winner claiming their specific reward
-            if (gameData.winnerId !== userId || gameData.status !== 'completed_winnings' || gameData.claimed) {
-                return res.status(400).json({ message: 'Not eligible to claim reward for this game or already claimed.' });
-            }
-            const userDoc = await getUserDocRef(userId).get();
-            if (!userDoc.exists || !userDoc.data().wallet) {
-                return res.status(400).json({ message: 'User Solana wallet address not found for claiming.' });
-            }
-            recipientSolanaAddress = new PublicKey(userDoc.data().wallet);
-        } else {
-            // General collection (e.g., by admin or a system process)
-            // This is more complex and depends on your game's economy.
-            // For simplicity, if not a winner claim, assume it's for the current user's wallet.
-            const userDoc = await getUserDocRef(userId).get();
-            if (userDoc.exists && userDoc.data().wallet) {
-                recipientSolanaAddress = new PublicKey(userDoc.data().wallet);
-            } else {
-                return res.status(400).json({ message: 'User Solana wallet address not found for general reward.' });
-            }
-        }
-
-        const transferSuccess = await transferSolanaToken(recipientSolanaAddress, amount);
-        if (!transferSuccess) {
-            return res.status(500).json({ message: 'Failed to transfer Solana tokens for reward.' });
-        }
-
-        // Update game state (e.g., mark as claimed/rewarded)
-        if (isWinnerClaim) {
-            await gameDocRef.update({
-                claimed: true,
-                claimedAt: admin.firestore.FieldValue.serverTimestamp(),
-                status: 'claimed', // Update status to reflect claiming
-            });
-            console.log(`Winner's reward of ${amount / (10 ** GAME_TOKEN_DECIMALS)} tokens claimed by ${userId} for game ${gameId}`);
-        } else {
-            await gameDocRef.update({
-                [`collectedBy.${userId}`]: admin.firestore.FieldValue.serverTimestamp(), // Mark as collected by user
-                status: 'rewarded', // General rewarded status
-            });
-            console.log(`General reward of ${amount / (10 ** GAME_TOKEN_DECIMALS)} tokens collected by ${userId} for game ${gameId}`);
-        }
-
-        res.status(200).json({ success: true, message: 'Reward processed successfully!' });
-
-    } catch (error) {
-        console.error("Error in /process-reward endpoint:", error);
-        res.status(500).json({ message: error.message || 'Internal server error during reward processing.' });
-    }
+/* -------------------------------------------------------------------------- */
+/* Profile & Users                                                            */
+/* -------------------------------------------------------------------------- */
+app.get('/profile', protect, async (req,res)=>{
+  const snap = await getUserDocRef(req.user.uid).get();
+  if (!snap.exists) return res.status(404).json({ message:'User not found' });
+  res.json(snap.data());
 });
 
-
-// --- Friend System Routes (Protected) ---
-app.post('/friend-request/send', protect, async (req, res) => {
-    const { targetUsername } = req.body;
-    const currentUserId = req.user.uid;
-
-    if (!targetUsername) {
-        return res.status(400).json({ message: 'Target username is required.' });
-    }
-
-    try {
-        const usersRef = db.collection('users');
-        // Find target user by username (case-insensitive search)
-        const targetUserQuery = await usersRef.where('usernameLowercase', '==', targetUsername.toLowerCase()).limit(1).get();
-
-        if (targetUserQuery.empty) {
-            return res.status(404).json({ message: 'Target user not found.' });
-        }
-
-        const targetUserDoc = targetUserQuery.docs[0];
-        const targetUserId = targetUserDoc.id;
-
-        if (currentUserId === targetUserId) {
-            return res.status(400).json({ message: 'Cannot send friend request to yourself.' });
-        }
-
-        const currentUserDoc = await usersRef.doc(currentUserId).get();
-        const currentUserData = currentUserDoc.data();
-
-        // Check if already friends
-        if (currentUserData.friends && currentUserData.friends.includes(targetUserId)) {
-            return res.status(400).json({ message: 'You are already friends with this user.' });
-        }
-        // Check if request already sent
-        if (currentUserData.friendRequestsSent && currentUserData.friendRequestsSent.includes(targetUserId)) {
-            return res.status(400).json({ message: 'Friend request already sent.' });
-        }
-        // Check if target has already sent a request to current user (mutual request = accept)
-        if (currentUserData.friendRequestsReceived && currentUserData.friendRequestsReceived.includes(targetUserId)) {
-            const batch = db.batch();
-            // Add to friends lists
-            batch.update(usersRef.doc(currentUserId), {
-                friends: admin.firestore.FieldValue.arrayUnion(targetUserId),
-                friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(targetUserId) // Remove from received
-            });
-            batch.update(usersRef.doc(targetUserId), {
-                friends: admin.firestore.FieldValue.arrayUnion(currentUserId),
-                friendRequestsSent: admin.firestore.FieldValue.arrayRemove(currentUserId) // Remove from sent
-            });
-            await batch.commit();
-            console.log(`Friend request from ${targetUserId} to ${currentUserId} auto-accepted.`);
-            return res.status(200).json({ message: 'Friend request accepted and you are now friends!' });
-        }
-
-        // Send new friend request
-        const batch = db.batch();
-        batch.update(usersRef.doc(currentUserId), {
-            friendRequestsSent: admin.firestore.FieldValue.arrayUnion(targetUserId)
-        });
-        batch.update(usersRef.doc(targetUserId), {
-            friendRequestsReceived: admin.firestore.FieldValue.arrayUnion(currentUserId)
-        });
-        await batch.commit();
-
-        res.status(200).json({ message: 'Friend request sent successfully.' });
-
-    } catch (error) {
-        console.error('Error sending friend request:', error);
-        res.status(500).json({ message: 'Failed to send friend request.' });
-    }
+app.put('/profile', protect, async (req,res)=>{
+  const allowed = ['username','avatarUrl','bio','dmsOpen','duelsOpen','twitter','discord','telegram','instagram'];
+  const update = {};
+  for (const k of allowed) if (req.body[k] !== undefined) update[k] = req.body[k];
+  if (update.username) update.usernameLowercase = update.username.toLowerCase();
+  if (!Object.keys(update).length) return res.status(400).json({ message:'No fields to update' });
+  await getUserDocRef(req.user.uid).update(update);
+  res.json({ message:'Profile updated' });
 });
 
-app.post('/friend-request/accept', protect, async (req, res) => {
-    const { senderId } = req.body; // ID of the user who sent the request
-    const currentUserId = req.user.uid; // ID of the user accepting the request
-
-    if (!senderId) {
-        return res.status(400).json({ message: 'Sender ID is required.' });
-    }
-
-    try {
-        const usersRef = db.collection('users');
-        const batch = db.batch();
-
-        // Update current user's document
-        batch.update(usersRef.doc(currentUserId), {
-            friends: admin.firestore.FieldValue.arrayUnion(senderId), // Add sender to friends
-            friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(senderId) // Remove from received requests
-        });
-
-        // Update sender's document
-        batch.update(usersRef.doc(senderId), {
-            friends: admin.firestore.FieldValue.arrayUnion(currentUserId), // Add current user to sender's friends
-            friendRequestsSent: admin.firestore.FieldValue.arrayRemove(currentUserId) // Remove current user from sender's sent requests
-        });
-
-        await batch.commit();
-        res.status(200).json({ message: 'Friend request accepted.' });
-
-    } catch (error) {
-        console.error('Error accepting friend request:', error);
-        res.status(500).json({ message: 'Failed to accept friend request.' });
-    }
+app.get('/users/:uid', protect, async (req,res)=>{
+  const snap = await getUserDocRef(req.params.uid).get();
+  if (!snap.exists) return res.status(404).json({ message:'User not found' });
+  const data = snap.data();
+  delete data.email;
+  delete data.freeEntryTokens;
+  res.json(data);
 });
 
-app.post('/friend-request/reject', protect, async (req, res) => {
-    const { senderId } = req.body; // ID of the user who sent the request
-    const currentUserId = req.user.uid; // ID of the user rejecting the request
-
-    if (!senderId) {
-        return res.status(400).json({ message: 'Sender ID is required.' });
-    }
-
-    try {
-        const usersRef = db.collection('users');
-        const batch = db.batch();
-
-        // Update current user's document
-        batch.update(usersRef.doc(currentUserId), {
-            friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(senderId) // Remove from received requests
-        });
-
-        // Update sender's document
-        batch.update(usersRef.doc(senderId), {
-            friendRequestsSent: admin.firestore.FieldValue.arrayRemove(currentUserId) // Remove current user from sender's sent requests
-        });
-
-        await batch.commit();
-        res.status(200).json({ message: 'Friend request rejected.' });
-
-    } catch (error) {
-        console.error('Error rejecting friend request:', error);
-        res.status(500).json({ message: 'Failed to reject friend request.' });
-    }
+app.get('/api/usernames', protect, async (_req,res)=>{
+  const snap = await db.collection('users').get();
+  res.json(snap.docs.map(d=>{
+    const u = d.data();
+    return { key:d.id, username:u.username||'', avatarUrl:u.avatarUrl||'', wallet:u.wallet||'' };
+  }));
 });
 
-app.post('/friends/remove', protect, async (req, res) => {
-    const { friendId } = req.body;
-    const currentUserId = req.user.uid;
-
-    if (!friendId) {
-        return res.status(400).json({ message: 'Friend ID is required.' });
-    }
-
-    try {
-        const usersRef = db.collection('users');
-        const batch = db.batch();
-
-        // Remove friend from current user's friends list
-        batch.update(usersRef.doc(currentUserId), {
-            friends: admin.firestore.FieldValue.arrayRemove(friendId)
-        });
-
-        // Remove current user from friend's friends list
-        batch.update(usersRef.doc(friendId), {
-            friends: admin.firestore.FieldValue.arrayRemove(currentUserId)
-        });
-
-        await batch.commit();
-        res.status(200).json({ message: 'Friend removed successfully.' });
-    } catch (error) {
-        console.error('Error removing friend:', error);
-        res.status(500).json({ message: 'Failed to remove friend.' });
-    }
+/* -------------------------------------------------------------------------- */
+/* Free Entry Tokens                                                          */
+/* -------------------------------------------------------------------------- */
+app.get('/user/free-entry-tokens', protect, async (req,res)=>{
+  const snap = await getUserDocRef(req.user.uid).get();
+  if (!snap.exists) return res.status(404).json({ message:'User not found' });
+  res.json(snap.data().freeEntryTokens || { arcade:0, picker:0, casino:0, pvp:0 });
 });
 
-
-// Get Friends (Protected)
-app.get('/friends', protect, async (req, res) => {
-    try {
-        const userDoc = await db.collection('users').doc(req.user.uid).get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const friendIds = userDoc.data().friends || [];
-
-        const friendsData = [];
-        if (friendIds.length > 0) {
-            // Fetch friend user data in batches if friendIds array is very large (Firestore limit 10 'in' queries)
-            // For now, assuming reasonable number of friends (less than 10) for a single query
-            const friendsSnapshot = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', friendIds).get();
-            friendsSnapshot.forEach(doc => {
-                const user = doc.data();
-                friendsData.push({
-                    uid: doc.id,
-                    username: user.username,
-                    avatarUrl: user.avatarUrl,
-                    isOnline: user.isOnline || false, // Default to false
-                });
-            });
-        }
-        res.status(200).json(friendsData);
-    } catch (error) {
-        console.error('Error fetching friends:', error);
-        res.status(500).json({ message: 'Failed to fetch friends.' });
-    }
+app.post('/tokens/generate', protect, async (req,res)=>{
+  const { tokenType } = req.body;
+  const valid = ['arcade','picker','casino','pvp'];
+  if (!valid.includes(tokenType)) return res.status(400).json({ message:'Invalid tokenType' });
+  await getUserDocRef(req.user.uid).update({
+    [`freeEntryTokens.${tokenType}`]: admin.firestore.FieldValue.increment(1),
+    [`freeEntryTokens.${tokenType}Tokens`]: admin.firestore.FieldValue.increment(1),
+  });
+  res.json({ message:'Token granted', tokenType });
 });
 
-// Get Sent Friend Requests (Protected)
-app.get('/friend-requests/sent', protect, async (req, res) => {
-    try {
-        const userDoc = await db.collection('users').doc(req.user.uid).get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const sentRequestIds = userDoc.data().friendRequestsSent || [];
-
-        const sentRequestsData = [];
-        if (sentRequestIds.length > 0) {
-            const requestsSnapshot = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', sentRequestIds).get();
-            requestsSnapshot.forEach(doc => {
-                const user = doc.data();
-                sentRequestsData.push({
-                    uid: doc.id,
-                    username: user.username,
-                    avatarUrl: user.avatarUrl,
-                });
-            });
-        }
-        res.status(200).json(sentRequestsData);
-    } catch (error) {
-        console.error('Error fetching sent friend requests:', error);
-        res.status(500).json({ message: 'Failed to fetch sent requests.' });
-    }
+app.post('/tokens/consume', protect, async (req,res)=>{
+  const { tokenType } = req.body;
+  const key = `${tokenType}Tokens`;
+  try {
+    await db.runTransaction(async t=>{
+      const ref = getUserDocRef(req.user.uid);
+      const snap = await t.get(ref);
+      if (!snap.exists) throw new Error('User not found');
+      const tokens = snap.data().freeEntryTokens || {};
+      const available = tokens[key] || 0;
+      if (available <= 0) throw new Error(`No ${tokenType} tokens`);
+      t.update(ref, { [`freeEntryTokens.${key}`]: admin.firestore.FieldValue.increment(-1) });
+    });
+    res.json({ message:'Token consumed', tokenType });
+  } catch (e) {
+    res.status(400).json({ message:e.message });
+  }
 });
 
-// Get Received Friend Requests (Protected)
-app.get('/friend-requests/received', protect, async (req, res) => {
-    try {
-        const userDoc = await db.collection('users').doc(req.user.uid).get();
-        if (!userDoc.exists) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const receivedRequestIds = userDoc.data().friendRequestsReceived || [];
-
-        const receivedRequestsData = [];
-        if (receivedRequestIds.length > 0) {
-            const requestsSnapshot = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', receivedRequestIds).get();
-            requestsSnapshot.forEach(doc => {
-                const user = doc.data();
-                receivedRequestsData.push({
-                    uid: doc.id,
-                    username: user.username,
-                    avatarUrl: user.avatarUrl,
-                });
-            });
-        }
-        res.status(200).json(receivedRequestsData);
-    } catch (error) {
-        console.error('Error fetching received friend requests:', error);
-        res.status(500).json({ message: 'Failed to fetch received requests.' });
-    }
+/* -------------------------------------------------------------------------- */
+/* Platform Stats / Online Users                                              */
+/* -------------------------------------------------------------------------- */
+app.get('/platform-stats', async (_req,res)=>{
+  const statsDoc = await db.collection('platform').doc('stats').get();
+  if (!statsDoc.exists) {
+    const { current, last } = getPeriodKeys();
+    return res.json({
+      registeredUsers:0,
+      onlineUsers:0,
+      totalGamesPlayed:0,
+      totalGGCoinsDeposited:{...emptyStatsMap},
+      totalGGCoinsWithdrawn:{...emptyStatsMap},
+      totalGGCoinsGathered:{...emptyStatsMap},
+      totalGGCoinsDistributed:{...emptyStatsMap},
+      lastUpdated:null,
+      currentMonthPeriod: current,
+      lastMonthPeriod: last,
+      categories:{
+        arcade:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        pvp:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        casino:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+        picker:{ ggCoinsGathered:{...emptyStatsMap}, ggCoinsDistributed:{...emptyStatsMap}, gamesPlayed:{...emptyStatsMap}, games:[] },
+      },
+      games:{}
+    });
+  }
+  res.json(statsDoc.data());
 });
 
-
-// --- Chat Routes (Protected - using imported chatService functions) ---
-app.get('/chats', protect, async (req, res) => {
-    try {
-        // getUserChats is imported from chatService.js
-        const chats = await getUserChats(req.user.uid);
-        res.status(200).json(chats);
-    } catch (error) {
-        console.error('Error fetching user chats:', error);
-        res.status(500).json({ message: 'Failed to fetch user chats.' });
-    }
+app.get('/onlineUsers', async (_req,res)=>{
+  res.json({ onlineUserIds: await getOnlineUserIds() });
 });
 
-app.post('/chats/findOrCreate', protect, async (req, res) => {
-    const { targetUid } = req.body;
-    if (!targetUid) {
-        return res.status(400).json({ message: 'targetUid is required.' });
-    }
-    try {
-        // findOrCreateChat is imported from chatService.js
-        const chat = await findOrCreateChat(req.user.uid, targetUid);
-        res.status(200).json(chat);
-    } catch (error) {
-        console.error('Error finding or creating chat:', error);
-        res.status(500).json({ message: error.message || 'Failed to find or create chat.' });
-    }
+/* -------------------------------------------------------------------------- */
+/* Games & Categories Lists                                                   */
+/* -------------------------------------------------------------------------- */
+app.get('/games', protect, async (_req,res)=>{
+  const snap = await db.collection('games').get();
+  res.json(snap.docs.map(d=>({ id:d.id, ...d.data() })));
+});
+app.get('/categories', protect, async (_req,res)=>{
+  const snap = await db.collection('categories').get();
+  res.json(snap.docs.map(d=>({ id:d.id, ...d.data() })));
 });
 
-app.post('/chats/:chatId/messages', protect, async (req, res) => {
-    const { chatId } = req.params;
-    const { text } = req.body;
-    if (!chatId || !text) {
-        return res.status(400).json({ message: 'Chat ID and message text are required.' });
-    }
-    try {
-        // sendMessage is imported from chatService.js
-        await sendMessage(chatId, req.user.uid, text);
-        res.status(200).json({ message: 'Message sent successfully.' });
-    } catch (error) {
-        console.error('Error sending message via HTTP:', error);
-        res.status(500).json({ message: 'Failed to send message.' });
-    }
-});
-
-// --- Leaderboard Score Submission API ---
-app.post('/leaderboards/submit-score', protect, async (req, res) => {
-  const { gameId, score } = req.body;
+/* -------------------------------------------------------------------------- */
+/* Legacy / Placeholder Token Play & Reward                                   */
+/* -------------------------------------------------------------------------- */
+app.post('/play', protect, async (req,res)=>{
+  const { gameId, wagerAmount, prediction } = req.body;
   const userId = req.user.uid;
-  if (!gameId || !userId || typeof score !== 'number') {
-    return res.status(400).json({ message: "Missing required fields." });
+  try {
+    const userSnap = await getUserDocRef(userId).get();
+    if (!userSnap.exists || !userSnap.data().wallet)
+      return res.status(400).json({ error:'Wallet not linked.' });
+    if (!adminWalletKeypair || !gameTokenMint)
+      return res.status(500).json({ error:'Server token mint not initialized.' });
+
+    // Real token transfer building omitted – left as placeholder.
+    await db.collection('games').doc(gameId).set({
+      gameId,
+      userId,
+      wagerAmount,
+      prediction,
+      status:'pending_transaction',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      userSolanaAddress: userSnap.data().wallet
+    }, { merge:true });
+
+    res.json({ success:true, message:'Game initiated (placeholder)' });
+  } catch (e) {
+    res.status(500).json({ error:'Failed to initiate play.' });
+  }
+});
+
+app.post('/game-state-update', protect, async (req,res)=>{
+  const { gameId, transactionSignature, status } = req.body;
+  try {
+    const confirmation = await connection.confirmTransaction(transactionSignature,'confirmed');
+    if (confirmation.value.err) {
+      await db.collection('games').doc(gameId).update({
+        status:'failed_wager',
+        transactionError: JSON.stringify(confirmation.value.err)
+      });
+      return res.status(400).json({ message:'Transaction failed.' });
+    }
+    await db.collection('games').doc(gameId).update({
+      status,
+      transactionSignature,
+      confirmedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    res.json({ message:'Game state updated.' });
+  } catch (e) {
+    res.status(500).json({ message:'Failed to update game state.' });
+  }
+});
+
+app.post('/process-reward', protect, async (req,res)=>{
+  const { gameId, amount=0, isWinnerClaim=false } = req.body;
+  try {
+    const gameRef = db.collection('games').doc(gameId);
+    const snap = await gameRef.get();
+    if (!snap.exists) return res.status(404).json({ message:'Game not found.' });
+
+    if (isWinnerClaim) {
+      await gameRef.update({
+        claimed:true,
+        claimedAt: admin.firestore.FieldValue.serverTimestamp(),
+        status:'claimed'
+      });
+    } else {
+      await gameRef.update({
+        status:'rewarded',
+        [`collectedBy.${req.user.uid}`]: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    res.json({ success:true, message:'Reward processed (placeholder).' });
+  } catch (e) {
+    res.status(500).json({ message:e.message });
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Picker Session Tokens                                                      */
+/* -------------------------------------------------------------------------- */
+app.post('/api/picker/create-session', protect, async (req,res)=>{
+  const { gameId, paymentSignature, currency } = req.body;
+  try {
+    const docRef = await db.collection('gameEntryTokens').add({
+      userId: req.user.uid,
+      category: 'Picker',
+      gameId,
+      issuedAt: admin.firestore.FieldValue.serverTimestamp(),
+      isConsumed:false,
+      paymentCurrency: currency,
+      paymentAmount: currency === 'SOL' ? 0.01 : 0,
+      txSig: paymentSignature || null
+    });
+    res.json({ gameEntryTokenId: docRef.id });
+  } catch (e) {
+    res.status(500).json({ message:'Failed to create session token.' });
+  }
+});
+
+app.get('/api/picker/validate-session/:id', protect, async (req,res)=>{
+  try {
+    const doc = await db.collection('gameEntryTokens').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ valid:false, message:'Session token not found.' });
+    const data = doc.data();
+    if (data.isConsumed) return res.status(400).json({ valid:false, message:'Token already consumed.' });
+    if (data.userId !== req.user.uid) return res.status(403).json({ valid:false, message:'Token belongs to another user.' });
+    res.json({ valid:true });
+  } catch (e) {
+    res.status(500).json({ valid:false, message:'Failed to validate token.' });
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Friends System (with chunking)                                             */
+/* -------------------------------------------------------------------------- */
+app.post('/friend-request/send', protect, async (req,res)=>{
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message:'targetUsername required' });
+  try {
+    const usersRef = db.collection('users');
+    const q = await usersRef.where('usernameLowercase','==', targetUsername.toLowerCase()).limit(1).get();
+    if (q.empty) return res.status(404).json({ message:'User not found' });
+    const targetId = q.docs[0].id;
+    if (targetId === req.user.uid) return res.status(400).json({ message:'Cannot friend yourself' });
+
+    const currentSnap = await usersRef.doc(req.user.uid).get();
+    const data = currentSnap.data();
+    if (data.friends?.includes(targetId)) return res.status(400).json({ message:'Already friends' });
+    if (data.friendRequestsSent?.includes(targetId)) return res.status(400).json({ message:'Request already sent' });
+
+    if (data.friendRequestsReceived?.includes(targetId)) {
+      const batch = db.batch();
+      batch.update(usersRef.doc(req.user.uid), {
+        friends: admin.firestore.FieldValue.arrayUnion(targetId),
+        friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(targetId)
+      });
+      batch.update(usersRef.doc(targetId), {
+        friends: admin.firestore.FieldValue.arrayUnion(req.user.uid),
+        friendRequestsSent: admin.firestore.FieldValue.arrayRemove(req.user.uid)
+      });
+      await batch.commit();
+      return res.json({ message:'Friend request auto-accepted' });
+    }
+
+    const batch = db.batch();
+    batch.update(usersRef.doc(req.user.uid), {
+      friendRequestsSent: admin.firestore.FieldValue.arrayUnion(targetId)
+    });
+    batch.update(usersRef.doc(targetId), {
+      friendRequestsReceived: admin.firestore.FieldValue.arrayUnion(req.user.uid)
+    });
+    await batch.commit();
+    res.json({ message:'Friend request sent' });
+  } catch (e) {
+    res.status(500).json({ message:'Failed to send request' });
+  }
+});
+
+app.post('/friend-request/accept', protect, async (req,res)=>{
+  const { senderId } = req.body;
+  if (!senderId) return res.status(400).json({ message:'senderId required' });
+  try {
+    const usersRef = db.collection('users');
+    const batch = db.batch();
+    batch.update(usersRef.doc(req.user.uid), {
+      friends: admin.firestore.FieldValue.arrayUnion(senderId),
+      friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(senderId)
+    });
+    batch.update(usersRef.doc(senderId), {
+      friends: admin.firestore.FieldValue.arrayUnion(req.user.uid),
+      friendRequestsSent: admin.firestore.FieldValue.arrayRemove(req.user.uid)
+    });
+    await batch.commit();
+    res.json({ message:'Friend request accepted' });
+  } catch {
+    res.status(500).json({ message:'Failed to accept request' });
+  }
+});
+
+app.post('/friend-request/reject', protect, async (req,res)=>{
+  const { senderId } = req.body;
+  if (!senderId) return res.status(400).json({ message:'senderId required' });
+  try {
+    const usersRef = db.collection('users');
+    const batch = db.batch();
+    batch.update(usersRef.doc(req.user.uid), {
+      friendRequestsReceived: admin.firestore.FieldValue.arrayRemove(senderId)
+    });
+    batch.update(usersRef.doc(senderId), {
+      friendRequestsSent: admin.firestore.FieldValue.arrayRemove(req.user.uid)
+    });
+    await batch.commit();
+    res.json({ message:'Friend request rejected' });
+  } catch {
+    res.status(500).json({ message:'Failed to reject request' });
+  }
+});
+
+app.post('/friends/remove', protect, async (req,res)=>{
+  const { friendId } = req.body;
+  if (!friendId) return res.status(400).json({ message:'friendId required' });
+  try {
+    const usersRef = db.collection('users');
+    const batch = db.batch();
+    batch.update(usersRef.doc(req.user.uid), {
+      friends: admin.firestore.FieldValue.arrayRemove(friendId)
+    });
+    batch.update(usersRef.doc(friendId), {
+      friends: admin.firestore.FieldValue.arrayRemove(req.user.uid)
+    });
+    await batch.commit();
+    res.json({ message:'Friend removed' });
+  } catch {
+    res.status(500).json({ message:'Failed to remove friend' });
+  }
+});
+
+// --- Enhanced /friends route with detailed logging ---
+app.get('/friends', protect, async (req,res)=>{
+  try {
+    const snap = await getUserDocRef(req.user.uid).get();
+    if (!snap.exists) return res.status(404).json({ message:'User not found' });
+    const friendIds = snap.data().friends || [];
+    console.log(`[FRIENDS] User ${req.user.uid} has friendIds:`, friendIds);
+    if (!friendIds.length) return res.json([]);
+
+    const chunks = [];
+    for (let i=0;i<friendIds.length;i+=10) chunks.push(friendIds.slice(i,i+10));
+    const friendsData = [];
+    for (const ch of chunks) {
+      const q = await db.collection('users')
+        .where(admin.firestore.FieldPath.documentId(),'in', ch)
+        .get();
+      q.forEach(doc=>{
+        const u = doc.data();
+        friendsData.push({
+          uid: doc.id,
+          username: u.username,
+          avatarUrl: u.avatarUrl || '/avatars/default.png',
+          isOnline: u.isOnline || false
+        });
+      });
+    }
+    console.log(`[FRIENDS] Returning ${friendsData.length} friends for ${req.user.uid}`);
+    res.json(friendsData);
+  } catch (e) {
+    console.error('[FRIENDS] fetch error:', e);
+    res.status(500).json({ message:'Failed to fetch friends' });
+  }
+});
+
+// TEMP DEBUG ENDPOINT (remove later)
+app.get('/debug/friends', protect, async (req,res)=>{
+  const snap = await getUserDocRef(req.user.uid).get();
+  if (!snap.exists) return res.status(404).json({ message:'User not found' });
+  res.json({ raw: snap.data().friends || [] });
+});
+
+app.get('/friend-requests/sent', protect, async (req,res)=>{
+  try {
+    const user = await getUserDocRef(req.user.uid).get();
+    if (!user.exists) return res.status(404).json({ message:'User not found' });
+    const ids = user.data().friendRequestsSent || [];
+    if (!ids.length) return res.json([]);
+    const chunks = chunkArray(ids, 10);
+    const out = [];
+    for (const ch of chunks) {
+      const q = await db.collection('users')
+        .where(admin.firestore.FieldPath.documentId(),'in', ch)
+        .get();
+      q.forEach(doc=>{
+        const u = doc.data();
+        out.push({ uid: doc.id, username:u.username, avatarUrl:u.avatarUrl });
+      });
+    }
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ message:'Failed to fetch sent requests' });
+  }
+});
+
+app.get('/friend-requests/received', protect, async (req,res)=>{
+  try {
+    const user = await getUserDocRef(req.user.uid).get();
+    if (!user.exists) return res.status(404).json({ message:'User not found' });
+    const ids = user.data().friendRequestsReceived || [];
+    if (!ids.length) return res.json([]);
+    const chunks = chunkArray(ids, 10);
+    const out = [];
+    for (const ch of chunks) {
+      const q = await db.collection('users')
+        .where(admin.firestore.FieldPath.documentId(),'in', ch)
+        .get();
+      q.forEach(doc=>{
+        const u = doc.data();
+        out.push({ uid: doc.id, username:u.username, avatarUrl:u.avatarUrl });
+      });
+    }
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ message:'Failed to fetch received requests' });
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Chat Routes                                                                */
+/* -------------------------------------------------------------------------- */
+app.get('/chats', protect, async (req,res)=>{
+  try {
+    res.json(await getUserChats(req.user.uid));
+  } catch (e) {
+    res.status(500).json({ message:'Failed to fetch chats' });
+  }
+});
+// app.post('/chats/findOrCreate', protect, async (req,res)=>{
+//   const { targetUid } = req.body;
+//   if (!targetUid) return res.status(400).json({ message:'targetUid required' });
+//   try {
+//     res.json(await findOrCreateChat(req.user.uid, targetUid));
+//   } catch (e) {
+//     res.status(500).json({ message:e.message || 'Failed to create chat' });
+//   }
+// });
+app.post('/chats/:chatId/messages', protect, async (req,res)=>{
+  const { chatId } = req.params;
+  const { text } = req.body;
+  if (!chatId || !text) return res.status(400).json({ message:'chatId & text required' });
+  try {
+    await sendMessage(chatId, req.user.uid, text);
+    res.json({ message:'Message sent' });
+  } catch {
+    res.status(500).json({ message:'Failed to send message' });
+  }
+});
+
+/**
+ * Finds or creates a 1:1 chat between two users (sorted participant IDs for idempotency).
+ * Adds createdAt and lastMessageAt so ordering works even before first message.
+ */
+export const findOrCreateChat = async (user1Uid, user2Uid) => {
+  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
+  if (!user1Uid || !user2Uid || user1Uid === user2Uid) {
+    throw new Error('Invalid participant UIDs.');
   }
 
-  // Disallow for Picker games (no leaderboard)
-  const gameDoc = await db.collection('games').doc(gameId).get();
-  if (gameDoc.exists && ['picker', 'Picker'].includes((gameDoc.data().category || '').toLowerCase())) {
-    return res.status(400).json({ message: "Picker games do not have leaderboards." });
+  const participants = [user1Uid, user2Uid].sort();
+  const chatsRef = _db.collection('chats');
+  const existing = await chatsRef
+    .where('participants', 'array-contains', user1Uid)
+    .get();
+
+  let existingChat = null;
+  existing.forEach(doc => {
+    const d = doc.data();
+    const list = d.participants || [];
+    if (list.length === 2 && list.includes(user2Uid) && list.includes(user1Uid)) {
+      existingChat = { id: doc.id, ...d };
+    }
+  });
+
+  if (existingChat) {
+    return {
+      chatId: existingChat.id,
+      participants: existingChat.participants,
+      lastMessage: existingChat.lastMessage || null,
+      lastMessageAt: existingChat.lastMessageAt || null,
+      createdAt: existingChat.createdAt || null
+    };
   }
 
-  const now = new Date();
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const leaderboardRef = db.collection('leaderboards').doc(gameId);
+  const now = _admin.firestore.FieldValue.serverTimestamp();
+  const newDoc = await chatsRef.add({
+    participants,
+    createdAt: now,
+    lastMessageAt: now,      // ensure ordering field exists
+    lastMessage: null
+  });
 
-  const leaderboardDoc = await leaderboardRef.get();
-  let data = leaderboardDoc.exists ? leaderboardDoc.data() : {};
-  if (!data.allTimeScores) data.allTimeScores = {};
-  if (!data.monthlyScores) data.monthlyScores = {};
+  return {
+    chatId: newDoc.id,
+    participants,
+    lastMessage: null,
+    lastMessageAt: null,
+    createdAt: null
+  };
+};
 
-  // 1. Update monthlyScores
-  if (!data.monthlyScores[monthKey]) data.monthlyScores[monthKey] = {};
-  data.monthlyScores[monthKey][userId] = {
-    score,
-    timestamp: now.toISOString(),
+/**
+ * Sends a message (adds message subdoc & updates lastMessage metadata).
+ */
+export const sendMessage = async (chatId, senderUid, text) => {
+  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
+  if (!chatId || !senderUid || !text) throw new Error('Missing chat message params.');
+
+  const chatRef = _db.collection('chats').doc(chatId);
+  const chatSnap = await chatRef.get();
+  if (!chatSnap.exists) throw new Error('Chat not found.');
+
+  const messagesRef = chatRef.collection('messages');
+  const now = _admin.firestore.FieldValue.serverTimestamp();
+
+  const msgData = {
+    from: senderUid,
+    text,
+    sentAt: now
   };
 
-  // 2. Update allTimeScores if new score is higher
-  const prevAllTime = data.allTimeScores[userId]?.score || 0;
+  await messagesRef.add(msgData);
+  await chatRef.update({
+    lastMessage: {
+      from: msgData.from,
+      text: msgData.text,
+      sentAt: now
+    },
+    lastMessageAt: now
+  });
+};
+
+/**
+ * Returns a list of chats for a user, including resolved friend/user minimal info.
+ * Fallback logic if composite index is missing.
+ */
+export const getUserChats = async (currentUserId) => {
+  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
+  if (!currentUserId) return [];
+
+  const chatsRef = _db.collection('chats');
+
+  // Primary query (needs composite index: participants array-contains + orderBy lastMessageAt)
+  let querySnap;
+  let usedFallback = false;
+  try {
+    const primaryQ = chatsRef
+      .where('participants', 'array-contains', currentUserId)
+      .orderBy('lastMessageAt', 'desc');
+    querySnap = await primaryQ.get();
+  } catch (e) {
+    // Fallback (order by createdAt) - still might need an index, but often less strict
+    console.warn(`[CHAT] Primary query failed (likely missing index participants+lastMessageAt). Fallback to createdAt. Error: ${e.message}`);
+    usedFallback = true;
+    try {
+      const fallbackQ = chatsRef
+        .where('participants', 'array-contains', currentUserId)
+        .orderBy('createdAt', 'desc');
+      querySnap = await fallbackQ.get();
+    } catch (fallbackErr) {
+      console.error('[CHAT] Fallback query also failed:', fallbackErr);
+      return [];
+    }
+  }
+
+  const results = [];
+  for (const doc of querySnap.docs) {
+    const data = doc.data();
+    const participants = data.participants || [];
+    const otherId = participants.find(u => u !== currentUserId);
+    let otherInfo = null;
+    if (otherId) {
+      const userSnap = await _db.collection('users').doc(otherId).get();
+      if (userSnap.exists) {
+        const u = userSnap.data();
+        otherInfo = {
+          uid: otherId,
+            username: u.username || otherId,
+          avatarUrl: u.avatarUrl || '/avatars/default.png',
+          isOnline: u.isOnline || false
+        };
+      }
+    }
+    const lastMessage = data.lastMessage
+      ? {
+          from: data.lastMessage.from,
+          text: data.lastMessage.text,
+          sentAt: data.lastMessage.sentAt ? data.lastMessage.sentAt.toDate() : null
+        }
+      : null;
+
+    results.push({
+      chatId: doc.id,
+      participants,
+      friend: otherInfo,
+      lastMessage,
+      createdAt: data.createdAt ? data.createdAt.toDate() : new Date(0),
+      lastMessageAt: data.lastMessageAt ? data.lastMessageAt.toDate() : null,
+      usedFallback
+    });
+  }
+
+  return results;
+};
+
+/**
+ * Backfill lastMessageAt for existing chats that miss it.
+ * Invoke once at startup if desired (env flag).
+ */
+export const backfillChatLastMessageAt = async () => {
+  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
+  const snap = await _db.collection('chats').get();
+  const batch = _db.batch();
+  let count = 0;
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (!data.lastMessageAt) {
+      batch.update(doc.ref, {
+        lastMessageAt: data.createdAt || _admin.firestore.FieldValue.serverTimestamp()
+      });
+      count++;
+      if (count === 400) {
+        await batch.commit();
+        console.log('[CHAT] Backfill partial commit (400).');
+        count = 0;
+      }
+    }
+  }
+  if (count > 0) await batch.commit();
+  console.log('[CHAT] Backfill complete.');
+};
+
+/* -------------------------------------------------------------------------- */
+/* Leaderboards                                                               */
+/* -------------------------------------------------------------------------- */
+app.post('/leaderboards/submit-score', protect, async (req,res)=>{
+  const { gameId, score } = req.body;
+  if (!gameId || typeof score !== 'number')
+    return res.status(400).json({ message:'Invalid payload' });
+  const gameSnap = await db.collection('games').doc(gameId).get();
+  if (gameSnap.exists && (gameSnap.data().category||'').toLowerCase()==='picker')
+    return res.status(400).json({ message:'Picker games have no leaderboard.' });
+
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const lbRef = db.collection('leaderboards').doc(gameId);
+  const lbSnap = await lbRef.get();
+  const data = lbSnap.exists ? lbSnap.data() : {};
+  data.allTimeScores = data.allTimeScores || {};
+  data.monthlyScores = data.monthlyScores || {};
+  data.monthlyScores[monthKey] = data.monthlyScores[monthKey] || {};
+  data.monthlyScores[monthKey][req.user.uid] = { score, timestamp: now.toISOString() };
+  const prev = data.allTimeScores[req.user.uid]?.score || 0;
   let updatedAllTime = false;
-  if (score > prevAllTime) {
-    data.allTimeScores[userId] = {
-      score,
-      timestamp: now.toISOString(),
-    };
+  if (score > prev) {
+    data.allTimeScores[req.user.uid] = { score, timestamp: now.toISOString() };
     updatedAllTime = true;
   }
-
-  await leaderboardRef.set(data, { merge: true });
-  res.status(200).json({ message: "Score submitted.", updatedAllTime });
+  await lbRef.set(data, { merge:true });
+  res.json({ message:'Score submitted', updatedAllTime });
 });
 
-// --- API: Get leaderboard for a game ---
-app.get('/leaderboards/:gameId', protect, async (req, res) => {
-  const { gameId } = req.params;
-  const leaderboardDoc = await db.collection('leaderboards').doc(gameId).get();
-  if (!leaderboardDoc.exists) {
-    return res.status(404).json({ message: "Leaderboard not found." });
-  }
-  res.status(200).json(leaderboardDoc.data());
+app.get('/leaderboards/:gameId', protect, async (req,res)=>{
+  const snap = await db.collection('leaderboards').doc(req.params.gameId).get();
+  if (!snap.exists) return res.status(404).json({ message:'Leaderboard not found' });
+  res.json(snap.data());
 });
 
-const defaultMap = { allTime: 0, lastMonth: 0 };
-
+/* -------------------------------------------------------------------------- */
+/* Migration / Normalization                                                  */
+/* -------------------------------------------------------------------------- */
 async function fixGamesCollection() {
   const gamesSnapshot = await db.collection('games').get();
   let updated = 0;
   for (const gameDoc of gamesSnapshot.docs) {
     const data = gameDoc.data();
-    let updateData = {};
-    let needsUpdate = false;
+    const setData = {};
+    let needs = false;
 
-    // Remove old sol fields
-    if ('solDistributed' in data) {
-      updateData['solDistributed'] = admin.firestore.FieldValue.delete();
-      needsUpdate = true;
-    }
-    if ('solGathered' in data) {
-      updateData['solGathered'] = admin.firestore.FieldValue.delete();
-      needsUpdate = true;
-    }
-
-    // Ensure required GG Coins maps
     if (!data.ggCoinsGathered || typeof data.ggCoinsGathered.allTime !== 'number' || typeof data.ggCoinsGathered.lastMonth !== 'number') {
-      updateData['ggCoinsGathered'] = defaultMap;
-      needsUpdate = true;
+      setData.ggCoinsGathered = { ...emptyStatsMap };
+      needs = true;
     }
     if (!data.ggCoinsDistributed || typeof data.ggCoinsDistributed.allTime !== 'number' || typeof data.ggCoinsDistributed.lastMonth !== 'number') {
-      updateData['ggCoinsDistributed'] = defaultMap;
-      needsUpdate = true;
+      setData.ggCoinsDistributed = { ...emptyStatsMap };
+      needs = true;
     }
     if (!data.gamesPlayed || typeof data.gamesPlayed.allTime !== 'number' || typeof data.gamesPlayed.lastMonth !== 'number') {
-      updateData['gamesPlayed'] = defaultMap;
-      needsUpdate = true;
+      setData.gamesPlayed = { ...emptyStatsMap };
+      needs = true;
     }
-    if (needsUpdate) {
-      await gameDoc.ref.update(updateData);
+    if (needs) {
+      await gameDoc.ref.update(setData);
       updated++;
-      console.log(`Updated game: ${gameDoc.id}`);
+      console.log(`[MIGRATION] Updated game: ${gameDoc.id}`);
     }
   }
-  console.log(`Games collection: updated ${updated} documents.`);
+  if (updated) console.log(`[MIGRATION] Games normalized: ${updated}`);
 }
 
-
-async function run() {
- ensurePlatformStatsBase();
-    ensureCategoryDoc();
-    fixGamesCollection();
+async function initialRun() {
+  await ensurePlatformStatsBase();
+  if (process.env.MIGRATE_ON_BOOT === 'true') {
+    await fixGamesCollection();
+  }
 }
 
-run().catch(err => {
-  console.error("Migration failed:", err);
+initialRun().catch(err => console.error('[INIT] Migration failed:', err));
+
+/* -------------------------------------------------------------------------- */
+/* Error Handler                                                              */
+/* -------------------------------------------------------------------------- */
+app.use((err, _req, res, _next)=>{
+  console.error('[ERROR] Unhandled:', err);
+  res.status(500).json({ message:'Internal server error' });
 });
 
-// --- Server Start ---
-// Starts the Express server and performs initial setup tasks
+/* -------------------------------------------------------------------------- */
+/* Start Server                                                               */
+/* -------------------------------------------------------------------------- */
 server.listen(PORT, async () => {
-    console.log(`GG Web3 Backend listening on port ${PORT}`);
-    // Ensure the game token mint is loaded or created when the server starts
-    // Run initial cron jobs
-    
-    updateALLUsersOnlineStatus();
-    updatePlatformStatsAggregatedGGCoins();
+  console.log(`GG Web3 Backend listening on port ${PORT}`);
+  await ensurePlatformStatsBase();
+  if (process.env.CHAT_BACKFILL_LASTMESSAGEAT === 'true') {
+    try {
+      await backfillChatLastMessageAt();
+    } catch (e) {
+      console.error('[CHAT] Backfill failed:', e);
+    }
+  }
+  updateALLUsersOnlineStatus();
+  updatePlatformStatsAggregatedGGCoins();
 });

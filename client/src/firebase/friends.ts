@@ -1,75 +1,48 @@
-import { db } from './firebaseConfig';
-import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+/**
+ * friends.ts (refactored)
+ * Previous direct Firestore mutation functions replaced with backend API calls.
+ * Keeping this file as a compatibility layer so existing imports do not break.
+ *
+ * NOTE: These methods now return the backend response (or void) and will
+ * throw on error. Make sure to handle in caller.
+ */
 
-export async function sendFriendRequest(fromUid: string, toUid: string) {
-  if (fromUid === toUid) throw new Error('Cannot friend yourself');
-  const toRef = doc(db, 'users', toUid);
-  const fromRef = doc(db, 'users', fromUid);
-  const toSnap = await getDoc(toRef);
-  if (toSnap.exists()) {
-    const data = toSnap.data();
-    const incoming: string[] = data.friendRequests || [];
-    const friends: string[] = data.friends || [];
-    const alreadyRequested = incoming.includes(fromUid);
-    const alreadyFriends = friends.includes(fromUid);
-    if (!alreadyRequested && !alreadyFriends) {
-      // Add to recipient's friendRequests
-      await updateDoc(toRef, {
-        friendRequests: arrayUnion(fromUid)
-      });
-      // Add to sender's sentInvitations
-      await updateDoc(fromRef, {
-        sentInvitations: arrayUnion(toUid)
-      });
-    }
+import { apiService } from '../services/api';
+
+// New canonical wrappers
+export async function sendFriendRequest(fromUsernameOrTarget: string, deprecated?: string) {
+  // Old signature (fromUid, toUid) is no longer used.
+  // Now API uses targetUsername only (authenticated user inferred by backend).
+  if (deprecated) {
+    console.warn('[friends] Deprecated signature used. Use sendFriendRequest(targetUsername) instead.');
   }
+  return apiService.sendFriendRequest(fromUsernameOrTarget);
 }
 
-export async function acceptFriendRequest(myUid: string, fromUid: string) {
-  const me = doc(db, 'users', myUid);
-  const them = doc(db, 'users', fromUid);
-
-  // Remove request and add as friend for both
-  await updateDoc(me, {
-    friendRequests: arrayRemove(fromUid),
-    friends: arrayUnion(fromUid)
-  });
-  await updateDoc(them, {
-    friends: arrayUnion(myUid),
-    sentInvitations: arrayRemove(myUid)
-  });
+export async function acceptFriendRequest(senderId: string) {
+  return apiService.acceptFriendRequest(senderId);
 }
 
-export async function declineFriendRequest(myUid: string, fromUid: string) {
-  const me = doc(db, 'users', myUid);
-  const them = doc(db, 'users', fromUid);
-  await updateDoc(me, {
-    friendRequests: arrayRemove(fromUid)
-  });
-  await updateDoc(them, {
-    sentInvitations: arrayRemove(myUid)
-  });
+export async function declineFriendRequest(senderId: string) {
+  // Maps to reject
+  return apiService.rejectFriendRequest(senderId);
 }
 
-// Cancel an outgoing invitation
-export async function cancelSentInvitation(myUid: string, toUid: string) {
-  const me = doc(db, 'users', myUid);
-  const them = doc(db, 'users', toUid);
-  await updateDoc(me, {
-    sentInvitations: arrayRemove(toUid)
-  });
-  await updateDoc(them, {
-    friendRequests: arrayRemove(myUid)
-  });
+export async function cancelSentInvitation(_myUid: string, _toUid: string) {
+  console.warn('[friends] cancelSentInvitation no longer needed; ignoring.');
 }
 
-export async function removeFriend(myUid: string, friendUid: string) {
-  const me = doc(db, 'users', myUid);
-  const them = doc(db, 'users', friendUid);
-  await updateDoc(me, {
-    friends: arrayRemove(friendUid)
-  });
-  await updateDoc(them, {
-    friends: arrayRemove(myUid)
-  });
+export async function removeFriend(friendUid: string) {
+  return apiService.removeFriend(friendUid);
+}
+
+// (Optional) fetch lists if needed externally (Panels already use apiService directly)
+export async function fetchFriends() {
+  return apiService.getFriends();
+}
+export async function fetchSentRequests() {
+  return apiService.getSentFriendRequests();
+}
+export async function fetchReceivedRequests() {
+  return apiService.getReceivedFriendRequests();
 }
