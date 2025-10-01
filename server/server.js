@@ -302,23 +302,7 @@ const protect = async (req, res, next) => {
 // -----------------------------------------------------------------------------
 // Cron Jobs (legacy SOL stats left intact)
 // -----------------------------------------------------------------------------
-async function updateALLUsersOnlineStatus() {
-  try {
-    const threshold = admin.firestore.Timestamp.fromMillis(Date.now() - 5 * 60 * 1000);
-    const snap = await db.collection('users')
-      .where('isOnline', '==', true)
-      .where('lastSeen', '<', threshold)
-      .get();
-    const batch = db.batch();
-    snap.forEach(doc => {
-      batch.update(doc.ref, { isOnline: false, lastSeen: admin.firestore.FieldValue.serverTimestamp() });
-    });
-    await batch.commit();
-    io.emit('onlineUsersUpdate', await getOnlineUserIds());
-  } catch (e) {
-    console.error('updateALLUsersOnlineStatus error:', e);
-  }
-}
+
 
 // --- Cron Jobs & Scheduled Tasks ---
 
@@ -1251,7 +1235,7 @@ app.get('/profile', protect, async (req, res) => {
 
 // Update User Profile (Protected)
 app.put('/profile', protect, async (req, res) => {
-    const { username, avatarUrl, bio, dmsOpen, duelsOpen, twitter, discord, telegram, instagram } = req.body;
+    const { username, avatarUrl, bio, dmsOpen, duelsOpen, twitter, discord,  } = req.body;
     try {
         const userRef = db.collection('users').doc(req.user.uid);
         const updateData = {};
@@ -1262,9 +1246,7 @@ app.put('/profile', protect, async (req, res) => {
         if (duelsOpen !== undefined) updateData.duelsOpen = duelsOpen;
         if (twitter !== undefined) updateData.twitter = twitter;
         if (discord !== undefined) updateData.discord = discord;
-        if (telegram !== undefined) updateData.telegram = telegram;
-        if (instagram !== undefined) updateData.instagram = instagram;
-
+   
 
         // Update usernameLowercase if username is being updated
         if (username !== undefined) {
