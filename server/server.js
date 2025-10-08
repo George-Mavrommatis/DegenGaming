@@ -312,6 +312,115 @@ function getMonthPeriod(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}`;
 }
 
+async function ensurePlatformStatsMonthRollover() {
+  const statsRef = db.collection('platform').doc('stats');
+  const nowPeriod = getMonthPeriod();
+
+async function resetCategoriesMonthlyFields() {
+  const catsSnap = await db.collection('categories').get();
+  let batch = db.batch();
+  let writes = 0;
+
+  for (const doc of catsSnap.docs) {
+    batch.set(doc.ref, {
+      ggCoinsGathered: { lastMonth: 0 },
+      ggCoinsDistributed: { lastMonth: 0 },
+      gamesPlayed: { lastMonth: 0 },
+    }, { merge: true });
+    writes++;
+
+    if (writes >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      writes = 0;
+    }
+  }
+  if (writes) await batch.commit();
+}
+
+async function resetGamesMonthlyFields() {
+  const gamesSnap = await db.collection('games').get();
+  let batch = db.batch();
+  let writes = 0;
+
+  for (const doc of gamesSnap.docs) {
+    batch.set(doc.ref, {
+      ggCoinsGathered: { lastMonth: 0 },
+      ggCoinsDistributed: { lastMonth: 0 },
+      gamesPlayed: { lastMonth: 0 },
+    }, { merge: true });
+    writes++;
+
+    if (writes >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      writes = 0;
+    }
+  }
+  if (writes) await batch.commit();
+}
+
+// Month Rollover Function
+async function ensurePlatformStatsMonthRollover() {
+  const statsRef = db.collection('platform').doc('stats');
+  const nowPeriod = getMonthPeriod();
+
+  // Read current stats once
+  const snap = await statsRef.get();
+
+  if (!snap.exists) {
+    // Create minimal doc with required maps
+    await statsRef.set({
+      currentMonthPeriod: nowPeriod,
+      lastMonthPeriod: null,
+      ggCoinsDeposited: { allTime: 0, lastMonth: 0 },
+      ggCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
+      totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
+      totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      categories: {} // will be filled by your aggregation or economy endpoints later
+    }, { merge: true });
+    return;
+  }
+
+  const data = snap.data() || {};
+  const storedPeriod = data.currentMonthPeriod;
+
+  // If no month change, just touch lastUpdated
+  if (storedPeriod === nowPeriod) {
+    await statsRef.set({ lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return;
+  }
+
+  // Month changed: zero all lastMonth counters mentioned above
+  const platUpdate = {
+    currentMonthPeriod: nowPeriod,
+    lastMonthPeriod: storedPeriod || null,
+    'ggCoinsDeposited.lastMonth': 0,
+    'ggCoinsWithdrawn.lastMonth': 0,
+    'totalGGCoinsGathered.lastMonth': 0,
+    'totalGGCoinsDistributed.lastMonth': 0,
+    lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  const categoriesNode = data.categories || {};
+  const catKeys = Object.keys(categoriesNode);
+  for (const catKey of catKeys) {
+    platUpdate[`categories.${catKey}.ggCoinsGathered.lastMonth`] = 0;
+    platUpdate[`categories.${catKey}.ggCoinsDistributed.lastMonth`] = 0;
+    // If you later want monthly reset for plays:
+    // platUpdate[`categories.${catKey}.gamesPlayed.lastMonth`] = 0;
+  }
+
+  // Update platform stats doc
+  await statsRef.update(platUpdate);
+
+  // Reset in categories collection and games collection
+  await resetCategoriesMonthlyFields();
+  await resetGamesMonthlyFields();
+}
+
+
 // 3) Helper: resolve SOL price on server
 async function fetchSolPrice() {
   try {
@@ -835,32 +944,43 @@ cron.schedule('*/5 * * * *', updateALLUsersOnlineStatus);
 /* -------------------------------------------------------------------------- */
 /* Economy Endpoints                                                          */
 /* -------------------------------------------------------------------------- */
+
 app.post('/economy/play', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
   if (!gameId || !category || typeof amount !== 'number' || amount <= 0)
     return res.status(400).json({ success:false, message:'Invalid payload.' });
   try {
+    await ensurePlatformStatsMonthRollover(); // <-- added
     await applyEconomyDeltas({ gameId, category, gatheredDelta: amount, incrementPlay:true });
     res.json({ success:true, type:'play', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
     res.status(500).json({ success:false, message:e.message });
   }
 });
+
 app.post('/economy/reward', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
   if (!gameId || !category || typeof amount !== 'number' || amount <= 0)
     return res.status(400).json({ success:false, message:'Invalid payload.' });
   try {
+    await ensurePlatformStatsMonthRollover(); // <-- added
     await applyEconomyDeltas({ gameId, category, distributedDelta: amount });
     res.json({ success:true, type:'reward', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
     res.status(500).json({ success:false, message:e.message });
   }
 });
+
+
 app.post('/economy/bulk', protect, async (req,res)=>{
-  const { entries } = req.body;
+   const { entries } = req.body;
   if (!Array.isArray(entries) || !entries.length)
     return res.status(400).json({ success:false, message:'entries array required.' });
+  try {
+    await ensurePlatformStatsMonthRollover(); // <-- added
+  } catch (e) {
+    return res.status(500).json({ success:false, message:'Failed month rollover check.' });
+  }
   const results = [];
   for (const entry of entries) {
     const { gameId, category, gathered=0, distributed=0, incrementPlay=false } = entry;
@@ -950,7 +1070,7 @@ app.post('/cashier/deposit', protect, async (req, res) => {
 
       // Increment platform stats (deposit totals)
       t.set(statsRef, {
-        ggCoinsDeposited: {
+        totalGGCoinsDeposited: {
           allTime: admin.firestore.FieldValue.increment(credit),
           lastMonth: admin.firestore.FieldValue.increment(credit),
         },
@@ -1026,7 +1146,7 @@ app.post('/cashier/withdraw', protect, async (req, res) => {
       // Debit user GG and increment platform withdrawn totals
       t.update(userRef, { 'coins.gg': currentGG - ggAmount });
       t.set(statsRef, {
-        ggCoinsWithdrawn: {
+         totalGGCoinsWithdrawn: {
           allTime: admin.firestore.FieldValue.increment(ggAmount),
           lastMonth: admin.firestore.FieldValue.increment(ggAmount),
         },

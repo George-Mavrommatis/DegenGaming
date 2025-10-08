@@ -3,7 +3,7 @@ import Modal from "react-modal";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { toast } from "react-toastify";
-import { api } from "../services/api";
+import { apiService } from "../services/api";
 import { useProfile } from "../context/ProfileContext";
 
 type Tab = "deposit" | "withdraw";
@@ -12,7 +12,8 @@ interface CashierModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultTab?: Tab;
-  platformSolAddress?: string; // default from .env or hardcoded
+  onSuccess?: () => Promise<void> | void;
+  platformSolAddress?: string;
 }
 
 const INT_ONLY = /^[0-9]+$/;
@@ -21,6 +22,7 @@ export default function CashierModal({
   isOpen,
   onClose,
   defaultTab = "deposit",
+  onSuccess,
   platformSolAddress = import.meta.env.VITE_PLATFORM_WALLET_PUBLIC_KEY || "4TA49YPJRYbQF5riagHj3DSzDeMek9fHnXChQpgnKkzy",
 }: CashierModalProps) {
   const { connection } = useConnection();
@@ -28,18 +30,22 @@ export default function CashierModal({
   const { profile, refreshProfile } = useProfile();
 
   const [tab, setTab] = useState<Tab>(defaultTab);
-  const [amountStr, setAmountStr] = useState("10"); // integer GG coins
+  const [amountStr, setAmountStr] = useState("10");
   const [solUsd, setSolUsd] = useState<number>(0);
   const [loading, setLoading] = useState(false);
 
+  // Sync tab on open/default changes and clear input
+  useEffect(() => {
+    if (isOpen) {
+      setTab(defaultTab);
+      setAmountStr("10");
+    }
+  }, [isOpen, defaultTab]);
+
   const amount = useMemo(() => {
     if (!INT_ONLY.test(amountStr)) return 0;
-    try {
-      const n = parseInt(amountStr, 10);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    } catch {
-      return 0;
-    }
+    const n = parseInt(amountStr, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }, [amountStr]);
 
   const computedSol = useMemo(() => {
@@ -51,8 +57,8 @@ export default function CashierModal({
     if (!isOpen) return;
     (async () => {
       try {
-        const { data } = await api.get("/api/prices");
-        if (data?.solUsd) setSolUsd(Number(data.solUsd));
+        const data = await apiService.getSolPrice();
+        if ((data as any)?.solUsd) setSolUsd(Number((data as any).solUsd));
       } catch {
         toast.error("Failed to fetch SOL price.");
       }
@@ -69,6 +75,19 @@ export default function CashierModal({
     if (INT_ONLY.test(raw)) setAmountStr(raw);
   }
 
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Block non-numeric controls like e, +, -, ., etc.
+    if (["e", "E", "+", "-", ".", ","].includes(e.key)) e.preventDefault();
+  }
+
+  async function afterSuccess() {
+    try {
+      await refreshProfile?.();
+      if (onSuccess) await onSuccess();
+    } catch { /* no-op */ }
+    onClose();
+  }
+
   async function handleDeposit() {
     if (!amount) return toast.warn("Enter a positive integer GG Coins amount.");
     if (!wallet.connected || !wallet.publicKey) return toast.error("Connect your wallet first.");
@@ -76,12 +95,11 @@ export default function CashierModal({
 
     try {
       setLoading(true);
-
-      // Compute lamports to send
       if (!solUsd || solUsd <= 0) throw new Error("Invalid SOL price.");
-      const lamports = Math.ceil((amount / solUsd) * LAMPORTS_PER_SOL);
 
+      const lamports = Math.ceil((amount / solUsd) * LAMPORTS_PER_SOL);
       const toPubkey = new PublicKey(platformSolAddress);
+
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: wallet.publicKey!,
@@ -96,14 +114,13 @@ export default function CashierModal({
       const signature = await wallet.sendTransaction(tx, connection);
       await connection.confirmTransaction(signature, "confirmed");
 
-      // Notify backend to credit integer GG (server computes from tx)
-      const resp = await api.post("/cashier/deposit", { txSignature: signature });
-      if (resp.data?.success) {
+      // Notify backend to credit integer GG
+      const resp = await apiService.cashierDeposit({ txSignature: signature });
+      if ((resp as any)?.success) {
         toast.success(`Deposited ${amount} GG Coins (tx: ${signature.slice(0, 8)}...)`);
-        await refreshProfile?.();
-        onClose();
+        await afterSuccess();
       } else {
-        throw new Error(resp.data?.message || "Deposit failed");
+        throw new Error((resp as any)?.message || "Deposit failed");
       }
     } catch (e: any) {
       console.error("Deposit error:", e);
@@ -121,18 +138,16 @@ export default function CashierModal({
 
     try {
       setLoading(true);
-      // Server will send SOL to the connected wallet and debit integer GG
-      const resp = await api.post("/cashier/withdraw", {
+      const resp = await apiService.cashierWithdraw({
         ggAmount: amount,
         destinationWallet: wallet.publicKey!.toBase58(),
       });
-      if (resp.data?.success) {
-        const tx = resp.data?.txSignature;
+      if ((resp as any)?.success) {
+        const tx = (resp as any)?.txSignature;
         toast.success(`Withdrew ${amount} GG Coins${tx ? ` (tx: ${tx.slice(0, 8)}...)` : ""}`);
-        await refreshProfile?.();
-        onClose();
+        await afterSuccess();
       } else {
-        throw new Error(resp.data?.message || "Withdraw failed");
+        throw new Error((resp as any)?.message || "Withdraw failed");
       }
     } catch (e: any) {
       console.error("Withdraw error:", e);
@@ -142,13 +157,16 @@ export default function CashierModal({
     }
   }
 
+  const ggBalance = Number(profile?.coins?.gg ?? 0);
+  const canSubmit = amount > 0 && (!loading);
+
   return (
     <Modal
       isOpen={isOpen}
       onRequestClose={() => !loading && onClose()}
       style={{
         overlay: { background: "rgba(0,0,0,0.7)", zIndex: 10000 },
-        content: { inset: "auto", margin: "auto", maxWidth: 480, borderRadius: 16, padding: 0, background: "transparent" },
+        content: { inset: "auto", margin: "auto", maxWidth: 520, borderRadius: 16, padding: 0, background: "transparent" },
       }}
       contentLabel="Cashier"
     >
@@ -173,14 +191,13 @@ export default function CashierModal({
 
         {/* Body */}
         <div className="p-5 space-y-4">
-          <div className="text-sm text-zinc-300">
-            1 GG Coin = $1. Enter an integer amount of GG Coins.
-          </div>
+          <div className="text-sm text-zinc-300">1 GG Coin = $1. Amounts must be integers.</div>
 
           <div className="flex items-center gap-2">
             <input
               value={amountStr}
               onChange={onInput}
+              onKeyDown={onKeyDown}
               inputMode="numeric"
               pattern="[0-9]*"
               placeholder="Amount (integer)"
@@ -198,21 +215,27 @@ export default function CashierModal({
                   {n}
                 </button>
               ))}
+              {tab === "withdraw" && (
+                <button
+                  className="px-3 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg"
+                  onClick={() => setAmountStr(String(Math.max(0, Math.floor(ggBalance))))}
+                  disabled={loading || ggBalance <= 0}
+                  title="Max GG balance"
+                >
+                  MAX
+                </button>
+              )}
             </div>
           </div>
 
           <div className="text-xs text-zinc-400 space-y-1">
             <div>SOL price: {solUsd ? `$${solUsd.toFixed(2)}` : "…"}</div>
             {tab === "deposit" && (
-              <div>
-                Estimated SOL to send: {solUsd ? `${computedSol.toFixed(6)} SOL` : "…"}
-              </div>
+              <div>Estimated SOL to send: {solUsd ? `${computedSol.toFixed(6)} SOL` : "…"}</div>
             )}
             <div>Your wallet: {wallet.publicKey?.toBase58() || "Not connected"}</div>
-            {tab === "deposit" && (
-              <div>Platform wallet: {platformSolAddress}</div>
-            )}
-            <div>Your GG balance: {Number(profile?.coins?.gg ?? 0)}</div>
+            {tab === "deposit" && <div>Platform wallet: {platformSolAddress}</div>}
+            <div>Your GG balance: {ggBalance}</div>
           </div>
 
           <div className="flex gap-3 pt-1">
@@ -227,7 +250,7 @@ export default function CashierModal({
               <button
                 className="flex-1 py-3 rounded-lg bg-yellow-600 hover:bg-yellow-500 font-bold"
                 onClick={handleDeposit}
-                disabled={loading || !amount || !solUsd}
+                disabled={loading || !amount || !solUsd || !wallet.connected}
               >
                 {loading ? "Processing…" : "Deposit"}
               </button>
@@ -235,7 +258,7 @@ export default function CashierModal({
               <button
                 className="flex-1 py-3 rounded-lg bg-yellow-600 hover:bg-yellow-500 font-bold"
                 onClick={handleWithdraw}
-                disabled={loading || !amount}
+                disabled={loading || !amount || !wallet.connected}
               >
                 {loading ? "Processing…" : "Withdraw"}
               </button>

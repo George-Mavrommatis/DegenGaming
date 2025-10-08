@@ -1,15 +1,10 @@
 /**
- * DegenGaming Frontend API Layer (Fixed HTTP methods + refined public detection)
- *
- * Root cause of 404s:
- *   Previous apiCall defaulted to POST, so GET-only routes (/friends, /onlineUsers, etc.)
- *   were being hit with POST and returned 404 (no matching Express route).
- *
- * Fixes:
- *  - apiCall now auto-selects GET when no body data and no explicit method provided.
- *  - All service methods specify the proper HTTP verb (or rely on auto GET).
- *  - Public endpoint detection refined (leaderboard submit-score now protected).
- *  - Added method-aware isPublic check.
+ * DegenGaming Frontend API Layer
+ * - Auth-bearing requests via Firebase token
+ * - Smart method inference (GET when no data)
+ * - Public route detection
+ * - 401 retry with forced token refresh
+ * - Sensible defaults (timeout)
  */
 
 import axios, {
@@ -27,30 +22,26 @@ const WAIT_FOR_AUTH_INIT = true;
 
 /* ---------------------------- Public Endpoint Set --------------------------- */
 /**
- * Only endpoints that never need auth.
- * NOTE: Leaderboard submission is PROTECTED, only fetching specific leaderboard (GET /leaderboards/:id) should be public.
+ * Endpoints that never require auth.
+ * NOTE:
+ *  - Submit score is PROTECTED; leaderboard fetch is public GET.
  */
 const PUBLIC_EXACT = new Set([
   '/',                 // health
   '/register',
   '/login',
-  '/verify-wallet',    // we allow obtaining custom token
+  '/verify-wallet',
   '/platform-stats',
-  '/api/prices'
+  '/api/prices',
 ]);
 
-/**
- * Determine if route is public. Some patterns (leaderboards fetch) are GET-only.
- */
 function isPublic(url?: string, method?: string): boolean {
   if (!url) return false;
   const m = (method || 'GET').toUpperCase();
   const path = url.startsWith('/') ? url : `/${url}`;
   if (PUBLIC_EXACT.has(path)) return true;
-
-  // Allow read-only leaderboard GETs: /leaderboards/:gameId (not submit-score)
+  // Allow read-only leaderboard GETs
   if (m === 'GET' && path.startsWith('/leaderboards/')) return true;
-
   return false;
 }
 
@@ -84,7 +75,9 @@ export interface VerifyWalletPayload { address: string; signedMessage: string; n
 /* --------------------------------- Axios ----------------------------------- */
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: { 'Content-Type': 'application/json' }
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 15000, // 15s
+  withCredentials: false
 });
 
 // Extend request config for retry flag
@@ -114,9 +107,6 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
     } else if (DEBUG) {
       console.warn('[api] No currentUser for protected request:', config.url);
     }
-  } else if (DEBUG) {
-    // Optional debug
-    // console.log('[api] Public request:', method, config.url);
   }
   return config;
 });
@@ -137,7 +127,7 @@ apiClient.interceptors.response.use(
         if (user) {
           await user.getIdToken(true); // force refresh
           const refreshed = await user.getIdToken();
-            original.headers = { ...(original.headers || {}), Authorization: `Bearer ${refreshed}` };
+          original.headers = { ...(original.headers || {}), Authorization: `Bearer ${refreshed}` };
           if (DEBUG) console.log('[api] Retrying after forced refresh:', original.url);
           return apiClient(original);
         }
@@ -147,7 +137,7 @@ apiClient.interceptors.response.use(
     }
 
     let message = 'Unexpected error.';
-    if (status === 401) message = error.response?.data?.message || 'Unauthorized / session expired.';
+    if (status === 401) message = (error.response?.data as any)?.message || 'Unauthorized / session expired.';
     else if (status === 403) message = 'Forbidden.';
     else if (status === 404) message = `Not found: ${original?.url}`;
     else if (status && status >= 500) message = 'Server error.';
@@ -169,13 +159,6 @@ apiClient.interceptors.response.use(
 );
 
 /* -------------------- Generic Request (method inference) ------------------- */
-/**
- * apiCall:
- *  - If method explicitly provided, use it.
- *  - If not provided:
- *      - If data is undefined/null => GET
- *      - Else => POST
- */
 function apiCall<T = any>(
   url: string,
   data?: any,
@@ -286,12 +269,6 @@ export const apiService = {
     apiCall('/chats/findOrCreate', { targetUid }, 'POST'),
   sendChatMessage: (chatId: string, text: string) =>
     apiCall(`/chats/${chatId}/messages`, { text }, 'POST'),
-
-  /* Scoreboards / other placeholder */
-  getGameHistory: async () => {
-    console.warn('[api] /user/game-history not implemented.');
-    return { message: 'Not implemented' };
-  },
 };
 
 export { apiCall };

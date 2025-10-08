@@ -7,10 +7,10 @@ import { useProfile } from "../context/ProfileContext";
 import { Link } from 'react-router-dom';
 import { FaEdit, FaHistory, FaGamepad, FaCoins, FaWallet } from 'react-icons/fa';
 import UserDashboard from "../components/UserDashboard";
-import Cashier from "../components/Cashier";
+import CashierModal from "../components/CashierModal";
 
 const DEFAULT_AVATAR = "/placeholder-avatar.png";
-const GG_COIN_ICON = "/assets/ggcoin.png"; // Ensure this asset exists
+const GG_COIN_ICON = "/assets/ggcoin.png";
 
 export default function Profile() {
   const { user, profile, updateUserProfile, refreshProfile, loading, isAuthenticated } = useProfile();
@@ -23,6 +23,10 @@ export default function Profile() {
   const [usernameError, setUsernameError] = useState("");
   const [usernameChecking, setUsernameChecking] = useState(false);
   const usernameInputRef = useRef<HTMLInputElement>(null);
+
+  // Cashier modal state
+  const [cashierOpen, setCashierOpen] = useState(false);
+  const [cashierDefaultTab, setCashierDefaultTab] = useState<"deposit" | "withdraw">("deposit");
 
   useEffect(() => {
     if (!loading) {
@@ -81,31 +85,19 @@ export default function Profile() {
     }
   }, []);
 
-  const checkUsernameUnique = useCallback(async (username: string) => {
-    const trimmedUsername = username.trim().toLowerCase();
-    if (!trimmedUsername || (profile && trimmedUsername === (profile.usernameLowercase || "").toLowerCase())) {
-      setUsernameError("");
-      return true;
-    }
-    setUsernameChecking(true);
-    try {
-      setUsernameError("");
-      return true;
-    } catch (error) {
-      setUsernameError("Error checking username. Please try again.");
-      return false;
-    } finally {
-      setUsernameChecking(false);
-    }
-  }, [profile, user]);
+  const checkUsernameUnique = useCallback(async (_username: string) => {
+    // TODO: add uniqueness check if you want it enforced here
+    setUsernameError("");
+    return true;
+  }, []);
 
   const handleUsernameBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    if (e.target.value.trim().toLowerCase() !== (profile?.usernameLowercase || '').toLowerCase()) {
-      checkUsernameUnique(e.target.value);
+    if ((e.target.value || '').trim().length === 0) {
+      setUsernameError("Username cannot be empty.");
     } else {
       setUsernameError("");
     }
-  }, [profile, checkUsernameUnique]);
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!user) {
@@ -149,7 +141,7 @@ export default function Profile() {
     } finally {
       setSaving(false);
     }
-  }, [user, avatarFile, form, checkUsernameUnique, updateUserProfile, refreshProfile]);
+  }, [user, avatarFile, form, updateUserProfile, refreshProfile, checkUsernameUnique]);
 
   if (loading) {
     return <div className="text-center text-white mt-20 text-xl font-bold animate-pulse">Loading Profile...</div>;
@@ -183,15 +175,33 @@ export default function Profile() {
             </div>
             <h2 className="text-2xl font-bold mb-1 text-yellow-300 font-orbitron">{form.username || "Guest Player"}</h2>
             <p className="font-mono text-gray-400">{form.wallet || "No Wallet Connected"}</p>
+
             <div className="mt-6 w-full flex flex-col gap-2">
-              {/* GG Coins Card - yellow border */}
-              <div className="rounded-lg bg-black/60 shadow p-4 flex items-center justify-between border-2 border-yellow-400">
-                <span className="text-lg font-bold text-yellow-400 flex items-center gap-2">
-                  <img src={GG_COIN_ICON} alt="GG Coin" className="w-7 h-7 inline-block" />
-                  GG Coins
-                </span>
-                <span className="text-2xl font-bold text-yellow-200">{ggCoins.toLocaleString()}</span>
+              {/* GG Coins Card */}
+              <div className="rounded-lg bg-black/60 shadow p-4 border-2 border-yellow-400">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-bold text-yellow-400 flex items-center gap-2">
+                    <img src={GG_COIN_ICON} alt="GG Coin" className="w-7 h-7 inline-block" />
+                    GG Coins
+                  </span>
+                  <span className="text-2xl font-bold text-yellow-200">{ggCoins.toLocaleString()}</span>
+                </div>
+                <div className="mt-3 flex gap-3">
+                  <button
+                    className="px-4 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-500 font-bold"
+                    onClick={() => { setCashierDefaultTab("deposit"); setCashierOpen(true); }}
+                  >
+                    Deposit
+                  </button>
+                  <button
+                    className="px-4 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 font-bold"
+                    onClick={() => { setCashierDefaultTab("withdraw"); setCashierOpen(true); }}
+                  >
+                    Withdraw
+                  </button>
+                </div>
               </div>
+
               {/* XP Card */}
               <div className="rounded-lg bg-black/60 shadow p-4 border border-purple-400 mt-4">
                 <div className="flex items-center justify-between">
@@ -204,10 +214,11 @@ export default function Profile() {
                 </div>
               </div>
             </div>
-          <Cashier ggCoins={ggCoins} /> 
+
             <UserDashboard profile={form} />
           </div>
         </div>
+
         {/* Edit Profile + Recent Games Column */}
         <div className="md:col-span-2 flex flex-col gap-8">
           <div className="w-full rounded-xl bg-[#232946] p-8 shadow-xl border border-purple-600 mb-8">
@@ -246,6 +257,7 @@ export default function Profile() {
                   <input type="text" name="discord" value={form.discord ?? ""} onChange={handleChange} className="w-full p-2 bg-gray-900 rounded border border-gray-700" />
                 </div>
               </div>
+
               <div className="flex gap-6 mt-4">
                 <label className="flex gap-2 items-center text-xs cursor-pointer">
                   <input
@@ -277,6 +289,7 @@ export default function Profile() {
               </div>
             </div>
           </div>
+
           {/* Recent Games Grid */}
           <div className="w-full rounded-xl bg-[#181b24] p-8 shadow-xl border border-gray-700">
             <div className="flex justify-between items-center mb-4">
@@ -286,7 +299,7 @@ export default function Profile() {
               </Link>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 6).map((game, idx) => (
+              {form.recentGames && form.recentGames.length > 0 ? form.recentGames.slice(0, 6).map((game: RecentGame, idx: number) => (
                 <div key={idx} className="bg-black/80 p-4 rounded-xl flex flex-col items-start border border-gray-700 shadow">
                   <div className="flex items-center gap-3 mb-1">
                     <FaGamepad className="text-purple-400" />
@@ -300,6 +313,14 @@ export default function Profile() {
           </div>
         </div>
       </div>
+
+      {/* Cashier Modal */}
+      <CashierModal
+        isOpen={cashierOpen}
+        onClose={() => setCashierOpen(false)}
+        defaultTab={cashierDefaultTab}
+        onSuccess={refreshProfile}
+      />
     </div>
   );
 }
