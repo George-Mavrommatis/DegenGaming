@@ -1,26 +1,21 @@
 /**
- * DegenGaming Backend (Consolidated / Fixed)
+ * DegenGaming Backend (Unified)
  *
  * Includes:
  *  - Auth (email/password + wallet verify)
  *  - Presence (Socket.IO + cron cleanup)
  *  - GG Coins Economy (economy/play, reward, bulk, snapshot)
- *  - Direct increment endpoints (ggCoins & legacy sol) – still present for compatibility
- *  - Cashier (deposit / withdraw) tracking total GG coins deposited / withdrawn
+ *  - Direct increment endpoints (ggCoins & legacy sol) – retained
+ *  - Cashier (deposit / withdraw)
  *  - Free Entry Tokens (generate / consume)
  *  - Picker session tokens
  *  - Chats, Friends, Leaderboards
  *  - Platform stats aggregation cron
  *  - Migration helpers (normalize games)
  *
- * Fixes / Improvements vs previous version you posted:
- *  - Removed duplicate /platform-stats declarations
- *  - Chunked /friends, /friend-requests/sent, /friend-requests/received queries (Firestore 'in' limit)
- *  - Added defensive logging hooks (commented out by default) in protect middleware
- *  - Removed duplicate increment-sol-gathered definition
- *  - Fixed run() calling ensureCategoryDoc with no parameter (removed invalid call)
- *  - Normalized ensurePlatformStatsBase usage
- *  - Added helper to safely update economy maps
+ * CHANGE (2025-10-01):
+ *  - Inlined chatService.js logic here (initializeChatService, findOrCreateChat, sendMessage,
+ *    getUserChats, backfillChatLastMessageAt) to eliminate duplicate export/import issues.
  */
 
 import dotenv from 'dotenv';
@@ -59,21 +54,11 @@ import * as cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
-
-import {
-  initializeChatService,
-  findOrCreateChat,
-  sendMessage,
-  getUserChats,
-  backfillChatLastMessageAt
-} from './services/chatService.js';
-
 /* -------------------------------------------------------------------------- */
 /* Firebase Initialization                                                    */
 /* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
 
 let db;
@@ -89,7 +74,6 @@ try {
 
   db = getFirestore();
   auth = getAuth();
-  initializeChatService(db, admin);
   console.log('[INIT] Firebase initialized.');
 } catch (error) {
   console.error('[INIT] Failed to initialize Firebase:', error);
@@ -97,7 +81,203 @@ try {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Solana (optional / legacy token usage)                                     */
+/* Chat Service (Inlined)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * (Optional) Initialization marker. We already have db/admin, so this just logs once.
+ */
+let chatServiceReady = false;
+const initializeChatService = () => {
+  if (!chatServiceReady) {
+    console.log('[CHAT] Inlined chat service initialized.');
+    chatServiceReady = true;
+  }
+};
+
+/**
+ * Finds or creates a 1:1 chat between two users.
+ * Ensures participants are sorted for idempotent detection.
+ */
+const findOrCreateChat = async (user1Uid, user2Uid) => {
+  if (!db) throw new Error('Firestore not initialized.');
+  if (!user1Uid || !user2Uid || user1Uid === user2Uid) {
+    throw new Error('Invalid participant UIDs.');
+  }
+
+  const participants = [user1Uid, user2Uid].sort();
+  const chatsRef = db.collection('chats');
+
+  const existingSnap = await chatsRef
+    .where('participants', 'array-contains', user1Uid)
+    .get();
+
+  let existingChat = null;
+  existingSnap.forEach(doc => {
+    const data = doc.data();
+    const list = data.participants || [];
+    if (list.length === 2 && list.includes(user2Uid) && list.includes(user1Uid)) {
+      existingChat = { id: doc.id, ...data };
+    }
+  });
+
+  if (existingChat) {
+    return {
+      chatId: existingChat.id,
+      participants: existingChat.participants,
+      lastMessage: existingChat.lastMessage || null,
+      lastMessageAt: existingChat.lastMessageAt || null,
+      createdAt: existingChat.createdAt || null
+    };
+  }
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const newDoc = await chatsRef.add({
+    participants,
+    createdAt: now,
+    lastMessageAt: now,
+    lastMessage: null
+  });
+
+  return {
+    chatId: newDoc.id,
+    participants,
+    lastMessage: null,
+    lastMessageAt: null,
+    createdAt: null
+  };
+};
+
+/**
+ * Sends a message and updates lastMessage + lastMessageAt on the chat.
+ */
+const sendMessage = async (chatId, senderUid, text) => {
+  if (!db) throw new Error('Firestore not initialized.');
+  if (!chatId || !senderUid || !text) throw new Error('Missing chat message params.');
+
+  const chatRef = db.collection('chats').doc(chatId);
+  const chatSnap = await chatRef.get();
+  if (!chatSnap.exists) throw new Error('Chat not found.');
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  await chatRef.collection('messages').add({
+    from: senderUid,
+    text,
+    sentAt: now
+  });
+
+  await chatRef.update({
+    lastMessage: { from: senderUid, text, sentAt: now },
+    lastMessageAt: now
+  });
+};
+
+/**
+ * Returns list of chats for a user (ordering by lastMessageAt if index exists).
+ */
+const getUserChats = async (currentUserId) => {
+  if (!db) throw new Error('Firestore not initialized.');
+  if (!currentUserId) return [];
+
+  try {
+    const snap = await db.collection('chats')
+      .where('participants', 'array-contains', currentUserId)
+      .get();
+
+    const chats = [];
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data() || {};
+      const participants = Array.isArray(data.participants) ? data.participants : [];
+      const otherId = participants.find(p => p !== currentUserId);
+
+      // Resolve friend info
+      let friend = null;
+      if (otherId) {
+        const uSnap = await db.collection('users').doc(otherId).get();
+        if (uSnap.exists) {
+          const u = uSnap.data();
+            friend = {
+            uid: otherId,
+            username: u.username || otherId,
+            avatarUrl: u.avatarUrl || '/avatars/default.png',
+            isOnline: !!u.isOnline
+          };
+        }
+      }
+
+      // Normalize lastMessage
+      let lastMessage = null;
+      if (data.lastMessage && typeof data.lastMessage === 'object') {
+        const lm = data.lastMessage;
+        const sentAtDate = safeToDate(lm.sentAt);
+        lastMessage = {
+          from: lm.from || null,
+          text: lm.text || '',
+          sentAt: sentAtDate
+        };
+      }
+
+      const createdAtDate = safeToDate(data.createdAt) || new Date(0);
+      const lastMessageAtDate = safeToDate(data.lastMessageAt);
+
+      chats.push({
+        chatId: docSnap.id,
+        participants,
+        friend,
+        lastMessage,
+        createdAt: createdAtDate,
+        lastMessageAt: lastMessageAtDate,
+        usedFallback: true
+      });
+    }
+
+    // Sort newest first by lastMessageAt then createdAt
+    chats.sort((a, b) => {
+      const aT = (a.lastMessageAt || a.lastMessage?.sentAt || a.createdAt).getTime();
+      const bT = (b.lastMessageAt || b.lastMessage?.sentAt || b.createdAt).getTime();
+      return bT - aT;
+    });
+
+    return chats;
+  } catch (e) {
+    console.error('[CHAT] getUserChats (safe) error:', e);
+    return [];
+  }
+};
+/**
+ * Backfill lastMessageAt for older chat documents missing that field.
+ */
+const backfillChatLastMessageAt = async () => {
+  if (!db) throw new Error('Firestore not initialized.');
+  const all = await db.collection('chats').get();
+  let batch = db.batch();
+  let ops = 0;
+
+  for (const doc of all.docs) {
+    const data = doc.data();
+    if (!data.lastMessageAt) {
+      batch.update(doc.ref, {
+        lastMessageAt: data.createdAt || admin.firestore.FieldValue.serverTimestamp()
+      });
+      ops++;
+      if (ops === 400) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+        console.log('[CHAT] Partial backfill commit.');
+      }
+    }
+  }
+  if (ops) await batch.commit();
+  console.log('[CHAT] Backfill complete.');
+};
+
+// Initialize the chat service (just logs; real resources already set)
+initializeChatService();
+
+/* -------------------------------------------------------------------------- */
+/* Solana (optional / legacy)                                                 */
 /* -------------------------------------------------------------------------- */
 const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL;
 const connection = new Connection(SOLANA_CLUSTER, 'confirmed');
@@ -113,14 +293,84 @@ if (ADMIN_WALLET_PRIVATE_KEY_BASE58) {
     console.error('[SOLANA] Failed to decode admin wallet key:', e.message);
   }
 } else {
-  console.warn('[SOLANA] ADMIN_WALLET_PRIVATE_KEY_BASE58 not set (some features disabled).');
+  console.warn('[SOLANA] ADMIN_WALLET_PRIVATE_KEY_BASE58 not set (on-chain payouts disabled).');
 }
 
 const PLATFORM_SOL_ADDRESS = process.env.PLATFORM_SOL_ADDRESS ||
   (adminWalletKeypair ? adminWalletKeypair.publicKey.toBase58() : null);
 
-let gameTokenMint = null; // assign later if using a token mint
+let gameTokenMint = null; // optional custom token mint
 const GAME_TOKEN_DECIMALS = 9;
+
+
+/* -------------------------------------------------------------------------- */
+/* Get Solana Price          & Month                                          */
+/* -------------------------------------------------------------------------- */
+
+// 2) Helper: current month key "YYYY-MM"
+function getMonthPeriod(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}`;
+}
+
+// 3) Helper: resolve SOL price on server
+async function fetchSolPrice() {
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const j = await r.json();
+    return Number(j?.solana?.usd) || 0;
+  } catch (e) {
+    console.error('fetchSolPrice failed:', e);
+    return 0;
+  }
+}
+
+// 4) Helper: ensure platform/stats exists (minimal) and reset lastMonth on month change
+async function ensurePlatformStatsMonthRollover() {
+  const statsRef = db.collection('platform').doc('stats');
+  await db.runTransaction(async (t) => {
+    const snap = await t.get(statsRef);
+    const nowPeriod = getMonthPeriod();
+
+    if (!snap.exists) {
+      // Create minimal doc with required maps
+      t.set(statsRef, {
+        currentMonthPeriod: nowPeriod,
+        lastMonthPeriod: null,
+        ggCoinsDeposited: { allTime: 0, lastMonth: 0 },
+        ggCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return;
+    }
+
+    const data = snap.data() || {};
+    const storedPeriod = data.currentMonthPeriod;
+
+    // If a new month has begun, zero out lastMonth for the two cashier maps
+    if (storedPeriod !== nowPeriod) {
+      t.update(statsRef, {
+        currentMonthPeriod: nowPeriod,
+        lastMonthPeriod: storedPeriod || null,
+        'ggCoinsDeposited.lastMonth': 0,
+        'ggCoinsWithdrawn.lastMonth': 0,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Touch lastUpdated occasionally
+      t.set(statsRef, { lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+  });
+}
+
+// 5) Schedule automatic rollover at midnight on the 1st of each month
+//    This complements the "call before deposit/withdraw" safety checks.
+cron.schedule('0 0 1 * *', ensurePlatformStatsMonthRollover);
+
+// 6) Cashier: DEPOSIT (1 GG = $1; integer-only credit)
+//    - If txSignature is provided, verify on-chain SOL delta to platform address.
+//    - Convert SOL to $ via SOL price, credit integer GG = floor(sol * price).
+//    - Increment platform stats: ggCoinsDeposited.{allTime,lastMonth}
+
 
 /* -------------------------------------------------------------------------- */
 /* Express & Socket.IO                                                        */
@@ -150,15 +400,10 @@ const CATEGORY_COLLECTION_ID_MAP = {
   picker: 'Picker',
   pvp: 'PvP',
 };
-
 const emptyStatsMap = { allTime: 0, lastMonth: 0 };
 
-function getUserDocRef(uid) {
-  return db.collection('users').doc(uid);
-}
-function validateCategory(cat) {
-  return CATEGORY_KEYS.includes((cat || '').toLowerCase());
-}
+function getUserDocRef(uid) { return db.collection('users').doc(uid); }
+function validateCategory(cat) { return CATEGORY_KEYS.includes((cat || '').toLowerCase()); }
 function getPeriodKeys(date = new Date()) {
   const y = date.getFullYear();
   const m = (date.getMonth() + 1).toString().padStart(2,'0');
@@ -172,8 +417,7 @@ async function fetchSolPrice() {
     const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
     const j = await r.json();
     return Number(j?.solana?.usd) || 0;
-  } catch (e) {
-    console.error('[PRICE] fetchSolPrice error:', e);
+  } catch {
     return 0;
   }
 }
@@ -181,8 +425,7 @@ async function getOnlineUserIds() {
   try {
     const snap = await db.collection('users').where('isOnline','==',true).get();
     return snap.docs.map(d=>d.id);
-  } catch (e) {
-    console.error('[ONLINE] getOnlineUserIds error:', e);
+  } catch {
     return [];
   }
 }
@@ -262,13 +505,10 @@ io.on('connection', (socket) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Solana token helper (legacy / optional)                                   */
+/* Legacy Solana token helpers (optional)                                    */
 /* -------------------------------------------------------------------------- */
 async function transferSolanaToken(recipientPublicKey, amount) {
-  if (!adminWalletKeypair || !gameTokenMint) {
-    console.warn('[SOLANA] transferSolanaToken aborted (wallet/mint missing).');
-    return false;
-  }
+  if (!adminWalletKeypair || !gameTokenMint) return false;
   try {
     const adminATA = await getOrCreateAssociatedTokenAccount(
       connection,
@@ -302,7 +542,6 @@ async function getTokenAccountBalance(tokenAccountPublicKey) {
     return Number(info.amount);
   } catch (e) {
     if (e.message.includes('does not exist')) return 0;
-    console.error('[SOLANA] getTokenAccountBalance error:', e);
     return 0;
   }
 }
@@ -319,8 +558,7 @@ const protect = async (req, res, next) => {
     const decoded = await auth.verifyIdToken(token);
     req.user = decoded;
     next();
-  } catch (e) {
-    // console.error('[AUTH] verifyIdToken failed:', e.code || e.message);
+  } catch {
     return res.status(401).json({ message: 'Unauthorized: Invalid or expired token.' });
   }
 };
@@ -460,7 +698,7 @@ async function updatePlatformStatsAggregatedGGCoins() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* GG Economy Core                                                            */
+/* Economy Core (applyEconomyDeltas + endpoints below)                        */
 /* -------------------------------------------------------------------------- */
 async function applyEconomyDeltas({
   gameId,
@@ -605,11 +843,9 @@ app.post('/economy/play', protect, async (req,res)=>{
     await applyEconomyDeltas({ gameId, category, gatheredDelta: amount, incrementPlay:true });
     res.json({ success:true, type:'play', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
-    console.error('/economy/play error:', e);
     res.status(500).json({ success:false, message:e.message });
   }
 });
-
 app.post('/economy/reward', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
   if (!gameId || !category || typeof amount !== 'number' || amount <= 0)
@@ -618,11 +854,9 @@ app.post('/economy/reward', protect, async (req,res)=>{
     await applyEconomyDeltas({ gameId, category, distributedDelta: amount });
     res.json({ success:true, type:'reward', amount, snapshot: await getEconomySnapshot(gameId, category) });
   } catch (e) {
-    console.error('/economy/reward error:', e);
     res.status(500).json({ success:false, message:e.message });
   }
 });
-
 app.post('/economy/bulk', protect, async (req,res)=>{
   const { entries } = req.body;
   if (!Array.isArray(entries) || !entries.length)
@@ -649,7 +883,6 @@ app.post('/economy/bulk', protect, async (req,res)=>{
   }
   res.json({ success:true, results });
 });
-
 app.post('/economy/snapshot', protect, async (req,res)=>{
   const { gameId, category } = req.body;
   if (!gameId || !category)
@@ -664,127 +897,158 @@ app.post('/economy/snapshot', protect, async (req,res)=>{
 /* -------------------------------------------------------------------------- */
 /* Cashier                                                                    */
 /* -------------------------------------------------------------------------- */
-app.post('/cashier/deposit', protect, async (req,res)=>{
+app.post('/cashier/deposit', protect, async (req, res) => {
   const { txSignature, solAmount, solPriceOverride } = req.body;
   if (!PLATFORM_SOL_ADDRESS)
-    return res.status(500).json({ message:'Platform SOL address not configured.' });
+    return res.status(500).json({ message: 'Platform SOL address not configured.' });
 
   try {
+    // Make sure lastMonth is valid for the current period
+    await ensurePlatformStatsMonthRollover();
+
     let resolvedSol = 0;
+
     if (txSignature) {
-      const tx = await connection.getTransaction(txSignature,{ commitment:'confirmed' });
-      if (!tx) return res.status(400).json({ message:'Transaction not found.' });
-      const keys = tx.transaction.message.accountKeys.map(k=>k.toBase58());
+      const tx = await connection.getTransaction(txSignature, { commitment: 'confirmed' });
+      if (!tx) return res.status(400).json({ message: 'Transaction not found.' });
+
+      const keys = tx.transaction.message.accountKeys.map(k => k.toBase58());
       const idx = keys.indexOf(PLATFORM_SOL_ADDRESS);
-      if (idx === -1) return res.status(400).json({ message:'Platform address not in transaction.' });
+      if (idx === -1) return res.status(400).json({ message: 'Platform address not in transaction.' });
+
       const pre = tx.meta?.preBalances?.[idx] ?? 0;
       const post = tx.meta?.postBalances?.[idx] ?? 0;
       const delta = post - pre;
-      if (delta <= 0) return res.status(400).json({ message:'No net SOL received.' });
+      if (delta <= 0) return res.status(400).json({ message: 'No net SOL received.' });
+
       resolvedSol = delta / LAMPORTS_PER_SOL;
     } else if (typeof solAmount === 'number' && solAmount > 0) {
+      // Fallback/manual mode (only if SOL transfer is handled externally)
       resolvedSol = solAmount;
     } else {
-      return res.status(400).json({ message:'Provide txSignature or positive solAmount.' });
+      return res.status(400).json({ message: 'Provide txSignature or positive solAmount.' });
     }
 
     const price = solPriceOverride || await fetchSolPrice();
-    if (price <= 0) return res.status(500).json({ message:'SOL price unavailable.' });
+    if (price <= 0) return res.status(500).json({ message: 'SOL price unavailable.' });
 
-    const credit = Number((resolvedSol * price).toFixed(2));
+    // Integer-only credit of GG (1 GG = $1)
+    const credit = Math.floor(resolvedSol * price);
+    if (!Number.isFinite(credit) || credit <= 0) {
+      return res.status(400).json({ message: 'Deposit too small to credit at least 1 GG Coin.' });
+    }
 
-    await db.runTransaction(async t=>{
-      const uRef = getUserDocRef(req.user.uid);
-      const sRef = db.collection('platform').doc('stats');
-      const uSnap = await t.get(uRef);
-      if (!uSnap.exists) throw new Error('User not found.');
-      const current = Number(uSnap.data()?.coins?.gg ?? 0);
+    await db.runTransaction(async (t) => {
+      const userRef = db.collection('users').doc(req.user.uid);
+      const statsRef = db.collection('platform').doc('stats');
 
-      t.update(uRef, { 'coins.gg': current + credit });
-      t.set(sRef, {
-        totalGGCoinsDeposited: {
+      const userSnap = await t.get(userRef);
+      if (!userSnap.exists) throw new Error('User not found.');
+
+      const currentGG = Number(userSnap.data()?.coins?.gg ?? 0);
+      t.update(userRef, { 'coins.gg': currentGG + credit });
+
+      // Increment platform stats (deposit totals)
+      t.set(statsRef, {
+        ggCoinsDeposited: {
           allTime: admin.firestore.FieldValue.increment(credit),
-          lastMonth: admin.firestore.FieldValue.increment(credit)
-        }
-      }, { merge:true });
+          lastMonth: admin.firestore.FieldValue.increment(credit),
+        },
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     });
 
     res.json({
-      success:true,
+      success: true,
       mode: txSignature ? 'on-chain-verified' : 'manual',
       solAmount: resolvedSol,
       solPriceUsed: price,
       ggCoinsCredited: credit,
-      txSignature: txSignature || null
+      txSignature: txSignature || null,
     });
   } catch (e) {
-    console.error('[CASHIER] deposit error:', e);
-    res.status(500).json({ success:false, message:e.message });
+    console.error('/cashier/deposit error:', e);
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-app.post('/cashier/withdraw', protect, async (req,res)=>{
+// 7) Cashier: WITHDRAW (integer-only GG; server sends SOL to user wallet)
+//    - Debit integer ggAmount.
+//    - Convert to SOL via price and send from admin wallet.
+//    - Increment ggCoinsWithdrawn.{allTime,lastMonth}
+app.post('/cashier/withdraw', protect, async (req, res) => {
   const { ggAmount, destinationWallet, solPriceOverride } = req.body;
-  if (!adminWalletKeypair) return res.status(500).json({ message:'Admin wallet unavailable.' });
-  if (typeof ggAmount !== 'number' || ggAmount <= 0)
-    return res.status(400).json({ message:'Invalid ggAmount.' });
+
+  if (!adminWalletKeypair) return res.status(500).json({ message: 'Admin wallet unavailable.' });
+  if (!Number.isInteger(ggAmount) || ggAmount <= 0)
+    return res.status(400).json({ message: 'ggAmount must be a positive integer.' });
 
   try {
+    // Make sure lastMonth is valid for the current period
+    await ensurePlatformStatsMonthRollover();
+
     const price = solPriceOverride || await fetchSolPrice();
-    if (price <= 0) return res.status(500).json({ message:'SOL price unavailable.' });
+    if (price <= 0) return res.status(500).json({ message: 'SOL price unavailable.' });
+
     const solNeeded = ggAmount / price;
     const lamports = Math.round(solNeeded * LAMPORTS_PER_SOL);
-    if (lamports <= 0) return res.status(400).json({ message:'Withdrawal < 1 lamport.' });
+    if (lamports <= 0) return res.status(400).json({ message: 'Withdrawal < 1 lamport.' });
 
     let signature = null;
-    await db.runTransaction(async t=>{
-      const uRef = getUserDocRef(req.user.uid);
-      const sRef = db.collection('platform').doc('stats');
-      const uSnap = await t.get(uRef);
-      if (!uSnap.exists) throw new Error('User not found.');
-      const data = uSnap.data();
+
+    await db.runTransaction(async (t) => {
+      const userRef = db.collection('users').doc(req.user.uid);
+      const statsRef = db.collection('platform').doc('stats');
+      const userSnap = await t.get(userRef);
+      if (!userSnap.exists) throw new Error('User not found.');
+
+      const data = userSnap.data();
       const currentGG = Number(data?.coins?.gg ?? 0);
       if (currentGG < ggAmount) throw new Error('Insufficient GG Coins.');
-      const wallet = destinationWallet || data.wallet;
-      if (!wallet) throw new Error('Destination wallet missing.');
 
+      const toWallet = destinationWallet || data.wallet;
+      if (!toWallet) throw new Error('Destination wallet missing.');
+
+      // Prepare SOL transfer from admin to user
       const tx = new Transaction().add(SystemProgram.transfer({
         fromPubkey: adminWalletKeypair.publicKey,
-        toPubkey: new PublicKey(wallet),
-        lamports
+        toPubkey: new PublicKey(toWallet),
+        lamports,
       }));
       tx.feePayer = adminWalletKeypair.publicKey;
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
       tx.recentBlockhash = blockhash;
       tx.sign(adminWalletKeypair);
-      signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight:false });
+
+      signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
       await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature }, 'confirmed');
 
-      t.update(uRef, { 'coins.gg': currentGG - ggAmount });
-      t.set(sRef, {
-        totalGGCoinsWithdrawn: {
+      // Debit user GG and increment platform withdrawn totals
+      t.update(userRef, { 'coins.gg': currentGG - ggAmount });
+      t.set(statsRef, {
+        ggCoinsWithdrawn: {
           allTime: admin.firestore.FieldValue.increment(ggAmount),
-          lastMonth: admin.firestore.FieldValue.increment(ggAmount)
-        }
-      }, { merge:true });
+          lastMonth: admin.firestore.FieldValue.increment(ggAmount),
+        },
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     });
 
     res.json({
-      success:true,
+      success: true,
       ggCoinsDebited: ggAmount,
       solAmountSent: solNeeded,
       lamportsSent: lamports,
       solPriceUsed: price,
-      txSignature: signature
+      txSignature: signature,
     });
   } catch (e) {
-    console.error('[CASHIER] withdraw error:', e);
-    res.status(500).json({ success:false, message:e.message });
+    console.error('/cashier/withdraw error:', e);
+    res.status(500).json({ success: false, message: e.message });
   }
 });
-
 /* -------------------------------------------------------------------------- */
-/* Direct Increment Endpoints (GG + Legacy SOL)                               */
+/* Direct Increment Endpoints                                                 */
 /* -------------------------------------------------------------------------- */
 app.post('/api/games/increment-ggcoins-gathered', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
@@ -804,7 +1068,6 @@ app.post('/api/games/increment-ggcoins-gathered', protect, async (req,res)=>{
     });
     res.json({ success:true });
   } catch (e) {
-    console.error('[INC] ggCoinsGathered error:', e);
     res.status(500).json({ success:false, error:e.message });
   }
 });
@@ -827,7 +1090,6 @@ app.post('/api/games/increment-ggcoins-distributed', protect, async (req,res)=>{
     });
     res.json({ success:true });
   } catch (e) {
-    console.error('[INC] ggCoinsDistributed error:', e);
     res.status(500).json({ success:false, error:e.message });
   }
 });
@@ -857,12 +1119,11 @@ app.post('/api/games/increment-games-played', protect, async (req,res)=>{
     });
     res.json({ success:true });
   } catch (e) {
-    console.error('[INC] gamesPlayed error:', e);
     res.status(500).json({ success:false, error:e.message });
   }
 });
 
-/* Legacy SOL gather endpoint retained (if still needed) */
+/* Legacy SOL gather endpoint */
 app.post('/api/games/increment-sol-gathered', protect, async (req,res)=>{
   const { gameId, category, amount } = req.body;
   const inc = Number(amount);
@@ -881,7 +1142,6 @@ app.post('/api/games/increment-sol-gathered', protect, async (req,res)=>{
     }, { merge:true });
     res.json({ success:true });
   } catch (e) {
-    console.error('[INC] solGathered error:', e);
     res.status(500).json({ success:false, error:e.message });
   }
 });
@@ -890,7 +1150,7 @@ app.post('/api/games/increment-sol-gathered', protect, async (req,res)=>{
 /* Public Base & Price                                                        */
 /* -------------------------------------------------------------------------- */
 app.get('/', (_req,res)=> res.send('GG Web3 Backend is running!'));
-app.get('/api/prices', async (_req,res)=>{
+app.get('/api/prices', async (_req,res)=> {
   res.json({ solUsd: await fetchSolPrice() });
 });
 
@@ -927,8 +1187,7 @@ app.post('/register', async (req,res)=>{
     res.status(400).json({ message: msg, code:e.code });
   }
 });
-
-app.post('/login', (_req,res)=>{
+app.post('/login', (_req,res)=> {
   res.json({ message:'Login handled via Firebase client SDK.' });
 });
 
@@ -973,7 +1232,6 @@ app.post('/verify-wallet', async (req,res)=>{
     });
     res.json({ customToken });
   } catch (e) {
-    console.error('/verify-wallet error:', e);
     res.status(500).json({ error:'Internal error' });
   }
 });
@@ -986,7 +1244,6 @@ app.get('/profile', protect, async (req,res)=>{
   if (!snap.exists) return res.status(404).json({ message:'User not found' });
   res.json(snap.data());
 });
-
 app.put('/profile', protect, async (req,res)=>{
   const allowed = ['username','avatarUrl','bio','dmsOpen','duelsOpen','twitter','discord','telegram','instagram'];
   const update = {};
@@ -996,7 +1253,6 @@ app.put('/profile', protect, async (req,res)=>{
   await getUserDocRef(req.user.uid).update(update);
   res.json({ message:'Profile updated' });
 });
-
 app.get('/users/:uid', protect, async (req,res)=>{
   const snap = await getUserDocRef(req.params.uid).get();
   if (!snap.exists) return res.status(404).json({ message:'User not found' });
@@ -1005,7 +1261,6 @@ app.get('/users/:uid', protect, async (req,res)=>{
   delete data.freeEntryTokens;
   res.json(data);
 });
-
 app.get('/api/usernames', protect, async (_req,res)=>{
   const snap = await db.collection('users').get();
   res.json(snap.docs.map(d=>{
@@ -1022,7 +1277,6 @@ app.get('/user/free-entry-tokens', protect, async (req,res)=>{
   if (!snap.exists) return res.status(404).json({ message:'User not found' });
   res.json(snap.data().freeEntryTokens || { arcade:0, picker:0, casino:0, pvp:0 });
 });
-
 app.post('/tokens/generate', protect, async (req,res)=>{
   const { tokenType } = req.body;
   const valid = ['arcade','picker','casino','pvp'];
@@ -1033,7 +1287,6 @@ app.post('/tokens/generate', protect, async (req,res)=>{
   });
   res.json({ message:'Token granted', tokenType });
 });
-
 app.post('/tokens/consume', protect, async (req,res)=>{
   const { tokenType } = req.body;
   const key = `${tokenType}Tokens`;
@@ -1082,7 +1335,6 @@ app.get('/platform-stats', async (_req,res)=>{
   }
   res.json(statsDoc.data());
 });
-
 app.get('/onlineUsers', async (_req,res)=>{
   res.json({ onlineUserIds: await getOnlineUserIds() });
 });
@@ -1112,7 +1364,6 @@ app.post('/play', protect, async (req,res)=>{
     if (!adminWalletKeypair || !gameTokenMint)
       return res.status(500).json({ error:'Server token mint not initialized.' });
 
-    // Real token transfer building omitted – left as placeholder.
     await db.collection('games').doc(gameId).set({
       gameId,
       userId,
@@ -1124,11 +1375,10 @@ app.post('/play', protect, async (req,res)=>{
     }, { merge:true });
 
     res.json({ success:true, message:'Game initiated (placeholder)' });
-  } catch (e) {
+  } catch {
     res.status(500).json({ error:'Failed to initiate play.' });
   }
 });
-
 app.post('/game-state-update', protect, async (req,res)=>{
   const { gameId, transactionSignature, status } = req.body;
   try {
@@ -1146,11 +1396,10 @@ app.post('/game-state-update', protect, async (req,res)=>{
       confirmedAt: admin.firestore.FieldValue.serverTimestamp()
     });
     res.json({ message:'Game state updated.' });
-  } catch (e) {
+  } catch {
     res.status(500).json({ message:'Failed to update game state.' });
   }
 });
-
 app.post('/process-reward', protect, async (req,res)=>{
   const { gameId, amount=0, isWinnerClaim=false } = req.body;
   try {
@@ -1193,11 +1442,10 @@ app.post('/api/picker/create-session', protect, async (req,res)=>{
       txSig: paymentSignature || null
     });
     res.json({ gameEntryTokenId: docRef.id });
-  } catch (e) {
+  } catch {
     res.status(500).json({ message:'Failed to create session token.' });
   }
 });
-
 app.get('/api/picker/validate-session/:id', protect, async (req,res)=>{
   try {
     const doc = await db.collection('gameEntryTokens').doc(req.params.id).get();
@@ -1206,13 +1454,13 @@ app.get('/api/picker/validate-session/:id', protect, async (req,res)=>{
     if (data.isConsumed) return res.status(400).json({ valid:false, message:'Token already consumed.' });
     if (data.userId !== req.user.uid) return res.status(403).json({ valid:false, message:'Token belongs to another user.' });
     res.json({ valid:true });
-  } catch (e) {
+  } catch {
     res.status(500).json({ valid:false, message:'Failed to validate token.' });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* Friends System (with chunking)                                             */
+/* Friends System                                                             */
 /* -------------------------------------------------------------------------- */
 app.post('/friend-request/send', protect, async (req,res)=>{
   const { targetUsername } = req.body;
@@ -1252,11 +1500,10 @@ app.post('/friend-request/send', protect, async (req,res)=>{
     });
     await batch.commit();
     res.json({ message:'Friend request sent' });
-  } catch (e) {
+  } catch {
     res.status(500).json({ message:'Failed to send request' });
   }
 });
-
 app.post('/friend-request/accept', protect, async (req,res)=>{
   const { senderId } = req.body;
   if (!senderId) return res.status(400).json({ message:'senderId required' });
@@ -1277,7 +1524,6 @@ app.post('/friend-request/accept', protect, async (req,res)=>{
     res.status(500).json({ message:'Failed to accept request' });
   }
 });
-
 app.post('/friend-request/reject', protect, async (req,res)=>{
   const { senderId } = req.body;
   if (!senderId) return res.status(400).json({ message:'senderId required' });
@@ -1296,7 +1542,6 @@ app.post('/friend-request/reject', protect, async (req,res)=>{
     res.status(500).json({ message:'Failed to reject request' });
   }
 });
-
 app.post('/friends/remove', protect, async (req,res)=>{
   const { friendId } = req.body;
   if (!friendId) return res.status(400).json({ message:'friendId required' });
@@ -1315,18 +1560,13 @@ app.post('/friends/remove', protect, async (req,res)=>{
     res.status(500).json({ message:'Failed to remove friend' });
   }
 });
-
-// --- Enhanced /friends route with detailed logging ---
 app.get('/friends', protect, async (req,res)=>{
   try {
     const snap = await getUserDocRef(req.user.uid).get();
     if (!snap.exists) return res.status(404).json({ message:'User not found' });
     const friendIds = snap.data().friends || [];
-    console.log(`[FRIENDS] User ${req.user.uid} has friendIds:`, friendIds);
     if (!friendIds.length) return res.json([]);
-
-    const chunks = [];
-    for (let i=0;i<friendIds.length;i+=10) chunks.push(friendIds.slice(i,i+10));
+    const chunks = chunkArray(friendIds, 10);
     const friendsData = [];
     for (const ch of chunks) {
       const q = await db.collection('users')
@@ -1342,21 +1582,11 @@ app.get('/friends', protect, async (req,res)=>{
         });
       });
     }
-    console.log(`[FRIENDS] Returning ${friendsData.length} friends for ${req.user.uid}`);
     res.json(friendsData);
   } catch (e) {
-    console.error('[FRIENDS] fetch error:', e);
     res.status(500).json({ message:'Failed to fetch friends' });
   }
 });
-
-// TEMP DEBUG ENDPOINT (remove later)
-app.get('/debug/friends', protect, async (req,res)=>{
-  const snap = await getUserDocRef(req.user.uid).get();
-  if (!snap.exists) return res.status(404).json({ message:'User not found' });
-  res.json({ raw: snap.data().friends || [] });
-});
-
 app.get('/friend-requests/sent', protect, async (req,res)=>{
   try {
     const user = await getUserDocRef(req.user.uid).get();
@@ -1375,11 +1605,10 @@ app.get('/friend-requests/sent', protect, async (req,res)=>{
       });
     }
     res.json(out);
-  } catch (e) {
+  } catch {
     res.status(500).json({ message:'Failed to fetch sent requests' });
   }
 });
-
 app.get('/friend-requests/received', protect, async (req,res)=>{
   try {
     const user = await getUserDocRef(req.user.uid).get();
@@ -1398,13 +1627,13 @@ app.get('/friend-requests/received', protect, async (req,res)=>{
       });
     }
     res.json(out);
-  } catch (e) {
+  } catch {
     res.status(500).json({ message:'Failed to fetch received requests' });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* Chat Routes                                                                */
+/* Chat Routes (using inlined functions)                                      */
 /* -------------------------------------------------------------------------- */
 app.get('/chats', protect, async (req,res)=>{
   try {
@@ -1413,15 +1642,16 @@ app.get('/chats', protect, async (req,res)=>{
     res.status(500).json({ message:'Failed to fetch chats' });
   }
 });
-// app.post('/chats/findOrCreate', protect, async (req,res)=>{
-//   const { targetUid } = req.body;
-//   if (!targetUid) return res.status(400).json({ message:'targetUid required' });
-//   try {
-//     res.json(await findOrCreateChat(req.user.uid, targetUid));
-//   } catch (e) {
-//     res.status(500).json({ message:e.message || 'Failed to create chat' });
-//   }
-// });
+app.post('/chats/findOrCreate', protect, async (req,res)=>{
+  const { targetUid } = req.body;
+  if (!targetUid) return res.status(400).json({ message:'targetUid required' });
+  try {
+    const chat = await findOrCreateChat(req.user.uid, targetUid);
+    res.json(chat);
+  } catch (e) {
+    res.status(500).json({ message:e.message || 'Failed to create chat' });
+  }
+});
 app.post('/chats/:chatId/messages', protect, async (req,res)=>{
   const { chatId } = req.params;
   const { text } = req.body;
@@ -1433,190 +1663,6 @@ app.post('/chats/:chatId/messages', protect, async (req,res)=>{
     res.status(500).json({ message:'Failed to send message' });
   }
 });
-
-/**
- * Finds or creates a 1:1 chat between two users (sorted participant IDs for idempotency).
- * Adds createdAt and lastMessageAt so ordering works even before first message.
- */
-export const findOrCreateChat = async (user1Uid, user2Uid) => {
-  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
-  if (!user1Uid || !user2Uid || user1Uid === user2Uid) {
-    throw new Error('Invalid participant UIDs.');
-  }
-
-  const participants = [user1Uid, user2Uid].sort();
-  const chatsRef = _db.collection('chats');
-  const existing = await chatsRef
-    .where('participants', 'array-contains', user1Uid)
-    .get();
-
-  let existingChat = null;
-  existing.forEach(doc => {
-    const d = doc.data();
-    const list = d.participants || [];
-    if (list.length === 2 && list.includes(user2Uid) && list.includes(user1Uid)) {
-      existingChat = { id: doc.id, ...d };
-    }
-  });
-
-  if (existingChat) {
-    return {
-      chatId: existingChat.id,
-      participants: existingChat.participants,
-      lastMessage: existingChat.lastMessage || null,
-      lastMessageAt: existingChat.lastMessageAt || null,
-      createdAt: existingChat.createdAt || null
-    };
-  }
-
-  const now = _admin.firestore.FieldValue.serverTimestamp();
-  const newDoc = await chatsRef.add({
-    participants,
-    createdAt: now,
-    lastMessageAt: now,      // ensure ordering field exists
-    lastMessage: null
-  });
-
-  return {
-    chatId: newDoc.id,
-    participants,
-    lastMessage: null,
-    lastMessageAt: null,
-    createdAt: null
-  };
-};
-
-/**
- * Sends a message (adds message subdoc & updates lastMessage metadata).
- */
-export const sendMessage = async (chatId, senderUid, text) => {
-  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
-  if (!chatId || !senderUid || !text) throw new Error('Missing chat message params.');
-
-  const chatRef = _db.collection('chats').doc(chatId);
-  const chatSnap = await chatRef.get();
-  if (!chatSnap.exists) throw new Error('Chat not found.');
-
-  const messagesRef = chatRef.collection('messages');
-  const now = _admin.firestore.FieldValue.serverTimestamp();
-
-  const msgData = {
-    from: senderUid,
-    text,
-    sentAt: now
-  };
-
-  await messagesRef.add(msgData);
-  await chatRef.update({
-    lastMessage: {
-      from: msgData.from,
-      text: msgData.text,
-      sentAt: now
-    },
-    lastMessageAt: now
-  });
-};
-
-/**
- * Returns a list of chats for a user, including resolved friend/user minimal info.
- * Fallback logic if composite index is missing.
- */
-export const getUserChats = async (currentUserId) => {
-  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
-  if (!currentUserId) return [];
-
-  const chatsRef = _db.collection('chats');
-
-  // Primary query (needs composite index: participants array-contains + orderBy lastMessageAt)
-  let querySnap;
-  let usedFallback = false;
-  try {
-    const primaryQ = chatsRef
-      .where('participants', 'array-contains', currentUserId)
-      .orderBy('lastMessageAt', 'desc');
-    querySnap = await primaryQ.get();
-  } catch (e) {
-    // Fallback (order by createdAt) - still might need an index, but often less strict
-    console.warn(`[CHAT] Primary query failed (likely missing index participants+lastMessageAt). Fallback to createdAt. Error: ${e.message}`);
-    usedFallback = true;
-    try {
-      const fallbackQ = chatsRef
-        .where('participants', 'array-contains', currentUserId)
-        .orderBy('createdAt', 'desc');
-      querySnap = await fallbackQ.get();
-    } catch (fallbackErr) {
-      console.error('[CHAT] Fallback query also failed:', fallbackErr);
-      return [];
-    }
-  }
-
-  const results = [];
-  for (const doc of querySnap.docs) {
-    const data = doc.data();
-    const participants = data.participants || [];
-    const otherId = participants.find(u => u !== currentUserId);
-    let otherInfo = null;
-    if (otherId) {
-      const userSnap = await _db.collection('users').doc(otherId).get();
-      if (userSnap.exists) {
-        const u = userSnap.data();
-        otherInfo = {
-          uid: otherId,
-            username: u.username || otherId,
-          avatarUrl: u.avatarUrl || '/avatars/default.png',
-          isOnline: u.isOnline || false
-        };
-      }
-    }
-    const lastMessage = data.lastMessage
-      ? {
-          from: data.lastMessage.from,
-          text: data.lastMessage.text,
-          sentAt: data.lastMessage.sentAt ? data.lastMessage.sentAt.toDate() : null
-        }
-      : null;
-
-    results.push({
-      chatId: doc.id,
-      participants,
-      friend: otherInfo,
-      lastMessage,
-      createdAt: data.createdAt ? data.createdAt.toDate() : new Date(0),
-      lastMessageAt: data.lastMessageAt ? data.lastMessageAt.toDate() : null,
-      usedFallback
-    });
-  }
-
-  return results;
-};
-
-/**
- * Backfill lastMessageAt for existing chats that miss it.
- * Invoke once at startup if desired (env flag).
- */
-export const backfillChatLastMessageAt = async () => {
-  if (!_db) throw new Error('Firestore DB not initialized in chatService.');
-  const snap = await _db.collection('chats').get();
-  const batch = _db.batch();
-  let count = 0;
-
-  for (const doc of snap.docs) {
-    const data = doc.data();
-    if (!data.lastMessageAt) {
-      batch.update(doc.ref, {
-        lastMessageAt: data.createdAt || _admin.firestore.FieldValue.serverTimestamp()
-      });
-      count++;
-      if (count === 400) {
-        await batch.commit();
-        console.log('[CHAT] Backfill partial commit (400).');
-        count = 0;
-      }
-    }
-  }
-  if (count > 0) await batch.commit();
-  console.log('[CHAT] Backfill complete.');
-};
 
 /* -------------------------------------------------------------------------- */
 /* Leaderboards                                                               */
@@ -1647,7 +1693,6 @@ app.post('/leaderboards/submit-score', protect, async (req,res)=>{
   await lbRef.set(data, { merge:true });
   res.json({ message:'Score submitted', updatedAllTime });
 });
-
 app.get('/leaderboards/:gameId', protect, async (req,res)=>{
   const snap = await db.collection('leaderboards').doc(req.params.gameId).get();
   if (!snap.exists) return res.status(404).json({ message:'Leaderboard not found' });
@@ -1657,43 +1702,82 @@ app.get('/leaderboards/:gameId', protect, async (req,res)=>{
 /* -------------------------------------------------------------------------- */
 /* Migration / Normalization                                                  */
 /* -------------------------------------------------------------------------- */
-async function fixGamesCollection() {
-  const gamesSnapshot = await db.collection('games').get();
-  let updated = 0;
-  for (const gameDoc of gamesSnapshot.docs) {
-    const data = gameDoc.data();
-    const setData = {};
+function safeToDate(value) {
+  try {
+    if (!value) return null;
+    if (typeof value.toDate === 'function') return value.toDate(); // Firestore Timestamp
+    if (value instanceof Date) return value;
+    if (typeof value === 'number') {
+      // Heuristic: > 1e12 ≈ ms, else seconds
+      return new Date(value > 1e12 ? value : value * 1000);
+    }
+    if (typeof value === 'string') {
+      const ts = Date.parse(value);
+      if (!isNaN(ts)) return new Date(ts);
+    }
+  } catch (e) {
+    console.warn('[CHAT] safeToDate failed for value:', value, e);
+  }
+  return null;
+}
+
+// --- REPLACE your existing getUserChats with this version ---
+
+
+// TEMP migration script (run with admin initialized)
+async function migrateChatTimestamps() {
+  const chatsSnap = await db.collection('chats').get();
+  let batch = db.batch();
+  let count = 0;
+  for (const doc of chatsSnap.docs) {
+    const data = doc.data();
     let needs = false;
+    const update = {};
 
-    if (!data.ggCoinsGathered || typeof data.ggCoinsGathered.allTime !== 'number' || typeof data.ggCoinsGathered.lastMonth !== 'number') {
-      setData.ggCoinsGathered = { ...emptyStatsMap };
-      needs = true;
+    // lastMessage.sentAt
+    if (data.lastMessage?.sentAt && typeof data.lastMessage.sentAt.toDate !== 'function') {
+      const d = safeToDate(data.lastMessage.sentAt);
+      if (d) {
+        update['lastMessage.sentAt'] = admin.firestore.Timestamp.fromDate(d);
+        needs = true;
+      }
     }
-    if (!data.ggCoinsDistributed || typeof data.ggCoinsDistributed.allTime !== 'number' || typeof data.ggCoinsDistributed.lastMonth !== 'number') {
-      setData.ggCoinsDistributed = { ...emptyStatsMap };
-      needs = true;
+
+    // lastMessageAt
+    if (data.lastMessageAt && typeof data.lastMessageAt.toDate !== 'function') {
+      const d = safeToDate(data.lastMessageAt);
+      if (d) {
+        update['lastMessageAt'] = admin.firestore.Timestamp.fromDate(d);
+        needs = true;
+      }
     }
-    if (!data.gamesPlayed || typeof data.gamesPlayed.allTime !== 'number' || typeof data.gamesPlayed.lastMonth !== 'number') {
-      setData.gamesPlayed = { ...emptyStatsMap };
-      needs = true;
+
+    // If chat never had lastMessageAt but has createdAt, add it
+    if (!data.lastMessageAt && data.createdAt) {
+      const d = safeToDate(data.createdAt);
+      if (d) {
+        update['lastMessageAt'] = admin.firestore.Timestamp.fromDate(d);
+        needs = true;
+      }
     }
+
     if (needs) {
-      await gameDoc.ref.update(setData);
-      updated++;
-      console.log(`[MIGRATION] Updated game: ${gameDoc.id}`);
+      batch.update(doc.ref, update);
+      count++;
+      if (count === 400) {
+        await batch.commit();
+        console.log('[MIGRATE] Partial commit (400).');
+        batch = db.batch();
+        count = 0;
+      }
     }
   }
-  if (updated) console.log(`[MIGRATION] Games normalized: ${updated}`);
+  if (count) await batch.commit();
+  console.log('[MIGRATE] Chat timestamp normalization complete.');
 }
 
-async function initialRun() {
-  await ensurePlatformStatsBase();
-  if (process.env.MIGRATE_ON_BOOT === 'true') {
-    await fixGamesCollection();
-  }
-}
-
-initialRun().catch(err => console.error('[INIT] Migration failed:', err));
+// Call it manually once:
+ migrateChatTimestamps().catch(console.error);
 
 /* -------------------------------------------------------------------------- */
 /* Error Handler                                                              */

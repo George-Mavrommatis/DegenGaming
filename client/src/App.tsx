@@ -14,7 +14,9 @@ import DegenRace from "../src/games/Picker/DegenRace/DegenRace";
 import WhackADegen from './games/Arcade/WhackADegen/WhackADegen';
 import Modal from "react-modal";
 import UserActivityTracker from "./components/activityTracker";
+import CashierPage from "./pages/Cashier";
 Modal.setAppElement("#root");
+
 
 const NAVBAR_HEIGHT = 80;
 
@@ -56,6 +58,7 @@ export default function App() {
             <Route path="/profile/history" element={<GameHistory />} />
             <Route path="/games" element={<Games />} />
             <Route path="/leaderboards" element={<Leaderboards />} />
+            <Route path="/cashier" element={<CashierPage />} />
             {/* Game Routes that require login */}
             <Route path="/games/degenrace" element={<DegenRace />} />
             <Route path="/games/whackadegen" element={<WhackADegen />} />

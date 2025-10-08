@@ -24,12 +24,13 @@ export default function Navbar() {
 
   const { profile, loading } = useProfile();
 
-  const navItems = [
-    { to: "/home", label: "Home" },
-    { to: "/games", label: "Games" },
-    { to: "/leaderboards", label: "Leaderboards" },
-    { to: "/profile", label: "Profile" }
-  ];
+const navItems = [
+  { to: "/home", label: "Home" },
+  { to: "/games", label: "Games" },
+  { to: "/leaderboards", label: "Leaderboards" },
+  { to: "/cashier", label: "Cashier" }, 
+  { to: "/profile", label: "Profile" }
+];
   const { displayName, displayAvatar, isLoggedIn } = useMemo(() => {
     const loggedIn = !!profile;
     if (!loggedIn) return { displayName: "", displayAvatar: DEFAULT_AVATAR, isLoggedIn: false };
