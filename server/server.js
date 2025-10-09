@@ -302,33 +302,31 @@ const PLATFORM_SOL_ADDRESS = process.env.PLATFORM_SOL_ADDRESS ||
 let gameTokenMint = null; // optional custom token mint
 const GAME_TOKEN_DECIMALS = 9;
 
-
 /* -------------------------------------------------------------------------- */
 /* Get Solana Price          & Month                                          */
 /* -------------------------------------------------------------------------- */
 
-// 2) Helper: current month key "YYYY-MM"
+// 1) Helper: current month key "YYYY-MM"
 function getMonthPeriod(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-async function ensurePlatformStatsMonthRollover() {
-  const statsRef = db.collection('platform').doc('stats');
-  const nowPeriod = getMonthPeriod();
-
+// 2) Reset lastMonth fields for all category docs (categories collection)
+//    - ggCoinsGathered.lastMonth = 0
+//    - ggCoinsDistributed.lastMonth = 0
+//    - gamesPlayed.lastMonth = 0
 async function resetCategoriesMonthlyFields() {
   const catsSnap = await db.collection('categories').get();
   let batch = db.batch();
   let writes = 0;
 
   for (const doc of catsSnap.docs) {
-    batch.set(doc.ref, {
-      ggCoinsGathered: { lastMonth: 0 },
-      ggCoinsDistributed: { lastMonth: 0 },
-      gamesPlayed: { lastMonth: 0 },
-    }, { merge: true });
+    batch.update(doc.ref, {
+      'ggCoinsGathered.lastMonth': 0,
+      'ggCoinsDistributed.lastMonth': 0,
+      'gamesPlayed.lastMonth': 0,
+    });
     writes++;
-
     if (writes >= 450) {
       await batch.commit();
       batch = db.batch();
@@ -338,19 +336,22 @@ async function resetCategoriesMonthlyFields() {
   if (writes) await batch.commit();
 }
 
+// 3) Reset lastMonth fields for all game docs (games collection)
+//    - ggCoinsGathered.lastMonth = 0
+//    - ggCoinsDistributed.lastMonth = 0
+//    - gamesPlayed.lastMonth = 0
 async function resetGamesMonthlyFields() {
   const gamesSnap = await db.collection('games').get();
   let batch = db.batch();
   let writes = 0;
 
   for (const doc of gamesSnap.docs) {
-    batch.set(doc.ref, {
-      ggCoinsGathered: { lastMonth: 0 },
-      ggCoinsDistributed: { lastMonth: 0 },
-      gamesPlayed: { lastMonth: 0 },
-    }, { merge: true });
+    batch.update(doc.ref, {
+      'ggCoinsGathered.lastMonth': 0,
+      'ggCoinsDistributed.lastMonth': 0,
+      'gamesPlayed.lastMonth': 0,
+    });
     writes++;
-
     if (writes >= 450) {
       await batch.commit();
       batch = db.batch();
@@ -360,25 +361,26 @@ async function resetGamesMonthlyFields() {
   if (writes) await batch.commit();
 }
 
-// Month Rollover Function
+// 4) Month Rollover Function (single source of truth)
+//    - Platform totals: totalGGCoinsDeposited/Withdrawn/Gathered/Distributed .lastMonth = 0
+//    - Platform per-category maps: categories.{cat}.ggCoinsGathered/Distributed/gamesPlayed .lastMonth = 0
+//    - Category docs: ggCoinsGathered/Distributed/gamesPlayed .lastMonth = 0
+//    - Game docs: ggCoinsGathered/Distributed/gamesPlayed .lastMonth = 0
 async function ensurePlatformStatsMonthRollover() {
   const statsRef = db.collection('platform').doc('stats');
   const nowPeriod = getMonthPeriod();
-
-  // Read current stats once
   const snap = await statsRef.get();
 
   if (!snap.exists) {
-    // Create minimal doc with required maps
     await statsRef.set({
       currentMonthPeriod: nowPeriod,
       lastMonthPeriod: null,
-      ggCoinsDeposited: { allTime: 0, lastMonth: 0 },
-      ggCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
-      totalGGCoinsGathered: { allTime: 0, lastMonth: 0 },
+      totalGGCoinsDeposited:   { allTime: 0, lastMonth: 0 },
+      totalGGCoinsWithdrawn:   { allTime: 0, lastMonth: 0 },
+      totalGGCoinsGathered:    { allTime: 0, lastMonth: 0 },
       totalGGCoinsDistributed: { allTime: 0, lastMonth: 0 },
+      categories: {},
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      categories: {} // will be filled by your aggregation or economy endpoints later
     }, { merge: true });
     return;
   }
@@ -386,42 +388,35 @@ async function ensurePlatformStatsMonthRollover() {
   const data = snap.data() || {};
   const storedPeriod = data.currentMonthPeriod;
 
-  // If no month change, just touch lastUpdated
   if (storedPeriod === nowPeriod) {
     await statsRef.set({ lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return;
   }
 
-  // Month changed: zero all lastMonth counters mentioned above
   const platUpdate = {
     currentMonthPeriod: nowPeriod,
     lastMonthPeriod: storedPeriod || null,
-    'ggCoinsDeposited.lastMonth': 0,
-    'ggCoinsWithdrawn.lastMonth': 0,
+    'totalGGCoinsDeposited.lastMonth': 0,
+    'totalGGCoinsWithdrawn.lastMonth': 0,
     'totalGGCoinsGathered.lastMonth': 0,
     'totalGGCoinsDistributed.lastMonth': 0,
     lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   const categoriesNode = data.categories || {};
-  const catKeys = Object.keys(categoriesNode);
-  for (const catKey of catKeys) {
+  for (const catKey of Object.keys(categoriesNode)) {
     platUpdate[`categories.${catKey}.ggCoinsGathered.lastMonth`] = 0;
     platUpdate[`categories.${catKey}.ggCoinsDistributed.lastMonth`] = 0;
-    // If you later want monthly reset for plays:
-    // platUpdate[`categories.${catKey}.gamesPlayed.lastMonth`] = 0;
+    platUpdate[`categories.${catKey}.gamesPlayed.lastMonth`] = 0;
   }
 
-  // Update platform stats doc
+  // Update platform doc then cascade to categories/games collections
   await statsRef.update(platUpdate);
-
-  // Reset in categories collection and games collection
   await resetCategoriesMonthlyFields();
   await resetGamesMonthlyFields();
 }
 
-
-// 3) Helper: resolve SOL price on server
+// 5) Helper: resolve SOL price on server (single definition!)
 async function fetchSolPrice() {
   try {
     const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
@@ -433,52 +428,11 @@ async function fetchSolPrice() {
   }
 }
 
-// 4) Helper: ensure platform/stats exists (minimal) and reset lastMonth on month change
-async function ensurePlatformStatsMonthRollover() {
-  const statsRef = db.collection('platform').doc('stats');
-  await db.runTransaction(async (t) => {
-    const snap = await t.get(statsRef);
-    const nowPeriod = getMonthPeriod();
-
-    if (!snap.exists) {
-      // Create minimal doc with required maps
-      t.set(statsRef, {
-        currentMonthPeriod: nowPeriod,
-        lastMonthPeriod: null,
-        ggCoinsDeposited: { allTime: 0, lastMonth: 0 },
-        ggCoinsWithdrawn: { allTime: 0, lastMonth: 0 },
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return;
-    }
-
-    const data = snap.data() || {};
-    const storedPeriod = data.currentMonthPeriod;
-
-    // If a new month has begun, zero out lastMonth for the two cashier maps
-    if (storedPeriod !== nowPeriod) {
-      t.update(statsRef, {
-        currentMonthPeriod: nowPeriod,
-        lastMonthPeriod: storedPeriod || null,
-        'ggCoinsDeposited.lastMonth': 0,
-        'ggCoinsWithdrawn.lastMonth': 0,
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    } else {
-      // Touch lastUpdated occasionally
-      t.set(statsRef, { lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    }
-  });
-}
-
-// 5) Schedule automatic rollover at midnight on the 1st of each month
-//    This complements the "call before deposit/withdraw" safety checks.
+// 6) Schedule automatic rollover at midnight on the 1st of each month
 cron.schedule('0 0 1 * *', ensurePlatformStatsMonthRollover);
 
-// 6) Cashier: DEPOSIT (1 GG = $1; integer-only credit)
-//    - If txSignature is provided, verify on-chain SOL delta to platform address.
-//    - Convert SOL to $ via SOL price, credit integer GG = floor(sol * price).
-//    - Increment platform stats: ggCoinsDeposited.{allTime,lastMonth}
+// 7) Cashier: DEPOSIT/WITHDRAW use this function elsewhere before writing
+//    and economy endpoints also call it to ensure lastMonth is correct.
 
 
 /* -------------------------------------------------------------------------- */
@@ -521,15 +475,8 @@ function getPeriodKeys(date = new Date()) {
   const last = `${prev.getFullYear()}-${(prev.getMonth()+1).toString().padStart(2,'0')}`;
   return { current, last };
 }
-async function fetchSolPrice() {
-  try {
-    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const j = await r.json();
-    return Number(j?.solana?.usd) || 0;
-  } catch {
-    return 0;
-  }
-}
+
+
 async function getOnlineUserIds() {
   try {
     const snap = await db.collection('users').where('isOnline','==',true).get();

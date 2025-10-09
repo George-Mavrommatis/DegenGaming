@@ -10,7 +10,7 @@ import UserDashboard from "../components/UserDashboard";
 import CashierModal from "../components/CashierModal";
 
 const DEFAULT_AVATAR = "/placeholder-avatar.png";
-const GG_COIN_ICON = "/assets/ggcoin.png";
+const GG_COIN_ICON = "/ggWEB3_logo.png";
 
 export default function Profile() {
   const { user, profile, updateUserProfile, refreshProfile, loading, isAuthenticated } = useProfile();
@@ -179,34 +179,34 @@ export default function Profile() {
             <div className="mt-6 w-full flex flex-col gap-2">
               {/* GG Coins Card */}
               <div className="rounded-lg bg-black/60 shadow p-4 border-2 border-yellow-400">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center  justify-center align-middle gap-4">
                   <span className="text-lg font-bold text-yellow-400 flex items-center gap-2">
                     <img src={GG_COIN_ICON} alt="GG Coin" className="w-7 h-7 inline-block" />
-                    GG Coins
+                    GG Coins 
                   </span>
-                  <span className="text-2xl font-bold text-yellow-200">{ggCoins.toLocaleString()}</span>
+                  <span className="text-2xl font-bold text-yellow-400"> {ggCoins.toLocaleString()}</span>
                 </div>
-                <div className="mt-3 flex gap-3">
+                <div className="mt-3  justify-center flex gap-3">
                   <button
-                    className="px-4 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-500 font-bold"
+                    className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-bold text-yellow-400 "
                     onClick={() => { setCashierDefaultTab("deposit"); setCashierOpen(true); }}
                   >
-                    Deposit
+                    Buy GG Coins
                   </button>
                   <button
-                    className="px-4 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 font-bold"
+                    className="px-4 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 font-bold text-yellow-400 "
                     onClick={() => { setCashierDefaultTab("withdraw"); setCashierOpen(true); }}
                   >
-                    Withdraw
+                    Sell GG Coins
                   </button>
                 </div>
               </div>
 
               {/* XP Card */}
               <div className="rounded-lg bg-black/60 shadow p-4 border border-purple-400 mt-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-lg font-bold text-purple-300">XP</span>
-                  <span className="text-lg text-purple-200">Level {xpLevel}</span>
+                <div className="flex items-center align-middle gap-4  justify-center">
+                  <span className="text-lg font-bold text-purple-300">Account XP  </span>
+                  <span className="text-lg text-purple-200"> Level {xpLevel}</span>
                 </div>
                 <div className="relative mt-2 h-5 bg-gray-800 rounded-full overflow-hidden">
                   <div style={{ width: `${xpPercent}%` }} className="absolute left-0 top-0 h-full bg-gradient-to-r from-purple-500 to-yellow-400 rounded-full transition-all" />
