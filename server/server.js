@@ -24,8 +24,7 @@ import {
     sendAndConfirmTransaction,
 } from '@solana/web3.js';
 
-import splToken from '@solana/spl-token';
-const {
+import {
     getOrCreateAssociatedTokenAccount,
     mintTo,
     createMint,
@@ -33,7 +32,7 @@ const {
     getAccount,
     TOKEN_PROGRAM_ID,
     getAssociatedTokenAddress,
-} = splToken;
+} from '@solana/spl-token';
 
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
@@ -82,7 +81,7 @@ try {
 
 
 // --- Solana Configuration ---
-const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL ; // Use a default devnet RPC
+const SOLANA_CLUSTER = process.env.SOLANA_RPC_URL || clusterApiUrl('devnet'); // Default to devnet if SOLANA_RPC_URL not set
 const connection = new Connection(SOLANA_CLUSTER, 'confirmed');
 console.log(`Solana cluster: ${SOLANA_CLUSTER}`);
 
@@ -96,15 +95,26 @@ if (ADMIN_WALLET_PRIVATE_KEY_BASE58) {
     } catch (e) {
         console.error("Failed to load ADMIN_WALLET_PRIVATE_KEY_BASE58. Check the key format or if it's set in .env.", e.message);
         adminWalletKeypair = null;
-        // Optionally, you might want to exit here if admin wallet is critical for startup
-        // process.exit(1);
     }
 } else {
     console.error("WARNING: ADMIN_WALLET_PRIVATE_KEY_BASE58 not set in .env. Solana operations will fail.");
     adminWalletKeypair = null;
 }
 
+// Load game token mint from env — required for all SPL token operations
+const GAME_TOKEN_MINT_ADDRESS = process.env.GAME_TOKEN_MINT_ADDRESS;
 let gameTokenMint = null;
+if (GAME_TOKEN_MINT_ADDRESS) {
+    try {
+        gameTokenMint = new PublicKey(GAME_TOKEN_MINT_ADDRESS);
+        console.log(`Game token mint loaded: ${gameTokenMint.toBase58()}`);
+    } catch (e) {
+        console.error("Failed to parse GAME_TOKEN_MINT_ADDRESS. Check the address format.", e.message);
+        gameTokenMint = null;
+    }
+} else {
+    console.warn("WARNING: GAME_TOKEN_MINT_ADDRESS not set in .env. SPL token operations will be disabled.");
+}
 const GAME_TOKEN_DECIMALS = 9; // Decimals for your game token
 
 

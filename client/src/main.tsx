@@ -27,8 +27,12 @@ import 'react-toastify/dist/ReactToastify.css';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 // --- Solana Network Configuration ---
-const network = WalletAdapterNetwork.Mainnet; // Or your desired network
-const endpoint = clusterApiUrl(network);
+// Set VITE_SOLANA_NETWORK=mainnet-beta in .env for mainnet; defaults to devnet
+const networkEnv = import.meta.env.VITE_SOLANA_NETWORK || 'devnet';
+const network = networkEnv === 'mainnet-beta'
+    ? WalletAdapterNetwork.Mainnet
+    : WalletAdapterNetwork.Devnet;
+const endpoint = (import.meta.env.VITE_SOLANA_RPC_URL as string) || clusterApiUrl(network);
 
 // --- Wallets to be used in the application ---
 const wallets = [

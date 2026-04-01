@@ -21,11 +21,7 @@ export default function PvPInitModal({ isOpen, onClose }: PvPInitModalProps) {
         >
           ×
         </button>
-        <img 
-          src="/mnt/data/ba7c85700b3c805bbe9c708ef1b5a275-image.png" 
-          alt="Coming Soon" 
-          className="w-28 h-28 object-contain mb-3"
-        />
+        <div className="w-28 h-28 flex items-center justify-center text-6xl mb-3">⚔️</div>
         <div className="text-3xl font-bold text-red-400 mb-2 text-center">
           PvP Battles
         </div>
