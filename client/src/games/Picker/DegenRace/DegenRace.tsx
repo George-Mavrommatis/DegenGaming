@@ -10,7 +10,7 @@ import {
     DegenRaceScene,
     Player
 } from './DegenRaceGame';
-import "./degenrace.css";
+import "./degenRace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
