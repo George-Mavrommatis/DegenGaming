@@ -7,6 +7,7 @@ import { useProfile } from '../../../context/ProfileContext';
 import { saveGameResult } from '../../../firebase/gameScores';
 import { apiService } from '../../../services/api';
 import { DegenFighterScene } from './DegenFighterScene';
+import { claimPvpPayout } from '../pvpTransaction';
 
 const GAME_W = 960;
 const GAME_H = 540;
@@ -16,6 +17,7 @@ const GAME_CATEGORY = 'pvp' as const;
 export default function DegenFighter() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const matchSessionIdRef = useRef<string>(crypto.randomUUID());
   const { profile, refreshProfile } = useProfile();
   const navigate = useNavigate();
 
@@ -43,6 +45,19 @@ export default function DegenFighter() {
         } catch (err) {
           console.error('[DegenFighter] Failed to save match result:', err);
           toast.error('Could not save match result.');
+        }
+
+        // Claim GGW token payout (winners) or record session (losers)
+        try {
+          const payoutResult = await claimPvpPayout(matchSessionIdRef.current, res.won, res.score);
+          if (payoutResult.won && payoutResult.reward) {
+            const rewardDisplay = payoutResult.reward / 1_000_000_000;
+            toast.success(`🏆 ${rewardDisplay} GGW tokens sent to your wallet!`);
+          } else if (payoutResult.error && payoutResult.error !== 'Payout already claimed for this match session.') {
+            toast.warn(`Payout notice: ${payoutResult.error}`);
+          }
+        } catch {
+          // Non-fatal: payout failure should not break the game over flow
         }
       }
     },
@@ -115,6 +130,8 @@ export default function DegenFighter() {
     }
     setResult(null);
     setGameState('playing');
+    // Fresh session ID so each replay can claim its own payout
+    matchSessionIdRef.current = crypto.randomUUID();
   };
 
   return (

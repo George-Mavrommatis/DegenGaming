@@ -1,5 +1,6 @@
 // DegenFighterScene.ts — Phaser 3 PvP fighting game scene for DegenFighter
 import Phaser from 'phaser';
+import type { Socket } from 'socket.io-client';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,18 @@ export interface DegenFighterSceneData {
   localFighter: FighterConfig;
   opponent: FighterConfig;
   onMatchEnd: (result: { won: boolean; score: number; coinsEarned: number }) => void;
+  /** Optional: provide socket + roomId to enable real-time networked PvP */
+  socket?: Socket;
+  roomId?: string;
+}
+
+export interface FighterNetworkState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  lastAttack?: { isSpecial: boolean; damage: number };
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -68,6 +81,13 @@ export class DegenFighterScene extends Phaser.Scene {
   private opponent!: FighterConfig;
   private onMatchEnd!: (result: { won: boolean; score: number; coinsEarned: number }) => void;
 
+  // networked PvP (optional)
+  private pvpSocket?: Socket;
+  private pvpRoomId?: string;
+  private isNetworked = false;
+  private pendingOpponentState: FighterNetworkState | null = null;
+  private stateEmitInterval = 0; // ms accumulator for throttled emit
+
   // controls
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private attackKey!: Phaser.Input.Keyboard.Key;
@@ -90,6 +110,37 @@ export class DegenFighterScene extends Phaser.Scene {
     this.timeLeft = ROUND_TIME;
     this.isGameOver = false;
     this.comboCount = 0;
+
+    // Networked PvP setup
+    if (data.socket && data.roomId) {
+      this.pvpSocket = data.socket;
+      this.pvpRoomId = data.roomId;
+      this.isNetworked = true;
+
+      this.pvpSocket.on('pvp:opponentState', ({ state }: { state: FighterNetworkState }) => {
+        this.pendingOpponentState = state;
+        // Apply incoming HP authoritatively (opponent controls their own HP reporting)
+        if (state.hp < this.opponentHP) {
+          this.opponentHP = state.hp;
+        }
+      });
+
+      this.pvpSocket.on('pvp:opponentLeft', () => {
+        if (!this.isGameOver) {
+          this.endMatch(true); // opponent forfeited — local player wins
+        }
+      });
+
+      this.pvpSocket.on('pvp:matchEnded', ({ won }: { won: boolean }) => {
+        if (!this.isGameOver) {
+          this.endMatch(won);
+        }
+      });
+    } else {
+      this.isNetworked = false;
+      this.pvpSocket = undefined;
+      this.pvpRoomId = undefined;
+    }
   }
 
   // ── preload ──────────────────────────────────────────────────────────────────
@@ -226,13 +277,15 @@ export class DegenFighterScene extends Phaser.Scene {
       loop: true,
     });
 
-    // ── Simple AI opponent movement ────────────────────────────────────────────
-    this.time.addEvent({
-      delay: 1200,
-      callback: this.aiTick,
-      callbackScope: this,
-      loop: true,
-    });
+    // ── AI opponent movement (only in solo/offline mode) ──────────────────────
+    if (!this.isNetworked) {
+      this.time.addEvent({
+        delay: 1200,
+        callback: this.aiTick,
+        callbackScope: this,
+        loop: true,
+      });
+    }
   }
 
   // ── update ───────────────────────────────────────────────────────────────────
@@ -268,6 +321,35 @@ export class DegenFighterScene extends Phaser.Scene {
     }
     if (Phaser.Input.Keyboard.JustDown(this.specialKey) && this.localSpecialCooldown === 0) {
       this.performAttack(true);
+    }
+
+    // ── Networked PvP: emit local state + apply opponent state ────────────────
+    if (this.isNetworked && this.pvpSocket && this.pvpRoomId) {
+      // Throttle to ~20 updates/sec
+      this.stateEmitInterval += delta;
+      if (this.stateEmitInterval >= 50) {
+        this.stateEmitInterval = 0;
+        const state: FighterNetworkState = {
+          x: this.localBody.x,
+          y: this.localBody.y,
+          vx: (this.localBody.body as Phaser.Physics.Arcade.Body).velocity.x,
+          vy: (this.localBody.body as Phaser.Physics.Arcade.Body).velocity.y,
+          hp: this.localHP,
+        };
+        this.pvpSocket.emit('pvp:inputState', { roomId: this.pvpRoomId, state });
+      }
+
+      // Apply buffered opponent network state
+      if (this.pendingOpponentState) {
+        const s = this.pendingOpponentState;
+        this.pendingOpponentState = null;
+        // Lerp opponent body position toward received state
+        const lerpFactor = 0.25;
+        this.opponentBody.x = Phaser.Math.Linear(this.opponentBody.x, s.x, lerpFactor);
+        this.opponentBody.y = Phaser.Math.Linear(this.opponentBody.y, s.y, lerpFactor);
+        // Update opponent HP bar
+        this.updateOpponentHPBar();
+      }
     }
   }
 

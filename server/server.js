@@ -181,6 +181,9 @@ async function getUserDisplayData(uid) {
 }
 
 
+// In-memory PvP room registry (rooms are ephemeral — cleared on server restart)
+const pvpRooms = new Map();
+
 // --- Socket.IO Connection Handling (Presence fully in Firestore) ---
 io.on('connection', (socket) => {
     console.log('A user connected via Socket.IO');
@@ -245,7 +248,82 @@ io.on('connection', (socket) => {
         console.log(`Socket ${socket.id} left game room: ${gameId}`);
     });
 
-    // Chat-related Socket.IO events
+    // ─── PvP Room Events ────────────────────────────────────────────────────
+    // pvp:createRoom  → host creates a room
+    socket.on('pvp:createRoom', ({ username, avatarUrl }) => {
+        const roomId = `pvp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        socket.join(roomId);
+        pvpRooms.set(roomId, {
+            roomId,
+            host: { socketId: socket.id, uid: socket.data.uid, username, avatarUrl },
+            guest: null,
+            state: 'waiting',
+            results: {},
+        });
+        socket.emit('pvp:roomCreated', { roomId });
+        console.log(`[PvP] Room created: ${roomId} by ${socket.data.uid}`);
+    });
+
+    // pvp:joinRoom  → guest joins an existing room
+    socket.on('pvp:joinRoom', ({ roomId, username, avatarUrl }) => {
+        const room = pvpRooms.get(roomId);
+        if (!room) { socket.emit('pvp:error', { message: 'Room not found.' }); return; }
+        if (room.state !== 'waiting') { socket.emit('pvp:error', { message: 'Room is already in progress.' }); return; }
+        if (room.host.socketId === socket.id) { socket.emit('pvp:error', { message: 'Cannot join your own room.' }); return; }
+
+        socket.join(roomId);
+        room.guest = { socketId: socket.id, uid: socket.data.uid, username, avatarUrl };
+        room.state = 'active';
+        pvpRooms.set(roomId, room);
+
+        io.to(roomId).emit('pvp:matchStart', {
+            roomId,
+            host: { uid: room.host.uid, username: room.host.username, avatarUrl: room.host.avatarUrl },
+            guest: { uid: room.guest.uid, username: room.guest.username, avatarUrl: room.guest.avatarUrl },
+        });
+        console.log(`[PvP] Match started: ${roomId}`);
+    });
+
+    // pvp:inputState  → relay player input/position to opponent
+    socket.on('pvp:inputState', ({ roomId, state }) => {
+        socket.to(roomId).emit('pvp:opponentState', { state, fromUid: socket.data.uid });
+    });
+
+    // pvp:matchResult  → each client reports outcome; server resolves and emits pvp:matchEnded
+    socket.on('pvp:matchResult', ({ roomId, won }) => {
+        const room = pvpRooms.get(roomId);
+        if (!room) return;
+        room.results[socket.data.uid] = won;
+
+        const hostReported  = room.results[room.host.uid]  !== undefined;
+        const guestReported = room.results[room.guest?.uid] !== undefined;
+        if (hostReported && guestReported) {
+            const hostWon  = room.results[room.host.uid];
+            const guestWon = room.results[room.guest.uid];
+            // Canonical result: exactly one wins; fall back to host's report if contradictory
+            const resolvedHostWon = (hostWon === true && guestWon === false) ? true
+                : (hostWon === false && guestWon === true) ? false
+                : hostWon;
+
+            io.to(room.host.socketId).emit('pvp:matchEnded', { won: resolvedHostWon });
+            io.to(room.guest.socketId).emit('pvp:matchEnded', { won: !resolvedHostWon });
+            pvpRooms.delete(roomId);
+            console.log(`[PvP] Match ended: ${roomId} — host won: ${resolvedHostWon}`);
+        }
+    });
+
+    // pvp:leaveRoom  → forfeit: opponent wins
+    socket.on('pvp:leaveRoom', ({ roomId }) => {
+        const room = pvpRooms.get(roomId);
+        if (!room) return;
+        const opponentSocketId = room.host.socketId === socket.id ? room.guest?.socketId : room.host.socketId;
+        if (opponentSocketId) io.to(opponentSocketId).emit('pvp:opponentLeft', { roomId });
+        pvpRooms.delete(roomId);
+        socket.leave(roomId);
+        console.log(`[PvP] Room ${roomId} closed — forfeit.`);
+    });
+
+    // ─── Chat-related Socket.IO events ──────────────────────────────────────
     socket.on('chat:join', (chatId) => {
         socket.join(chatId);
         console.log(`User ${socket.data.uid} joined chat room ${chatId}`);
@@ -512,6 +590,51 @@ async function updatePlatformStatsAggregatedGGCoins() {
 
 // Cron job to aggregate platform stats every 30 minutes (or adjust as needed)
 cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
+
+// Monthly reset: zero out lastMonth counters on games and platform stats at midnight on the 1st
+cron.schedule('0 0 1 * *', async () => {
+    console.log('[monthlyReset] Resetting lastMonth counters...');
+    try {
+        const gamesSnapshot = await db.collection('games').get();
+        const batch = db.batch();
+        gamesSnapshot.forEach(gameDoc => {
+            batch.update(gameDoc.ref, {
+                'gamesPlayed.lastMonth': 0,
+                'ggCoinsGathered.lastMonth': 0,
+                'ggCoinsDistributed.lastMonth': 0,
+            });
+        });
+        await batch.commit();
+
+        const now = new Date();
+        const currentMonth = now.getFullYear() + '-' + (now.getMonth() + 1).toString().padStart(2, '0');
+        const lastMonth = now.getMonth() === 0
+            ? (now.getFullYear() - 1) + '-12'
+            : now.getFullYear() + '-' + now.getMonth().toString().padStart(2, '0');
+
+        await db.collection('platform').doc('stats').update({
+            'totalGGCoinsGathered.lastMonth': 0,
+            'totalGGCoinsDistributed.lastMonth': 0,
+            'categories.arcade.ggCoinsGathered.lastMonth': 0,
+            'categories.arcade.ggCoinsDistributed.lastMonth': 0,
+            'categories.arcade.gamesPlayed.lastMonth': 0,
+            'categories.picker.ggCoinsGathered.lastMonth': 0,
+            'categories.picker.ggCoinsDistributed.lastMonth': 0,
+            'categories.picker.gamesPlayed.lastMonth': 0,
+            'categories.pvp.ggCoinsGathered.lastMonth': 0,
+            'categories.pvp.ggCoinsDistributed.lastMonth': 0,
+            'categories.pvp.gamesPlayed.lastMonth': 0,
+            'categories.casino.ggCoinsGathered.lastMonth': 0,
+            'categories.casino.ggCoinsDistributed.lastMonth': 0,
+            'categories.casino.gamesPlayed.lastMonth': 0,
+            'currentMonthPeriod': currentMonth,
+            'lastMonthPeriod': lastMonth,
+        });
+        console.log(`[monthlyReset] Done. New period: ${currentMonth}`);
+    } catch (err) {
+        console.error('[monthlyReset] Failed:', err);
+    }
+});
 
 // Seed game definitions on startup (idempotent — skips existing docs)
 async function seedGamesOnStartup() {
@@ -1024,6 +1147,27 @@ app.post('/api/picker/create-session', protect, async (req, res) => {
         // Add document to gameEntryTokens collection
         const docRef = await db.collection('gameEntryTokens').add(tokenDoc);
 
+        // Track ggCoinsGathered for paid picker sessions
+        if (currency === 'SOL') {
+            const amount = 0.01; // picker play cost
+            try {
+                await db.collection('games').doc('degen-race').set({
+                    'ggCoinsGathered': {
+                        allTime: admin.firestore.FieldValue.increment(amount),
+                        lastMonth: admin.firestore.FieldValue.increment(amount),
+                    }
+                }, { merge: true });
+                await db.collection('platform').doc('stats').set({
+                    'categories.picker.ggCoinsGathered.allTime': admin.firestore.FieldValue.increment(amount),
+                    'categories.picker.ggCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(amount),
+                    'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(amount),
+                    'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(amount),
+                }, { merge: true });
+            } catch (statsErr) {
+                console.warn('[picker/create-session] Non-fatal: failed to update ggCoinsGathered:', statsErr.message);
+            }
+        }
+
         res.status(200).json({ gameEntryTokenId: docRef.id });
     } catch (error) {
         console.error("Error creating game entry token:", error);
@@ -1058,9 +1202,17 @@ app.get('/api/picker/validate-session/:id', protect, async (req, res) => {
 });
 
 // --- Update Free Entry Tokens (Generate) (Protected) ---
+// Play cost lookup by category (SOL amounts used as ggCoinsGathered unit)
+const PLAY_COST_BY_CATEGORY = {
+    arcade: { cost: 0.005, defaultGameId: 'whack-a-degen' },
+    picker: { cost: 0.01, defaultGameId: 'degen-race' },
+    pvp:    { cost: 0.1, defaultGameId: 'degen-fighter' },
+    casino: { cost: 0.01, defaultGameId: 'casino' },
+};
+
 app.post('/tokens/generate', protect, async (req, res) => {
     const userId = req.user.uid;
-    const { tokenType } = req.body;
+    const { tokenType, gameId } = req.body;
 
     if (!tokenType) {
         return res.status(400).json({ message: "Token type is required (e.g., 'arcade', 'picker', 'casino', 'pvp')." });
@@ -1074,6 +1226,30 @@ app.post('/tokens/generate', protect, async (req, res) => {
             [`freeEntryTokens.${tokenType}`]: admin.firestore.FieldValue.increment(1),
             [`freeEntryTokens.${tokenType}Tokens`]: admin.firestore.FieldValue.increment(1),
         });
+
+        // Track ggCoinsGathered (SOL entry fee) — tokens/generate is only called on paid plays
+        const playCostInfo = PLAY_COST_BY_CATEGORY[tokenType];
+        if (playCostInfo) {
+            const resolvedGameId = gameId || playCostInfo.defaultGameId;
+            const amount = playCostInfo.cost;
+            try {
+                await db.collection('games').doc(resolvedGameId).set({
+                    'ggCoinsGathered': {
+                        allTime: admin.firestore.FieldValue.increment(amount),
+                        lastMonth: admin.firestore.FieldValue.increment(amount),
+                    }
+                }, { merge: true });
+                await db.collection('platform').doc('stats').set({
+                    [`categories.${tokenType}.ggCoinsGathered.allTime`]: admin.firestore.FieldValue.increment(amount),
+                    [`categories.${tokenType}.ggCoinsGathered.lastMonth`]: admin.firestore.FieldValue.increment(amount),
+                    'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(amount),
+                    'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(amount),
+                }, { merge: true });
+            } catch (statsErr) {
+                console.warn(`[tokens/generate] Non-fatal: failed to update ggCoinsGathered:`, statsErr.message);
+            }
+        }
+
         res.status(200).json({ message: `Successfully added 1 ${tokenType} token.`, tokenType });
     } catch (error) {
         console.error(`Error generating ${tokenType} token for user ${userId}:`, error);
@@ -1522,8 +1698,14 @@ app.post('/api/arcade/claim-payout', protect, async (req, res) => {
             timestamp: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        // Update platform stats (non-fatal)
+        // Update per-game doc + platform stats (non-fatal)
         try {
+            await db.collection('games').doc('whack-a-degen').set({
+                'ggCoinsDistributed': {
+                    allTime: admin.firestore.FieldValue.increment(coinsEarned),
+                    lastMonth: admin.firestore.FieldValue.increment(coinsEarned),
+                }
+            }, { merge: true });
             await db.collection('platform').doc('stats').update({
                 'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(coinsEarned),
                 'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(coinsEarned),
@@ -1531,7 +1713,7 @@ app.post('/api/arcade/claim-payout', protect, async (req, res) => {
                 'categories.arcade.ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(coinsEarned),
             });
         } catch (statsErr) {
-            console.warn('[ArcadePayout] Non-fatal: failed to update platform stats:', statsErr.message);
+            console.warn('[ArcadePayout] Non-fatal: failed to update stats:', statsErr.message);
         }
 
         console.log(`[ArcadePayout] ${userId} claimed ${coinsEarned} GGW coins (score ${score}). Session: ${gameSessionId}`);
@@ -1639,12 +1821,31 @@ app.post('/api/picker/claim-payout', protect, async (req, res) => {
             winnerKey,
             amount: PICKER_WIN_REWARD,
             currency: 'GGW',
+            txSig,
             type: 'payout',
             timestamp: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        // Update platform stats (non-fatal)
+        // Per-user transaction history for audit trail
+        await db.collection('users').doc(userId).collection('transactions').add({
+            sessionId,
+            gameId: 'degen-race',
+            category: 'picker',
+            type: 'payout',
+            amount: PICKER_WIN_REWARD,
+            currency: 'GGW',
+            txSig,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Update per-game doc + platform stats (non-fatal)
         try {
+            await db.collection('games').doc('degen-race').set({
+                'ggCoinsDistributed': {
+                    allTime: admin.firestore.FieldValue.increment(pickerRewardDisplay),
+                    lastMonth: admin.firestore.FieldValue.increment(pickerRewardDisplay),
+                }
+            }, { merge: true });
             await db.collection('platform').doc('stats').update({
                 'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(pickerRewardDisplay),
                 'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pickerRewardDisplay),
@@ -1652,15 +1853,144 @@ app.post('/api/picker/claim-payout', protect, async (req, res) => {
                 'categories.picker.ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pickerRewardDisplay),
             });
         } catch (statsErr) {
-            console.warn('[PickerPayout] Non-fatal: failed to update platform stats:', statsErr.message);
+            console.warn('[PickerPayout] Non-fatal: failed to update stats:', statsErr.message);
         }
 
-        console.log(`[PickerPayout] ${userId} won picker race. Session: ${sessionId}. Payout: ${PICKER_WIN_REWARD} raw GGW.`);
-        res.status(200).json({ success: true, isWinner: true, reward: PICKER_WIN_REWARD });
+        console.log(`[PickerPayout] ${userId} won picker race. Session: ${sessionId}. Payout: ${PICKER_WIN_REWARD} raw GGW. Tx: ${txSig}`);
+        res.status(200).json({ success: true, isWinner: true, reward: PICKER_WIN_REWARD, txSig });
 
     } catch (error) {
         console.error('[PickerPayout] Error:', error);
         res.status(500).json({ message: error.message || 'Internal server error during picker payout.' });
+    }
+});
+
+
+
+// POST /api/pvp/claim-payout (Protected)
+// Called after a DegenFighter match ends. Pays GGW tokens to the winner.
+// Uses a server-generated matchSessionId for dedup — client cannot spoof win results.
+const PVP_WIN_REWARD = 10_000_000_000; // 10 GGW tokens for winning a PvP match (raw units, 9 decimals)
+
+app.post('/api/pvp/claim-payout', protect, async (req, res) => {
+    const userId = req.user.uid;
+    const { matchSessionId, won, score } = req.body;
+
+    if (!matchSessionId || typeof won !== 'boolean' || typeof score !== 'number') {
+        return res.status(400).json({ message: 'matchSessionId, won (boolean), and score (number) are required.' });
+    }
+
+    // Rate limiting (separate key space from arcade/picker)
+    const rlKey = `pvp_${userId}`;
+    const lastPayout = payoutRateLimitMap.get(rlKey);
+    if (lastPayout && (Date.now() - lastPayout) < PAYOUT_RATE_LIMIT_MS) {
+        return res.status(429).json({ message: 'Too many payout requests. Please wait before claiming again.' });
+    }
+
+    try {
+        // Dedup: one payout claim per matchSessionId per user
+        const existingPayout = await db.collection('payouts')
+            .where('matchSessionId', '==', matchSessionId)
+            .where('userId', '==', userId)
+            .limit(1)
+            .get();
+        if (!existingPayout.empty) {
+            return res.status(409).json({ message: 'Payout already claimed for this match session.' });
+        }
+
+        // Mark session as claimed regardless of win/loss so we always store the result
+        if (!won) {
+            // Record the loss in per-user history but pay nothing
+            await db.collection('users').doc(userId).collection('transactions').add({
+                matchSessionId,
+                gameId: 'degen-fighter',
+                category: 'pvp',
+                type: 'match_loss',
+                score,
+                amount: 0,
+                currency: 'GGW',
+                txSig: null,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            return res.status(200).json({ success: true, won: false, reward: 0 });
+        }
+
+        // Resolve user wallet
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (!userDoc.exists || !userDoc.data().wallet) {
+            return res.status(400).json({ message: 'No Solana wallet linked. Connect a wallet to claim payouts.' });
+        }
+        const recipientPublicKey = new PublicKey(userDoc.data().wallet);
+
+        // Treasury balance check (non-fatal if admin wallet not configured)
+        if (adminWalletKeypair && gameTokenMint) {
+            try {
+                const adminATA = await getOrCreateAssociatedTokenAccount(
+                    connection, adminWalletKeypair, gameTokenMint, adminWalletKeypair.publicKey
+                );
+                const treasuryBalance = await getTokenAccountBalance(adminATA.address);
+                if (treasuryBalance < PVP_WIN_REWARD) {
+                    console.error(`[PvPPayout] Insufficient treasury. Have: ${treasuryBalance}, need: ${PVP_WIN_REWARD}`);
+                    return res.status(503).json({ message: 'Treasury temporarily low. Please try again later.' });
+                }
+            } catch (balErr) {
+                console.warn('[PvPPayout] Could not verify treasury balance:', balErr.message);
+            }
+        }
+
+        const txSig = await transferSolanaToken(recipientPublicKey, PVP_WIN_REWARD);
+        if (!txSig) {
+            return res.status(500).json({ message: 'Token transfer failed. Please try again.' });
+        }
+
+        payoutRateLimitMap.set(rlKey, Date.now());
+
+        // Global audit log
+        await db.collection('payouts').add({
+            matchSessionId,
+            userId,
+            gameId: 'degen-fighter',
+            category: 'pvp',
+            score,
+            amount: PVP_WIN_REWARD,
+            currency: 'GGW',
+            txSig,
+            type: 'payout',
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Per-user transaction history for audit trail
+        await db.collection('users').doc(userId).collection('transactions').add({
+            matchSessionId,
+            gameId: 'degen-fighter',
+            category: 'pvp',
+            type: 'payout',
+            score,
+            amount: PVP_WIN_REWARD,
+            currency: 'GGW',
+            txSig,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Update platform stats (non-fatal)
+        const pvpRewardDisplay = PVP_WIN_REWARD / 1_000_000_000;
+        try {
+            await db.collection('platform').doc('stats').update({
+                'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(pvpRewardDisplay),
+                'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pvpRewardDisplay),
+                'categories.pvp.ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(pvpRewardDisplay),
+                'categories.pvp.ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pvpRewardDisplay),
+            });
+        } catch (statsErr) {
+            console.warn('[PvPPayout] Non-fatal: failed to update platform stats:', statsErr.message);
+        }
+
+        console.log(`[PvPPayout] ${userId} won PvP match (score ${score}). Session: ${matchSessionId}. Reward: ${PVP_WIN_REWARD} raw GGW. Tx: ${txSig}`);
+        res.status(200).json({ success: true, won: true, reward: PVP_WIN_REWARD, txSig });
+
+    } catch (error) {
+        console.error('[PvPPayout] Error:', error);
+        res.status(500).json({ message: error.message || 'Internal server error during PvP payout.' });
     }
 });
 
