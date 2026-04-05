@@ -13,7 +13,7 @@ import {
 import "./degenRace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
-import { api } from '../../../services/api';
+import { api, apiService } from '../../../services/api';
 import { saveGameResult } from '../../../firebase/gameScores';
 
 const GameOverModal = lazy(() => import("../PickerGameOverModal"));
@@ -210,6 +210,7 @@ export default function DegenRace() {
                     coinsEarned,
                     won: playerWon,
                 });
+                await apiService.incrementGamesPlayed('degen-race', 'picker');
                 await refreshProfile();
             } catch (err) {
                 console.error('[DegenRace] Failed to save game result:', err);
