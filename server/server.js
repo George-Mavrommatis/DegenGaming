@@ -756,6 +756,7 @@ app.post("/verify-wallet", async (req, res) => {
         const firebaseUID = address;
 
         let userRecord;
+        let isNewUser = false;
         try {
             // Try to get existing Firebase user
             userRecord = await auth.getUser(firebaseUID);
@@ -786,6 +787,8 @@ app.post("/verify-wallet", async (req, res) => {
                     freeEntryTokens: { arcade: 0, picker: 0, casino: 0, pvp: 0 },
                     // ... other default profile fields you need
                 }, { merge: true }); // Use merge:true to ensure it doesn't overwrite if document somehow exists
+
+                isNewUser = true;
             } else {
                 console.error("API (Public): Unexpected Firebase Auth error during user lookup/creation:", error);
                 throw error;
@@ -798,7 +801,7 @@ app.post("/verify-wallet", async (req, res) => {
             isSolanaVerified: true,
         });
 
-        res.status(200).json({ customToken });
+        res.status(200).json({ customToken, isNew: isNewUser });
 
     } catch (error) {
         console.error("Error in /verify-wallet:", error);

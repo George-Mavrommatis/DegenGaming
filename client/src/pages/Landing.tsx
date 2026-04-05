@@ -36,9 +36,14 @@ export default function Landing() {
 
     setLoadingSignIn(true);
     try {
-      await solanaWalletLogin(wallet);
-      toast.success("Signed in! Welcome.");
-      navigate("/home");
+      const { isNew } = await solanaWalletLogin(wallet);
+      if (isNew) {
+        toast.success("Welcome to DegenGaming! Let's set up your profile.");
+        navigate("/profile");
+      } else {
+        toast.success("Signed in! Welcome back.");
+        navigate("/home");
+      }
     } catch (err: any) {
       console.error("Solana sign-in failed:", err);
       if (

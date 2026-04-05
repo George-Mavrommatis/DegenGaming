@@ -171,6 +171,10 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   const { connected, disconnect, publicKey } = useWallet();
   const navigate = useNavigate();
+  // Track whether the wallet was ever connected this session to avoid
+  // signing the user out on page refresh before autoConnect has re-established
+  // the wallet connection.
+  const walletWasConnected = useRef(false);
 
   const refreshProfile = useCallback(async () => {
     if (!user) {
@@ -320,7 +324,17 @@ export const ProfileProvider: React.FC<{ children: ReactNode }> = ({ children })
   }, [publicKey, connected]);
 
   useEffect(() => {
-    if (user && !connected && !loading && isAuthenticated) {
+    if (connected) {
+      // Mark that the wallet has connected at least once this session
+      walletWasConnected.current = true;
+      return;
+    }
+
+    // Only sign out when the wallet transitions from connected → disconnected.
+    // This prevents a false logout on page refresh, where autoConnect hasn't
+    // re-established the connection yet when onAuthStateChanged fires.
+    if (walletWasConnected.current && user && !loading && isAuthenticated) {
+      walletWasConnected.current = false;
       console.log("ProfileContext: Solana wallet disconnected for active Firebase user. Initiating Firebase logout...");
       if (auth.currentUser && auth.currentUser.uid === user.uid) {
         firebaseSignOut(auth)

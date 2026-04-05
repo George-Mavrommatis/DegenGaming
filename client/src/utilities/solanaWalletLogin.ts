@@ -24,7 +24,7 @@ type SolanaWallet = {
 export async function solanaWalletLogin(
   wallet: SolanaWallet,
   onStatus?: (msg: string) => void
-) {
+): Promise<{ isNew: boolean }> {
   try {
     onStatus?.("Connecting wallet...");
     if (!wallet.connected) {
@@ -54,6 +54,7 @@ export async function solanaWalletLogin(
     await signInWithCustomToken(auth, data.customToken);
 
     onStatus?.("Login successful!");
+    return { isNew: data.isNew === true };
   } catch (err: any) {
     onStatus?.("Login failed: " + (err?.message || err));
     console.error("solanaWalletLogin error:", err);
