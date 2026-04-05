@@ -173,10 +173,22 @@ export const apiService = {
 
 
   /**
-   * Increment solGathered for a game and category
+   * Increment ggCoinsGathered for a game and category (entry fees collected)
    */
-   incrementSolGathered: async (gameId: string, category: string, amount: number) => {
-    const response = await apiClient.post('/api/games/increment-sol-gathered', {
+  incrementGGcoinsGathered: async (gameId: string, category: string, amount: number) => {
+    const response = await apiClient.post('/api/games/increment-ggcoins-gathered', {
+      gameId,
+      category,
+      amount
+    });
+    return response.data;
+  },
+
+  /**
+   * Increment ggCoinsDistributed for a game and category (payouts to players)
+   */
+  incrementGGcoinsDistributed: async (gameId: string, category: string, amount: number) => {
+    const response = await apiClient.post('/api/games/increment-ggcoins-distributed', {
       gameId,
       category,
       amount
