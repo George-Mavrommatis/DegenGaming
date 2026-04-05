@@ -14,6 +14,7 @@ import "./degenRace.css";
 import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api } from '../../../services/api';
+import { saveGameResult } from '../../../firebase/gameScores';
 
 const GameOverModal = lazy(() => import("../PickerGameOverModal"));
 
@@ -139,7 +140,7 @@ export default function DegenRace() {
     const [eventLog, setEventLog] = useState<any[]>([]);
     const gameContainerRef = useRef<HTMLDivElement>(null);
     const phaserGameRef = useRef<Phaser.Game | null>(null);
-    const { refreshProfile } = useProfile();
+    const { profile, refreshProfile } = useProfile();
 
     // --- State change handler ---
     const handleGameStateChange = useCallback((state: any) => {
@@ -181,7 +182,7 @@ export default function DegenRace() {
         }
     }, [loadedGameConfig, refreshProfile]);
 
-    const handleGameEnd = useCallback((winner: any, rankings: any[]) => {
+    const handleGameEnd = useCallback(async (winner: any, rankings: any[]) => {
         setGameState(prevState => ({
             ...prevState,
             status: 'finished',
@@ -189,8 +190,34 @@ export default function DegenRace() {
             leaderboard: rankings,
             raceEndTime: Date.now()
         }));
+
+        // Determine if local player won and compute a finish-position score
+        const humanKey = loadedGameConfig?.humanChoice?.key;
+        const finishPosition = rankings.findIndex((p: any) => p.key === humanKey);
+        const totalPlayers = rankings.length || 1;
+        // Score = inversely proportional to finish position (1st = full score)
+        const positionScore = Math.max(0, Math.round(1000 * (1 - finishPosition / totalPlayers)));
+        const playerWon = finishPosition === 0;
+        const coinsEarned = Math.floor(positionScore / 10);
+
+        if (profile) {
+            try {
+                await saveGameResult(profile, {
+                    gameId: 'degen-race',
+                    gameName: 'DegenRace',
+                    category: 'picker',
+                    score: positionScore,
+                    coinsEarned,
+                    won: playerWon,
+                });
+                await refreshProfile();
+            } catch (err) {
+                console.error('[DegenRace] Failed to save game result:', err);
+            }
+        }
+
         setTimeout(() => setShowGameOverModal(true), 1500);
-    }, []);
+    }, [profile, loadedGameConfig, refreshProfile]);
 
     // --- Game config load, with avatar CORS fix ---
     const preparePlayersWithSafeAvatars = useCallback(async (players: Player[]) => {
@@ -418,7 +445,7 @@ export default function DegenRace() {
                 }}
                 onClick={e => e.stopPropagation()}
             >
-                <h2 style={{ fontFamily: "WegensFont, Orbitron, Arial", fontSize: 26, marginBottom: 18 }}>Settings</h2>
+                <h2 style={{ fontFamily: "DegensFont, Orbitron, Arial", fontSize: 26, marginBottom: 18 }}>Settings</h2>
                 <div style={{ marginBottom: 18 }}>
                     <label style={{ display: "block", marginBottom: 8 }}>
                         <input
@@ -457,10 +484,10 @@ export default function DegenRace() {
     // Only render overlay/Phaser after config and players are loaded
     if (!loadedGameConfig || !loadedGameConfig.players || loadedGameConfig.players.length === 0 || !isSessionAuthenticated) {
         return (
-            <div className="min-h-screen bg-black flex items-center justify-center" style={{ fontFamily: 'WegensFont, Arial, sans-serif' }}>
+            <div className="min-h-screen bg-black flex items-center justify-center" style={{ fontFamily: 'DegensFont, Arial, sans-serif' }}>
                 <div className="text-center text-white p-4">
                     <div className="text-4xl mb-4 animate-pulse">⏳</div>
-                    <div className="text-xl font-bold mb-2">Preparing Wegen Race...</div>
+                    <div className="text-xl font-bold mb-2">Preparing Degen Race...</div>
                     <div className="text-sm mb-4">{loadingMessage}</div>
                 </div>
             </div>
@@ -468,7 +495,7 @@ export default function DegenRace() {
     }
 
     return (
-        <div className={`degenrace-root${isFullscreen ? " fullscreen-mode" : ""}`} style={{ fontFamily: 'WegensFont, Arial, sans-serif', width: "100vw", minHeight: "100vh" }}>
+        <div className={`degenrace-root${isFullscreen ? " fullscreen-mode" : ""}`} style={{ fontFamily: 'DegensFont, Arial, sans-serif', width: "100vw", minHeight: "100vh" }}>
             {/* === TOP BAR === */}
             <div className={`degenrace-topbar animated-panel ${phaseAnimClass}`}>
                 <div className="degenrace-topbar-content">
@@ -593,7 +620,7 @@ export default function DegenRace() {
                         border: "2px solid #ffd93b"
                     }}>
                         <div style={{
-                            color: "#ffd93b", fontWeight: 800, fontSize: 38, fontFamily: "WegensFont, Orbitron",
+                            color: "#ffd93b", fontWeight: 800, fontSize: 38, fontFamily: "DegensFont, Orbitron",
                             textShadow: "0 2px 8px #000b",
                             marginBottom: 14
                         }}>Ready to Race?</div>
@@ -650,8 +677,8 @@ export default function DegenRace() {
                                 }))
                         }
                         humanPlayerChoice={loadedGameConfig.humanChoice}
-                        gameType="wegen-race"
-                        gameTitle={loadedGameConfig.gameTitle || "Wegen Race"}
+                        gameType="degen-race"
+                        gameTitle={loadedGameConfig.gameTitle || "Degen Race"}
                         onPlayAgain={handlePlayAgain}
                         onBackToGames={handleBackToGames}
                     />

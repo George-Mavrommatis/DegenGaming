@@ -53,6 +53,99 @@ export async function fetchAccountRankingLeaderboard(limitCount = 100): Promise<
   return result;
 }
 // =========================================================================
+//  SHARED GAME RESULT SAVE — wires all games to Firebase
+// =========================================================================
+
+export type GameCategory = 'arcade' | 'picker' | 'pvp' | 'casino';
+
+export interface GameResultInput {
+  gameId: string;        // e.g. 'degen-race', 'degen-fighter', 'casino'
+  gameName: string;      // e.g. 'DegenRace'
+  category: GameCategory;
+  score: number;
+  coinsEarned: number;
+  won?: boolean;         // for PvP / competitive games
+}
+
+/**
+ * saveGameResult — shared utility called at the end of every game.
+ * Writes to:
+ *   - users/{uid}/gameHistory  (append)
+ *   - users/{uid}              (stats, coins, recentGames, accountXP)
+ */
+export const saveGameResult = async (
+  profile: ProfileData,
+  result: GameResultInput
+): Promise<void> => {
+  if (!profile?.wallet) {
+    throw new Error("User profile or wallet address is not available.");
+  }
+
+  const { gameId, gameName, category, score, coinsEarned, won = false } = result;
+  const uid = profile.wallet;
+  const now = new Date();
+
+  const userProfileRef = doc(db, 'users', uid);
+  const gameHistoryCollectionRef = collection(db, 'users', uid, 'gameHistory');
+
+  const categoryGamesPlayedField = `stats.${category}GamesPlayed`;
+  const bestScoreField = `stats.bestScores.${gameId}`;
+  const coinsField = `coins.${category}`;
+
+  const gameHistoryEntry = {
+    gameId,
+    gameName,
+    gameType: category,
+    score,
+    coinsEarned,
+    won,
+    timestamp: serverTimestamp(),
+  };
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const userProfileSnap = await transaction.get(userProfileRef);
+      if (!userProfileSnap.exists()) {
+        throw new Error("User profile not found. Cannot save game result.");
+      }
+
+      const current = userProfileSnap.data() as ProfileData;
+      const recentGames = current.recentGames || [];
+      const newRecentGame = {
+        gameId,
+        gameName,
+        score,
+        coinsEarned,
+        category,
+        playedAt: now.toISOString(),
+      };
+      const updatedRecentGames = [newRecentGame, ...recentGames].slice(0, 10);
+
+      const currentBest = current.stats?.bestScores?.[gameId] ?? 0;
+
+      const historyRef = doc(gameHistoryCollectionRef);
+      transaction.set(historyRef, gameHistoryEntry);
+
+      transaction.update(userProfileRef, {
+        'stats.totalGamesPlayed': increment(1),
+        'stats.totalWins': won ? increment(1) : increment(0),
+        [categoryGamesPlayedField]: increment(1),
+        [bestScoreField]: Math.max(score, currentBest),
+        [coinsField]: increment(coinsEarned),
+        'accountXP': increment(score),
+        'recentGames': updatedRecentGames,
+        'lastPlayed': serverTimestamp(),
+      });
+    });
+
+    console.log(`[saveGameResult] ${gameName} saved — score: ${score}, coins: ${coinsEarned}, won: ${won}`);
+  } catch (e) {
+    console.error('[saveGameResult] Transaction failed:', e);
+    throw e;
+  }
+};
+
+// =========================================================================
 //  SAVE SCORE FUNCTION (Your original code - no changes needed here)
 // =========================================================================
 export const saveWhackADegenScore = async (profile: ProfileData, score: number) => {
@@ -161,9 +254,9 @@ export async function fetchLeaderboard(
       const year = now.getFullYear();
       const month = (now.getMonth() + 1).toString().padStart(2, '0');
       const monthlyLeaderboardId = `${year}-${month}`;
-      scoresCollectionPath = `leaderboards/whack-a-wegen/monthlyScores/${monthlyLeaderboardId}/scores`;
+      scoresCollectionPath = `leaderboards/whack-a-degen/monthlyScores/${monthlyLeaderboardId}/scores`;
     } else {
-      scoresCollectionPath = 'leaderboards/whack-a-wegen/allTimeScores';
+      scoresCollectionPath = 'leaderboards/whack-a-degen/allTimeScores';
     }
 
     // 1. Fetch the raw scores, ordered from highest to lowest.
@@ -203,7 +296,7 @@ export async function fetchLeaderboard(
               username: '', // Explicitly empty so the fallback logic works
               avatarUrl: '', // Explicitly empty
               // Add other required fields from ProfileData with default values
-              stats: { totalGamesPlayed: 0, bestScores: { whackawegen: 0 } },
+              stats: { totalGamesPlayed: 0, bestScores: { whackadegen: 0 } },
               coins: { arcade: 0 },
               createdAt: new Date(),
               lastPlayed: new Date(),

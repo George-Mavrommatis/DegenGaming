@@ -3,8 +3,17 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'DegensFont';
+  src: url('/fonts/DegensFont.woff2') format('woff2'),
+       url('/fonts/DegensFont.woff') format('woff'),
+       url('/fonts/DegensFont.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
 :root {
-  font-family: 'WegensFont', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'DegensFont', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 

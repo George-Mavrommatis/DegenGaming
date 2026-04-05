@@ -10,8 +10,9 @@ import Games from "./pages/Games";
 import Leaderboards from "./pages/Leaderboards";
 import GameHistory from './pages/GameHistory';
 import ProtectedRoute from "./routes/ProtectedRoute";
-import DegenRace from "../src/games/Picker/DegenRace/DegenRace";
+import DegenRace from "./games/Picker/DegenRace/DegenRace";
 import WhackADegen from './games/Arcade/WhackADegen/WhackADegen';
+import DegenFighter from './games/PvP/DegenFighter/DegenFighter';
 import Modal from "react-modal";
 import UserActivityTracker from "./components/activityTracker";
 Modal.setAppElement("#root");
@@ -22,7 +23,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const showNavbar = location.pathname !== "/";
   return (
-    <div className="bg-black min-h-screen w-full font-[WegensFont]">
+    <div className="bg-black min-h-screen w-full font-[DegensFont]">
       {showNavbar && <Navbar />}
       <main
         className="w-full bg-black min-h-screen"
@@ -59,6 +60,7 @@ export default function App() {
             {/* Game Routes that require login */}
             <Route path="/games/degenrace" element={<DegenRace />} />
             <Route path="/games/whackadegen" element={<WhackADegen />} />
+            <Route path="/games/degenfighter" element={<DegenFighter />} />
           </Route>
         </Routes>
       </Layout>
@@ -68,7 +70,7 @@ export default function App() {
       <button
         aria-label="Open Social Panel"
         onClick={() => setSocialOpen(true)}
-        className="fixed bottom-6 right-6 z-50 w-20 h-20 rounded-full bg-gradient-to-tr from-orange-500 to-yellow-400 text-white shadow-2xl hover:scale-110 transition flex items-center justify-center border-4 border-yellow-300 font-[WegensFont]"
+        className="fixed bottom-6 right-6 z-50 w-20 h-20 rounded-full bg-gradient-to-tr from-orange-500 to-yellow-400 text-white shadow-2xl hover:scale-110 transition flex items-center justify-center border-4 border-yellow-300 font-[DegensFont]"
         style={{ fontSize: 38, boxShadow: "0 8px 32px rgba(255,140,0,0.15)" }}
       >
         {/* Social/chat/friends icon */}
