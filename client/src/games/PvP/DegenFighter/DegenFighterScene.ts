@@ -550,6 +550,13 @@ export class DegenFighterScene extends Phaser.Scene {
       duration: 600,
     });
 
+    // In networked mode, submit result to server for authoritative resolution
+    if (this.isNetworked && this.pvpSocket && this.pvpRoomId) {
+      this.pvpSocket.emit('pvp:matchResult', { roomId: this.pvpRoomId, won: localWon });
+      // Server will respond with pvp:matchEnded — but if already called endMatch
+      // from pvp:matchEnded listener, we fall through to the callback below.
+    }
+
     // Fire callback after short delay so player can see result
     this.time.delayedCall(2500, () => {
       this.onMatchEnd({ won: localWon, score, coinsEarned });

@@ -6,13 +6,16 @@ import { toast } from 'react-toastify';
 import { useProfile } from '../../../context/ProfileContext';
 import { saveGameResult } from '../../../firebase/gameScores';
 import { apiService } from '../../../services/api';
-import { DegenFighterScene } from './DegenFighterScene';
+import { DegenFighterScene, FighterConfig } from './DegenFighterScene';
 import { claimPvpPayout } from '../pvpTransaction';
+import { socket } from '../../../socket';
 
 const GAME_W = 960;
 const GAME_H = 540;
 const GAME_ID = 'degen-fighter';
 const GAME_CATEGORY = 'pvp' as const;
+
+type UIState = 'mode-select' | 'pvp-lobby' | 'playing' | 'done';
 
 export default function DegenFighter() {
   const gameRef = useRef<Phaser.Game | null>(null);
@@ -21,13 +24,92 @@ export default function DegenFighter() {
   const { profile, refreshProfile } = useProfile();
   const navigate = useNavigate();
 
-  const [gameState, setGameState] = useState<'idle' | 'playing' | 'done'>('idle');
+  const [uiState, setUiState] = useState<UIState>('mode-select');
   const [result, setResult] = useState<{ won: boolean; score: number; coinsEarned: number } | null>(null);
+
+  // PvP room state
+  const [pvpMode, setPvpMode] = useState<'ai' | 'online'>('ai');
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomInputValue, setRoomInputValue] = useState('');
+  const [pvpStatus, setPvpStatus] = useState<string>('');
+  const [opponentInfo, setOpponentInfo] = useState<FighterConfig | null>(null);
+  const pvpRoomIdRef = useRef<string | null>(null);
+
+  // ── Socket PvP lifecycle ─────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (pvpMode !== 'online') return;
+
+    // Connect socket for PvP
+    if (!socket.connected) socket.connect();
+
+    const handleRoomCreated = ({ roomId: id }: { roomId: string }) => {
+      setRoomId(id);
+      pvpRoomIdRef.current = id;
+      setPvpStatus('Waiting for opponent… share your Room ID.');
+    };
+
+    const handleMatchStart = ({
+      roomId: id,
+      host,
+      guest,
+    }: {
+      roomId: string;
+      host: { uid: string; username: string; avatarUrl: string };
+      guest: { uid: string; username: string; avatarUrl: string };
+    }) => {
+      pvpRoomIdRef.current = id;
+      setRoomId(id);
+      const isHost = host.uid === profile?.wallet;
+      const opp = isHost ? guest : host;
+      setOpponentInfo({ key: opp.uid, username: opp.username, avatarUrl: opp.avatarUrl, isLocal: false });
+      setPvpStatus('Opponent found! Starting match…');
+      setTimeout(() => setUiState('playing'), 800);
+    };
+
+    const handleOpponentLeft = () => {
+      if (uiState === 'pvp-lobby') {
+        setPvpStatus('Opponent disconnected from the lobby.');
+        setRoomId(null);
+        pvpRoomIdRef.current = null;
+      }
+    };
+
+    const handlePvpError = ({ message }: { message: string }) => {
+      toast.error(`PvP: ${message}`);
+      setPvpStatus('');
+    };
+
+    socket.on('pvp:roomCreated', handleRoomCreated);
+    socket.on('pvp:matchStart', handleMatchStart);
+    socket.on('pvp:opponentLeft', handleOpponentLeft);
+    socket.on('pvp:error', handlePvpError);
+
+    return () => {
+      socket.off('pvp:roomCreated', handleRoomCreated);
+      socket.off('pvp:matchStart', handleMatchStart);
+      socket.off('pvp:opponentLeft', handleOpponentLeft);
+      socket.off('pvp:error', handlePvpError);
+    };
+  }, [pvpMode, profile?.wallet, uiState]);
+
+  // Leave room on unmount if in PvP mode
+  useEffect(() => {
+    return () => {
+      if (pvpRoomIdRef.current) {
+        socket.emit('pvp:leaveRoom', { roomId: pvpRoomIdRef.current });
+        pvpRoomIdRef.current = null;
+      }
+    };
+  }, []);
+
+  // ── Match end handler ────────────────────────────────────────────────────────
 
   const handleMatchEnd = useCallback(
     async (res: { won: boolean; score: number; coinsEarned: number }) => {
       setResult(res);
-      setGameState('done');
+      setUiState('done');
+      pvpRoomIdRef.current = null;
 
       if (profile) {
         try {
@@ -47,27 +129,26 @@ export default function DegenFighter() {
           toast.error('Could not save match result.');
         }
 
-        // Claim GGW token payout (winners) or record session (losers)
         try {
           const payoutResult = await claimPvpPayout(matchSessionIdRef.current, res.won, res.score);
           if (payoutResult.won && payoutResult.reward) {
-            const rewardDisplay = payoutResult.reward / 1_000_000_000;
-            toast.success(`🏆 ${rewardDisplay} GGW tokens sent to your wallet!`);
+            toast.success(`🏆 ${(payoutResult.reward / 1_000_000_000).toFixed(4)} GGW tokens sent!`);
           } else if (payoutResult.error && payoutResult.error !== 'Payout already claimed for this match session.') {
             toast.warn(`Payout notice: ${payoutResult.error}`);
           }
         } catch {
-          // Non-fatal: payout failure should not break the game over flow
+          // Non-fatal
         }
       }
     },
     [profile, refreshProfile]
   );
 
-  // Mount Phaser game
+  // ── Mount Phaser game ────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!containerRef.current || gameRef.current || !profile) return;
-    if (gameState !== 'playing') return;
+    if (uiState !== 'playing') return;
 
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
@@ -75,35 +156,35 @@ export default function DegenFighter() {
       width: GAME_W,
       height: GAME_H,
       backgroundColor: '#0a0015',
-      scale: {
-        mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH,
-      },
-      physics: {
-        default: 'arcade',
-        arcade: { gravity: { x: 0, y: 300 }, debug: false },
-      },
+      scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+      physics: { default: 'arcade', arcade: { gravity: { x: 0, y: 300 }, debug: false } },
       scene: [DegenFighterScene],
     };
 
     const game = new Phaser.Game(config);
     gameRef.current = game;
 
+    const localFighter: FighterConfig = {
+      key: profile.wallet,
+      username: profile.username || profile.wallet.slice(0, 6),
+      avatarUrl: profile.avatarUrl || '/DegenRaceAssets/G1small.png',
+      isLocal: true,
+    };
+
+    const opponent: FighterConfig = opponentInfo ?? {
+      key: 'ai-opponent',
+      username: 'Degen Bot',
+      avatarUrl: '/DegenRaceAssets/G1small.png',
+      isLocal: false,
+    };
+
     game.scene.start('DegenFighterScene', {
-      localFighter: {
-        key: profile.wallet,
-        username: profile.username || profile.wallet.slice(0, 6),
-        avatarUrl: profile.avatarUrl || '/DegenRaceAssets/G1small.png',
-        isLocal: true,
-      },
-      // Opponent: solo AI for now — will be replaced by Socket.IO matchmaking
-      opponent: {
-        key: 'ai-opponent',
-        username: 'Degen Bot',
-        avatarUrl: '/DegenRaceAssets/G1small.png',
-        isLocal: false,
-      },
+      localFighter,
+      opponent,
       onMatchEnd: handleMatchEnd,
+      ...(pvpMode === 'online' && pvpRoomIdRef.current
+        ? { socket, roomId: pvpRoomIdRef.current }
+        : {}),
     });
 
     return () => {
@@ -112,34 +193,61 @@ export default function DegenFighter() {
         gameRef.current = null;
       }
     };
-  }, [gameState, profile, handleMatchEnd]);
+  }, [uiState, profile, handleMatchEnd, opponentInfo, pvpMode]);
 
-  const startGame = () => {
-    if (!profile) {
-      toast.error('Please connect your wallet first.');
-      return;
-    }
+  // ── Actions ──────────────────────────────────────────────────────────────────
+
+  const startAI = () => {
+    if (!profile) { toast.error('Connect wallet first.'); return; }
+    setPvpMode('ai');
+    setOpponentInfo(null);
     setResult(null);
-    setGameState('playing');
+    setUiState('playing');
+  };
+
+  const openPvPLobby = () => {
+    if (!profile) { toast.error('Connect wallet first.'); return; }
+    setPvpMode('online');
+    setRoomId(null);
+    setRoomInputValue('');
+    setPvpStatus('');
+    setOpponentInfo(null);
+    setUiState('pvp-lobby');
+  };
+
+  const createRoom = () => {
+    if (!profile) return;
+    setPvpStatus('Creating room…');
+    socket.emit('pvp:createRoom', { username: profile.username || profile.wallet.slice(0, 6), avatarUrl: profile.avatarUrl });
+  };
+
+  const joinRoom = () => {
+    const id = roomInputValue.trim();
+    if (!id) { toast.error('Enter a Room ID.'); return; }
+    if (!profile) return;
+    setPvpStatus('Joining room…');
+    socket.emit('pvp:joinRoom', { roomId: id, username: profile.username || profile.wallet.slice(0, 6), avatarUrl: profile.avatarUrl });
   };
 
   const playAgain = () => {
-    if (gameRef.current) {
-      gameRef.current.destroy(true);
-      gameRef.current = null;
-    }
+    if (gameRef.current) { gameRef.current.destroy(true); gameRef.current = null; }
     setResult(null);
-    setGameState('playing');
-    // Fresh session ID so each replay can claim its own payout
+    setOpponentInfo(null);
+    setPvpMode('ai');
+    setRoomId(null);
+    pvpRoomIdRef.current = null;
     matchSessionIdRef.current = crypto.randomUUID();
+    setUiState('mode-select');
   };
+
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col items-center min-h-screen bg-black text-white font-mono">
       {/* Header */}
       <div className="w-full flex items-center justify-between px-6 py-4 border-b border-red-900/40">
         <button
-          onClick={() => navigate('/games')}
+          onClick={() => { if (pvpRoomIdRef.current) socket.emit('pvp:leaveRoom', { roomId: pvpRoomIdRef.current }); navigate('/games'); }}
           className="text-sm text-red-400 hover:text-red-200 transition"
         >
           ← Back to Games
@@ -153,40 +261,95 @@ export default function DegenFighter() {
         <span className="text-sm text-gray-500">PvP Arena</span>
       </div>
 
-      {/* Game area */}
-      {gameState === 'idle' && (
+      {/* Mode select */}
+      {uiState === 'mode-select' && (
         <div className="flex flex-col items-center justify-center flex-1 gap-6 px-4">
-          <div className="text-center max-w-md">
-            <h1 className="text-4xl font-bold text-red-400 mb-2">⚔ DegenFighter</h1>
-            <p className="text-gray-400 text-sm mb-4">
-              1v1 battle arena — fight your way to the top. Use arrow keys to move, Z to attack, X for special.
-            </p>
-            <div className="bg-gray-900 border border-red-900/50 rounded-lg p-4 text-left text-sm text-gray-300 mb-6 space-y-1">
-              <div>← → Move</div>
-              <div>↑ Jump</div>
-              <div>Z Normal attack</div>
-              <div>X Special attack (3s cooldown)</div>
-              <div className="text-yellow-400 mt-2">Chain hits for combo bonuses!</div>
-            </div>
+          <h1 className="text-4xl font-bold text-red-400">⚔ DegenFighter</h1>
+          <p className="text-gray-400 text-sm">Use arrow keys to move, Z to attack, X for special.</p>
+          <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
             <button
-              onClick={startGame}
-              className="bg-red-600 hover:bg-red-500 text-white font-bold px-10 py-3 rounded-lg text-lg transition shadow-lg shadow-red-900/40"
+              onClick={startAI}
+              className="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white font-bold py-6 rounded-xl transition flex flex-col items-center gap-2"
             >
-              ⚔ Enter Arena
+              <span className="text-3xl">🤖</span>
+              <span>vs AI</span>
+              <span className="text-xs text-gray-400">Solo practice</span>
+            </button>
+            <button
+              onClick={openPvPLobby}
+              className="bg-red-900 hover:bg-red-800 border border-red-600 text-white font-bold py-6 rounded-xl transition flex flex-col items-center gap-2"
+            >
+              <span className="text-3xl">⚔</span>
+              <span>vs Player</span>
+              <span className="text-xs text-red-300">Online PvP</span>
             </button>
           </div>
         </div>
       )}
 
-      {gameState === 'playing' && (
-        <div
-          ref={containerRef}
-          className="w-full max-w-5xl mt-4"
-          style={{ aspectRatio: '16/9' }}
-        />
+      {/* PvP lobby */}
+      {uiState === 'pvp-lobby' && (
+        <div className="flex flex-col items-center justify-center flex-1 gap-6 px-4 w-full max-w-md">
+          <h2 className="text-2xl font-bold text-red-400">Online PvP Lobby</h2>
+
+          {!roomId ? (
+            <>
+              <button
+                onClick={createRoom}
+                className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition"
+              >
+                ➕ Create Room
+              </button>
+              <div className="w-full text-center text-gray-500 text-sm">— or —</div>
+              <div className="w-full flex gap-2">
+                <input
+                  type="text"
+                  value={roomInputValue}
+                  onChange={(e) => setRoomInputValue(e.target.value)}
+                  placeholder="Enter Room ID…"
+                  className="flex-1 bg-gray-900 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500"
+                />
+                <button
+                  onClick={joinRoom}
+                  className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-4 py-2 rounded-lg transition"
+                >
+                  Join
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="w-full bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center">
+              <p className="text-sm text-gray-400 mb-2">Share this Room ID with your opponent:</p>
+              <div
+                className="text-xl font-bold text-red-300 bg-black/50 rounded px-4 py-3 cursor-pointer select-all mb-2"
+                onClick={() => { navigator.clipboard.writeText(roomId); toast.success('Copied!'); }}
+              >
+                {roomId}
+              </div>
+              <p className="text-xs text-gray-500">Click to copy</p>
+            </div>
+          )}
+
+          {pvpStatus && (
+            <p className="text-sm text-yellow-400 text-center animate-pulse">{pvpStatus}</p>
+          )}
+
+          <button
+            onClick={() => { if (pvpRoomIdRef.current) socket.emit('pvp:leaveRoom', { roomId: pvpRoomIdRef.current }); setUiState('mode-select'); setRoomId(null); pvpRoomIdRef.current = null; }}
+            className="text-sm text-gray-500 hover:text-gray-300 transition"
+          >
+            ← Back
+          </button>
+        </div>
       )}
 
-      {gameState === 'done' && result && (
+      {/* Game canvas */}
+      {uiState === 'playing' && (
+        <div ref={containerRef} className="w-full max-w-5xl mt-4" style={{ aspectRatio: '16/9' }} />
+      )}
+
+      {/* Game over */}
+      {uiState === 'done' && result && (
         <div className="flex flex-col items-center justify-center flex-1 gap-6">
           <div className="bg-gray-900 border border-red-700/40 rounded-2xl p-8 max-w-sm text-center shadow-2xl">
             <div className="text-5xl mb-3">{result.won ? '🏆' : '💀'}</div>
@@ -207,16 +370,10 @@ export default function DegenFighter() {
               </div>
             </div>
             <div className="flex gap-3">
-              <button
-                onClick={playAgain}
-                className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg transition"
-              >
+              <button onClick={playAgain} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg transition">
                 Play Again
               </button>
-              <button
-                onClick={() => navigate('/games')}
-                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg transition"
-              >
+              <button onClick={() => navigate('/games')} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg transition">
                 Games
               </button>
             </div>

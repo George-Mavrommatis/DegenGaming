@@ -521,8 +521,11 @@ async function updatePlatformStatsAggregatedGGCoins() {
 
         const gamesSnapshot = await db.collection('games').get();
         let totalGamesPlayed = 0;
+        let totalGamesPlayedLastMonth = 0;
         let totalGGCoinsGathered = 0;
+        let totalGGCoinsGatheredLastMonth = 0;
         let totalGGCoinsDistributed = 0;
+        let totalGGCoinsDistributedLastMonth = 0;
         let totalGGCoinsDeposited = currentStats.totalGGCoinsDeposited?.allTime ?? 0;
         let totalGGCoinsWithdrawn = currentStats.totalGGCoinsWithdrawn?.allTime ?? 0;
 
@@ -551,12 +554,8 @@ async function updatePlatformStatsAggregatedGGCoins() {
             catStats.ggCoinsDistributed.lastMonth += ggCoinsDistributed.lastMonth || 0;
 
             // --- Games Played aggregation ---
-            if ((g.gamesPlayed?.allTime ?? 0) > 0) {
-                catStats.gamesPlayed.allTime += g.gamesPlayed.allTime;
-            }
-            if ((g.gamesPlayed?.lastMonth ?? 0) > 0) {
-                catStats.gamesPlayed.lastMonth += g.gamesPlayed.lastMonth;
-            }
+            catStats.gamesPlayed.allTime += g.gamesPlayed?.allTime ?? 0;
+            catStats.gamesPlayed.lastMonth += g.gamesPlayed?.lastMonth ?? 0;
 
             // --- Per-game stats for frontend ---
             currentStats.games[gameDoc.id] = {
@@ -572,13 +571,16 @@ async function updatePlatformStatsAggregatedGGCoins() {
             };
 
             totalGamesPlayed += g.gamesPlayed?.allTime ?? 0;
+            totalGamesPlayedLastMonth += g.gamesPlayed?.lastMonth ?? 0;
             totalGGCoinsGathered += ggCoinsGathered.allTime || 0;
+            totalGGCoinsGatheredLastMonth += ggCoinsGathered.lastMonth || 0;
             totalGGCoinsDistributed += ggCoinsDistributed.allTime || 0;
+            totalGGCoinsDistributedLastMonth += ggCoinsDistributed.lastMonth || 0;
         });
 
         currentStats.totalGamesPlayed = totalGamesPlayed;
-        currentStats.totalGGCoinsGathered = { allTime: totalGGCoinsGathered, lastMonth: totalGGCoinsGathered }; // You may want to aggregate lastMonth properly
-        currentStats.totalGGCoinsDistributed = { allTime: totalGGCoinsDistributed, lastMonth: totalGGCoinsDistributed };
+        currentStats.totalGGCoinsGathered = { allTime: totalGGCoinsGathered, lastMonth: totalGGCoinsGatheredLastMonth };
+        currentStats.totalGGCoinsDistributed = { allTime: totalGGCoinsDistributed, lastMonth: totalGGCoinsDistributedLastMonth };
         currentStats.onlineUsers = (await getOnlineUserIds()).length;
 
         await statsDocRef.set(currentStats, { merge: true });
