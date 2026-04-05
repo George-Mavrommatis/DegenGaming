@@ -5,7 +5,7 @@ import Phaser from "phaser";
 import ArcadeGameOverModal from "../ArcadeGameOverModal";
 import ArcadeInitModal from "../ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
-import { saveWhackADegenScore } from "../../../firebase/gamescores";
+import { saveWhackADegenScore } from "../../../firebase/gameScores";
 import { WhackADegenScene } from "./WhackADegenScene";
 import { apiService } from '../../../services/api';
 
