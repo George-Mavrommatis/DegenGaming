@@ -15,6 +15,7 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { BackpackWalletAdapter } from '@solana/wallet-adapter-backpack';
 import { clusterApiUrl } from '@solana/web3.js';
+import { WalletError } from '@solana/wallet-adapter-base';
 
 // --- Import your custom contexts and App component ---
 import { ProfileProvider } from './context/ProfileContext';
@@ -22,7 +23,7 @@ import App from './App';
 
 // --- Import Global Styles and Toastify ---
 import './index.css';
-import { ToastContainer } from 'react-toastify';
+import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -39,15 +40,33 @@ const wallets = [
   new PhantomWalletAdapter(),
   new SolflareWalletAdapter(),
   new BackpackWalletAdapter(),
-  // Add other wallet adapters here
 ];
+
+// --- Wallet error handler: surfaces connection errors as toasts ---
+function onWalletError(error: WalletError) {
+  // Ignore user-rejected requests (e.g. user cancelled the popup)
+  if (
+    error.name === 'WalletNotReadyError' ||
+    error.message?.includes('User rejected') ||
+    error.message?.includes('user rejected')
+  ) {
+    return;
+  }
+  console.error('[WalletProvider] error:', error);
+  toast.error(error.message || 'Wallet connection error. Please try again.');
+}
 
 // --- Render your React app as before ---
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <BrowserRouter>
       <ConnectionProvider endpoint={endpoint}>
-        <WalletProvider wallets={wallets} autoConnect>
+        {/*
+          autoConnect={false}: prevents auto-reconnect on page load.
+          On mobile, autoConnect fires before the deeplink return completes,
+          causing silent failures. Users must explicitly tap "Connect".
+        */}
+        <WalletProvider wallets={wallets} autoConnect={false} onError={onWalletError}>
           <WalletModalProvider>
             <ProfileProvider>
               <App />

@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import MobileWalletButton from "./MobileWalletButton";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { useProfile } from "../context/ProfileContext";
 import { FaBars, FaTimes } from "react-icons/fa";
@@ -76,7 +77,9 @@ export default function Navbar() {
         ...
       </button>
     ) : (
-      <WalletMultiButton className="!uppercase !bg-black !bg-gradient-to-tr !from-orange-600 !to-yellow-400 !text-white !font-black !px-4 sm:!px-6 !py-2 sm:!py-3 !rounded-full !shadow-lg !hover:!bg-yellow-400 !hover:!text-black !transition-all !text-base sm:!text-lg" style={{ fontFamily: "Orbitron, Montserrat, sans-serif" }} />
+      // MobileWalletButton: shows deeplink buttons on external mobile browsers,
+      // falls back to WalletMultiButton on desktop or inside wallet browsers.
+      <MobileWalletButton className="!uppercase !bg-black !bg-gradient-to-tr !from-orange-600 !to-yellow-400 !text-white !font-black !px-4 sm:!px-6 !py-2 sm:!py-3 !rounded-full !shadow-lg !hover:!bg-yellow-400 !hover:!text-black !transition-all !text-base sm:!text-lg" />
     )
   );
 

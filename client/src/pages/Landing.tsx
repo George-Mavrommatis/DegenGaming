@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
+import MobileWalletButton from "../components/MobileWalletButton";
 import OnboardingCarousel from "../components/OnboardingCarousel";
 import Footer from "../components/Footer";
 import { toast } from "react-toastify";
@@ -120,7 +120,7 @@ export default function Landing() {
           ) : (
             <>
               <div ref={loginRef} tabIndex={-1} className="mb-8">
-                <WalletMultiButton />
+                <MobileWalletButton />
               </div>
               <button
                 className="!bg-pink-600 !text-black !px-8 !py-4 !rounded-lg text-xl font-bold shadow-xl !hover:bg-orange-500 !transition !border-2 !border-black"
