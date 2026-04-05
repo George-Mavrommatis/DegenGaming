@@ -8,6 +8,7 @@ import { useProfile } from "../../../context/ProfileContext";
 import { saveWhackADegenScore } from "../../../firebase/gameScores";
 import { WhackADegenScene } from "./WhackADegenScene";
 import { apiService } from '../../../services/api';
+import { claimArcadePayout } from '../arcadeTransaction';
 
 const GAME_WIDTH = 1050;
 const GAME_HEIGHT = 700;
@@ -20,7 +21,7 @@ const INSTRUCTION_SLIDES = [
   {
     image: "/WhackADegenAssets/instructions1.png",
     title: "Power-Ups & Penalties",
-    text: "💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Wegen gives big points!"
+    text: "💣 Bombs lose time\n⏰ Clock gains time\n❓ Mystery is random\n⭐ Golden Degen gives big points!"
   },
   {
     image: "/WhackADegenAssets/instructions2.png",
@@ -37,6 +38,8 @@ const INSTRUCTION_SLIDES = [
 export default function WhackADegen() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
+  // Unique session ID per play — used for duplicate payout prevention on the backend
+  const gameSessionIdRef = useRef<string>(crypto.randomUUID());
   const { profile, loading: profileLoading, firebaseAuthToken, refreshProfile } = useProfile();
   const navigate = useNavigate();
   const location = useLocation();
@@ -149,8 +152,9 @@ export default function WhackADegen() {
 
   // Game Over Handler
   const handleGameOver = useCallback(async (event: { score: number }) => {
+    const earnedCoins = Math.floor(event.score / 10);
     setFinalScore(event.score);
-    setCoinsEarned(Math.floor(event.score / 10));
+    setCoinsEarned(earnedCoins);
     setGameState('GAME_OVER');
     if (!profile) {
       toast.error("Could not save score: User profile not found.");
@@ -161,6 +165,17 @@ export default function WhackADegen() {
       toast.success(`Score of ${event.score} saved!`);
     } catch (error) {
       toast.error("There was an issue saving your score.");
+    }
+    // Claim GGW token payout based on final score
+    try {
+      const payoutResult = await claimArcadePayout(gameSessionIdRef.current, event.score);
+      if (payoutResult.success && payoutResult.qualified) {
+        toast.success(`🪙 ${payoutResult.coinsEarned} GGW coins sent to your wallet!`);
+      } else if (payoutResult.error && payoutResult.error !== 'Payout already claimed for this session.') {
+        toast.warn(`Payout notice: ${payoutResult.error}`);
+      }
+    } catch {
+      // Non-fatal: payout failure should not break the game over flow
     }
   }, [profile]);
 
@@ -177,6 +192,8 @@ export default function WhackADegen() {
     setPaid(false);
     setUseFreeTokenIntent(false);
     setSlide(0);
+    // Fresh session ID so each replay can claim its own payout
+    gameSessionIdRef.current = crypto.randomUUID();
   };
 
   // Robust fullscreen handler (native + Phaser)

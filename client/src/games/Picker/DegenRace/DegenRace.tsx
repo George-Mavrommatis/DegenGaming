@@ -15,6 +15,7 @@ import { toast } from "react-toastify";
 import { useProfile } from '../../../context/ProfileContext';
 import { api, apiService } from '../../../services/api';
 import { saveGameResult } from '../../../firebase/gameScores';
+import { claimPickerPayout } from '../pickerTransaction';
 
 const GameOverModal = lazy(() => import("../PickerGameOverModal"));
 
@@ -214,6 +215,27 @@ export default function DegenRace() {
                 await refreshProfile();
             } catch (err) {
                 console.error('[DegenRace] Failed to save game result:', err);
+            }
+        }
+
+        // Claim GGW token payout — only pays out if the human's pick won
+        const sessionId = loadedGameConfig?.gameEntryTokenId;
+        const chosenKey = loadedGameConfig?.humanChoice?.key;
+        if (sessionId && chosenKey && winner?.key) {
+            try {
+                const payoutResult = await claimPickerPayout(sessionId, chosenKey, winner.key);
+                if (payoutResult.success && payoutResult.isWinner) {
+                    const ggw = payoutResult.reward
+                        ? (payoutResult.reward / 1_000_000_000).toFixed(2)
+                        : '';
+                    toast.success(`🏆 Your pick won! ${ggw ? `+${ggw} GGW` : ''} sent to your wallet!`);
+                } else if (payoutResult.success && !payoutResult.isWinner) {
+                    toast.info("Race complete! Your pick didn't win this time. Better luck next race!");
+                } else if (payoutResult.error && payoutResult.error !== 'Payout already claimed for this session.') {
+                    toast.warn(`Payout notice: ${payoutResult.error}`);
+                }
+            } catch {
+                // Non-fatal: payout failure should not block game over flow
             }
         }
 

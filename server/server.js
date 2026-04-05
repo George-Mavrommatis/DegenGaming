@@ -586,14 +586,17 @@ app.post('/api/games/increment-ggcoins-distributed', protect, async (req, res) =
 app.post('/api/games/increment-games-played', protect, async (req, res) => {
   const { gameId, category } = req.body;
   try {
-    // Game doc
+    // Game doc — auto-create with full definition if missing
     const gameRef = db.collection('games').doc(gameId);
     const gameDoc = await gameRef.get();
     if (!gameDoc.exists) {
       await gameRef.set({
+        gameId,
         name: gameId,
         category,
-        gamesPlayed: { allTime: 0, lastMonth: 0 }
+        gamesPlayed: { allTime: 0, lastMonth: 0 },
+        ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+        ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
       });
     }
     await gameRef.update({
@@ -601,9 +604,10 @@ app.post('/api/games/increment-games-played', protect, async (req, res) => {
       'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
     });
 
-    // Platform stats doc
+    // Platform stats doc — also increment the top-level totalGamesPlayed counter
     const statsRef = db.collection('platform').doc('stats');
     await statsRef.update({
+      'totalGamesPlayed': admin.firestore.FieldValue.increment(1),
       [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
       [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
     });
@@ -1110,39 +1114,7 @@ app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
   }
 });
 
-// Increment gamesPlayed for a game and category
-app.post('/api/games/increment-games-played', protect, async (req, res) => {
-  const { gameId, category } = req.body;
-  try {
-    // Game doc
-    const gameRef = db.collection('games').doc(gameId);
-    const gameDoc = await gameRef.get();
-    if (!gameDoc.exists) {
-      // Create minimal doc if missing
-      await gameRef.set({
-        name: gameId,
-        category,
-        gamesPlayed: { allTime: 0, lastMonth: 0 }
-      });
-    }
-    await gameRef.update({
-      'gamesPlayed.allTime': admin.firestore.FieldValue.increment(1),
-      'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
-    });
-
-    // Platform stats doc
-    const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
-      [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
-      [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
-    });
-
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error incrementing gamesPlayed:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+// NOTE: duplicate increment-games-played route removed — primary definition is above (near line 586)
 
 app.post('/api/games/increment-sol-gathered', protect, async (req, res) => {
   const { gameId, category, amount } = req.body; // amount in SOL
@@ -1386,6 +1358,241 @@ app.post('/process-reward', protect, async (req, res) => {
     } catch (error) {
         console.error("Error in /process-reward endpoint:", error);
         res.status(500).json({ message: error.message || 'Internal server error during reward processing.' });
+    }
+});
+
+
+// --- Game Payout Constants ---
+const ARCADE_COIN_VALUE = 1_000_000;        // 0.001 GGW per arcade coin (raw units, 9 decimals)
+const PICKER_WIN_REWARD = 5_000_000_000;    // 5 GGW tokens for correctly picking a race winner
+const MIN_ARCADE_PAYOUT_SCORE = 50;         // Minimum score to qualify for arcade payout
+
+// In-memory per-user rate limit: userId → last payout timestamp (ms)
+const payoutRateLimitMap = new Map();
+const PAYOUT_RATE_LIMIT_MS = 30_000; // 30 seconds between payout requests per user
+
+// POST /api/arcade/claim-payout (Protected)
+// Called after WhackADegen ends. Transfers GGW tokens based on final score.
+app.post('/api/arcade/claim-payout', protect, async (req, res) => {
+    const userId = req.user.uid;
+    const { gameSessionId, score } = req.body;
+
+    if (!gameSessionId || typeof score !== 'number' || score < 0) {
+        return res.status(400).json({ message: 'gameSessionId and a valid score are required.' });
+    }
+    if (score < MIN_ARCADE_PAYOUT_SCORE) {
+        return res.status(200).json({
+            success: false, qualified: false,
+            message: `Score must be at least ${MIN_ARCADE_PAYOUT_SCORE} to qualify for a payout.`
+        });
+    }
+
+    // Rate limiting
+    const lastPayout = payoutRateLimitMap.get(userId);
+    if (lastPayout && (Date.now() - lastPayout) < PAYOUT_RATE_LIMIT_MS) {
+        return res.status(429).json({ message: 'Too many payout requests. Please wait before claiming again.' });
+    }
+
+    try {
+        // Duplicate prevention: one payout per gameSessionId per user
+        const existingPayout = await db.collection('payouts')
+            .where('gameSessionId', '==', gameSessionId)
+            .where('userId', '==', userId)
+            .limit(1)
+            .get();
+        if (!existingPayout.empty) {
+            return res.status(409).json({ message: 'Payout already claimed for this game session.' });
+        }
+
+        // Resolve user wallet
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (!userDoc.exists || !userDoc.data().wallet) {
+            return res.status(400).json({ message: 'No Solana wallet linked. Connect a wallet to claim payouts.' });
+        }
+        const recipientPublicKey = new PublicKey(userDoc.data().wallet);
+
+        const coinsEarned = Math.floor(score / 10);
+        const rawAmount = coinsEarned * ARCADE_COIN_VALUE;
+        if (rawAmount <= 0) {
+            return res.status(200).json({ success: false, qualified: false, message: 'Score too low for token payout.', coinsEarned });
+        }
+
+        // Treasury balance check
+        if (adminWalletKeypair && gameTokenMint) {
+            try {
+                const adminATA = await getOrCreateAssociatedTokenAccount(
+                    connection, adminWalletKeypair, gameTokenMint, adminWalletKeypair.publicKey
+                );
+                const treasuryBalance = await getTokenAccountBalance(adminATA.address);
+                if (treasuryBalance < rawAmount) {
+                    console.error(`[ArcadePayout] Insufficient treasury. Have: ${treasuryBalance}, need: ${rawAmount}`);
+                    return res.status(503).json({ message: 'Treasury temporarily low. Please try again later.' });
+                }
+            } catch (balErr) {
+                console.warn('[ArcadePayout] Could not verify treasury balance:', balErr.message);
+            }
+        }
+
+        const transferSuccess = await transferSolanaToken(recipientPublicKey, rawAmount);
+        if (!transferSuccess) {
+            return res.status(500).json({ message: 'Token transfer failed. Please try again.' });
+        }
+
+        payoutRateLimitMap.set(userId, Date.now());
+
+        // Audit log in Firestore
+        await db.collection('payouts').add({
+            gameSessionId,
+            userId,
+            gameId: 'whack-a-degen',
+            category: 'arcade',
+            score,
+            coinsEarned,
+            amount: rawAmount,
+            currency: 'GGW',
+            type: 'payout',
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Update platform stats (non-fatal)
+        try {
+            await db.collection('platform').doc('stats').update({
+                'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(coinsEarned),
+                'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(coinsEarned),
+                'categories.arcade.ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(coinsEarned),
+                'categories.arcade.ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(coinsEarned),
+            });
+        } catch (statsErr) {
+            console.warn('[ArcadePayout] Non-fatal: failed to update platform stats:', statsErr.message);
+        }
+
+        console.log(`[ArcadePayout] ${userId} claimed ${coinsEarned} GGW coins (score ${score}). Session: ${gameSessionId}`);
+        res.status(200).json({ success: true, qualified: true, coinsEarned, rawAmount });
+
+    } catch (error) {
+        console.error('[ArcadePayout] Error:', error);
+        res.status(500).json({ message: error.message || 'Internal server error during payout.' });
+    }
+});
+
+// POST /api/picker/claim-payout (Protected)
+// Called after DegenRace ends. Pays out winner's backer if their pick won.
+app.post('/api/picker/claim-payout', protect, async (req, res) => {
+    const userId = req.user.uid;
+    const { sessionId, chosenPlayerKey, winnerKey } = req.body;
+
+    if (!sessionId || !chosenPlayerKey || !winnerKey) {
+        return res.status(400).json({ message: 'sessionId, chosenPlayerKey, and winnerKey are required.' });
+    }
+
+    // Rate limiting (separate key space from arcade)
+    const rlKey = `picker_${userId}`;
+    const lastPayout = payoutRateLimitMap.get(rlKey);
+    if (lastPayout && (Date.now() - lastPayout) < PAYOUT_RATE_LIMIT_MS) {
+        return res.status(429).json({ message: 'Too many payout requests. Please wait before claiming again.' });
+    }
+
+    try {
+        // Validate session token
+        const sessionRef = db.collection('gameEntryTokens').doc(sessionId);
+        const sessionDoc = await sessionRef.get();
+        if (!sessionDoc.exists) {
+            return res.status(404).json({ message: 'Game session not found.' });
+        }
+        const sessionData = sessionDoc.data();
+        if (sessionData.userId !== userId) {
+            return res.status(403).json({ message: 'Session does not belong to this user.' });
+        }
+        if (sessionData.payoutClaimed) {
+            return res.status(409).json({ message: 'Payout already claimed for this session.' });
+        }
+
+        const isWinner = (chosenPlayerKey === winnerKey);
+
+        if (!isWinner) {
+            // Mark completed with no payout
+            await sessionRef.update({
+                payoutClaimed: true,
+                payoutClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+                isWinner: false,
+            });
+            return res.status(200).json({
+                success: true, isWinner: false,
+                message: "Your pick didn't win this race. Better luck next time!"
+            });
+        }
+
+        // Resolve user wallet
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (!userDoc.exists || !userDoc.data().wallet) {
+            return res.status(400).json({ message: 'No Solana wallet linked. Connect a wallet to claim payouts.' });
+        }
+        const recipientPublicKey = new PublicKey(userDoc.data().wallet);
+
+        // Treasury balance check
+        if (adminWalletKeypair && gameTokenMint) {
+            try {
+                const adminATA = await getOrCreateAssociatedTokenAccount(
+                    connection, adminWalletKeypair, gameTokenMint, adminWalletKeypair.publicKey
+                );
+                const treasuryBalance = await getTokenAccountBalance(adminATA.address);
+                if (treasuryBalance < PICKER_WIN_REWARD) {
+                    console.error(`[PickerPayout] Insufficient treasury. Have: ${treasuryBalance}, need: ${PICKER_WIN_REWARD}`);
+                    return res.status(503).json({ message: 'Treasury temporarily low. Please try again later.' });
+                }
+            } catch (balErr) {
+                console.warn('[PickerPayout] Could not verify treasury balance:', balErr.message);
+            }
+        }
+
+        const transferSuccess = await transferSolanaToken(recipientPublicKey, PICKER_WIN_REWARD);
+        if (!transferSuccess) {
+            return res.status(500).json({ message: 'Token transfer failed. Please try again.' });
+        }
+
+        payoutRateLimitMap.set(rlKey, Date.now());
+
+        // Mark session as claimed
+        await sessionRef.update({
+            payoutClaimed: true,
+            payoutClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+            isWinner: true,
+            payoutAmount: PICKER_WIN_REWARD,
+        });
+
+        // Audit log
+        const pickerRewardDisplay = PICKER_WIN_REWARD / 1_000_000_000;
+        await db.collection('payouts').add({
+            sessionId,
+            userId,
+            gameId: 'degen-race',
+            category: 'picker',
+            chosenPlayerKey,
+            winnerKey,
+            amount: PICKER_WIN_REWARD,
+            currency: 'GGW',
+            type: 'payout',
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Update platform stats (non-fatal)
+        try {
+            await db.collection('platform').doc('stats').update({
+                'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(pickerRewardDisplay),
+                'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pickerRewardDisplay),
+                'categories.picker.ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(pickerRewardDisplay),
+                'categories.picker.ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(pickerRewardDisplay),
+            });
+        } catch (statsErr) {
+            console.warn('[PickerPayout] Non-fatal: failed to update platform stats:', statsErr.message);
+        }
+
+        console.log(`[PickerPayout] ${userId} won picker race. Session: ${sessionId}. Payout: ${PICKER_WIN_REWARD} raw GGW.`);
+        res.status(200).json({ success: true, isWinner: true, reward: PICKER_WIN_REWARD });
+
+    } catch (error) {
+        console.error('[PickerPayout] Error:', error);
+        res.status(500).json({ message: error.message || 'Internal server error during picker payout.' });
     }
 });
 
