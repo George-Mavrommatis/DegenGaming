@@ -619,6 +619,39 @@ app.post('/api/games/increment-games-played', protect, async (req, res) => {
   }
 });
 
+// Seed games collection with all known game definitions (idempotent — only creates if doc missing)
+app.post('/api/games/seed', protect, async (req, res) => {
+  const GAME_DEFINITIONS = [
+    { gameId: 'whack-a-degen', name: 'Whack a Degen', category: 'arcade', playCost: 0.005, description: 'Whack degens for points — avoid bombs, grab power-ups!' },
+    { gameId: 'degen-race', name: 'DegenRace', category: 'picker', playCost: 0.01, description: 'Pick your racer and watch them compete for the finish line.' },
+    { gameId: 'degen-fighter', name: 'DegenFighter', category: 'pvp', playCost: 0.1, description: '1v1 fighting arena — chain combos and drain HP to win.' },
+  ];
+
+  try {
+    const results = [];
+    for (const def of GAME_DEFINITIONS) {
+      const ref = db.collection('games').doc(def.gameId);
+      const doc = await ref.get();
+      if (!doc.exists) {
+        await ref.set({
+          ...def,
+          gamesPlayed: { allTime: 0, lastMonth: 0 },
+          ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+          ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        results.push({ gameId: def.gameId, status: 'created' });
+      } else {
+        results.push({ gameId: def.gameId, status: 'exists' });
+      }
+    }
+    res.status(200).json({ success: true, games: results });
+  } catch (error) {
+    console.error('Error seeding games:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Get Platform Stats (Public - no protect middleware)
 app.get('/platform-stats', async (req, res) => {
     try {

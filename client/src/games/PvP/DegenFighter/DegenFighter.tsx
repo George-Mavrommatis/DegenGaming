@@ -5,6 +5,7 @@ import Phaser from 'phaser';
 import { toast } from 'react-toastify';
 import { useProfile } from '../../../context/ProfileContext';
 import { saveGameResult } from '../../../firebase/gameScores';
+import { apiService } from '../../../services/api';
 import { DegenFighterScene } from './DegenFighterScene';
 
 const GAME_W = 960;
@@ -36,6 +37,7 @@ export default function DegenFighter() {
             coinsEarned: res.coinsEarned,
             won: res.won,
           });
+          await apiService.incrementGamesPlayed(GAME_ID, GAME_CATEGORY);
           await refreshProfile();
           toast.success(`Match saved — ${res.score} pts, ${res.coinsEarned} coins!`);
         } catch (err) {

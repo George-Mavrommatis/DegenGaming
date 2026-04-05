@@ -194,7 +194,14 @@ export const apiService = {
     });
     return response.data;
   },
-  
+
+  /**
+   * Seed all known game definitions into the games collection (idempotent)
+   */
+  seedGames: async () => {
+    const response = await apiClient.post('/api/games/seed');
+    return response.data;
+  },
 };
 
 
