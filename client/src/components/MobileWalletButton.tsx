@@ -63,7 +63,7 @@ function phantomBrowseLink(url: string): string {
   if (isAndroid()) {
     // Chrome Intent URL — directly opens the Phantom app on Android
     return (
-      'intent://ul/browse/' +
+      'intent://phantom.app/ul/browse/' +
       encodedUrl +
       '?ref=' +
       encodedRef +
@@ -88,7 +88,7 @@ function solflareBrowseLink(url: string): string {
 
   if (isAndroid()) {
     return (
-      'intent://v1/browse/' +
+      'intent://solflare.com/ul/v1/browse/' +
       encodedUrl +
       '?ref=' +
       encodedRef +
