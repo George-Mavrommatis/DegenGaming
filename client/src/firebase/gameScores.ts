@@ -146,7 +146,57 @@ export const saveGameResult = async (
 };
 
 // =========================================================================
-//  SAVE SCORE FUNCTION (Your original code - no changes needed here)
+//  WHACK-A-DEGEN LEADERBOARD UPDATE (game-specific, called alongside saveGameResult)
+// =========================================================================
+
+/**
+ * updateWhackADegenLeaderboard — writes best-score entries to the global
+ * Whack-a-Degen leaderboard collections (all-time and monthly).
+ * Call this AFTER saveGameResult so profile stats are already persisted.
+ */
+export const updateWhackADegenLeaderboard = async (
+  profile: ProfileData,
+  score: number
+): Promise<void> => {
+  if (!profile?.wallet) {
+    throw new Error("User profile or wallet address is not available.");
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = (now.getMonth() + 1).toString().padStart(2, '0');
+  const monthlyLeaderboardId = `${year}-${month}`;
+
+  const allTimeScoreRef = doc(db, 'leaderboards/whack-a-degen/allTimeScores', profile.wallet);
+  const monthlyScoreRef = doc(
+    db,
+    `leaderboards/whack-a-degen/monthlyScores/${monthlyLeaderboardId}/scores`,
+    profile.wallet
+  );
+
+  const newScoreData = {
+    score,
+    userId: profile.wallet,
+    username: profile.username || 'Anonymous',
+    avatarUrl: profile.avatarUrl || '/placeholder-avatar.png',
+    createdAt: serverTimestamp(),
+  };
+
+  await runTransaction(db, async (transaction) => {
+    const allTimeDoc = await transaction.get(allTimeScoreRef);
+    const monthlyDoc = await transaction.get(monthlyScoreRef);
+
+    if (!allTimeDoc.exists() || score > (allTimeDoc.data()?.score || 0)) {
+      transaction.set(allTimeScoreRef, newScoreData);
+    }
+    if (!monthlyDoc.exists() || score > (monthlyDoc.data()?.score || 0)) {
+      transaction.set(monthlyScoreRef, newScoreData);
+    }
+  });
+};
+
+// =========================================================================
+//  SAVE SCORE FUNCTION (legacy — kept for reference, use saveGameResult instead)
 // =========================================================================
 export const saveWhackADegenScore = async (profile: ProfileData, score: number) => {
   if (!profile?.wallet) {

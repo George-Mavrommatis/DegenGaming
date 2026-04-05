@@ -5,7 +5,7 @@ import Phaser from "phaser";
 import ArcadeGameOverModal from "../ArcadeGameOverModal";
 import ArcadeInitModal from "../ArcadeInitModal";
 import { useProfile } from "../../../context/ProfileContext";
-import { saveWhackADegenScore } from "../../../firebase/gameScores";
+import { saveGameResult, updateWhackADegenLeaderboard } from "../../../firebase/gameScores";
 import { WhackADegenScene } from "./WhackADegenScene";
 import { apiService } from '../../../services/api';
 import { claimArcadePayout } from '../arcadeTransaction';
@@ -161,7 +161,15 @@ export default function WhackADegen() {
       return;
     }
     try {
-      await saveWhackADegenScore(profile, event.score);
+      await saveGameResult(profile, {
+        gameId: GAME_ID,
+        gameName: 'Whack a Degen',
+        category: GAME_CATEGORY,
+        score: event.score,
+        coinsEarned: earnedCoins,
+      });
+      await updateWhackADegenLeaderboard(profile, event.score);
+      await refreshProfile();
       toast.success(`Score of ${event.score} saved!`);
     } catch (error) {
       toast.error("There was an issue saving your score.");
@@ -177,7 +185,7 @@ export default function WhackADegen() {
     } catch {
       // Non-fatal: payout failure should not break the game over flow
     }
-  }, [profile]);
+  }, [profile, refreshProfile]);
 
   // Restart flow
   const restartGame = () => {
