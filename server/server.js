@@ -326,10 +326,10 @@ async function transferSolanaToken(recipientPublicKey, amount) {
             amount // Amount to transfer
         );
         console.log(`Transferred ${amount} tokens from admin to ${recipientPublicKey.toBase58()}. Tx: ${signature}`);
-        return true;
+        return signature; // Return txSig string for audit trail
     } catch (error) {
         console.error("Error transferring Solana token:", error);
-        return false;
+        return null;
     }
 }
 
@@ -513,7 +513,37 @@ async function updatePlatformStatsAggregatedGGCoins() {
 // Cron job to aggregate platform stats every 30 minutes (or adjust as needed)
 cron.schedule('*/30 * * * *', updatePlatformStatsAggregatedGGCoins);
 
+// Seed game definitions on startup (idempotent — skips existing docs)
+async function seedGamesOnStartup() {
+  const GAME_DEFINITIONS = [
+    { gameId: 'whack-a-degen', name: 'Whack a Degen', category: 'arcade', playCost: 0.005, description: 'Whack degens for points — avoid bombs, grab power-ups!' },
+    { gameId: 'degen-race', name: 'DegenRace', category: 'picker', playCost: 0.01, description: 'Pick your racer and watch them compete for the finish line.' },
+    { gameId: 'degen-fighter', name: 'DegenFighter', category: 'pvp', playCost: 0.1, description: '1v1 fighting arena — chain combos and drain HP to win.' },
+    { gameId: 'casino', name: 'Casino', category: 'casino', playCost: 0.01, description: 'Try your luck at the degen casino.' },
+  ];
+  try {
+    for (const def of GAME_DEFINITIONS) {
+      const ref = db.collection('games').doc(def.gameId);
+      const existing = await ref.get();
+      if (!existing.exists) {
+        await ref.set({
+          ...def,
+          gamesPlayed: { allTime: 0, lastMonth: 0 },
+          ggCoinsGathered: { allTime: 0, lastMonth: 0 },
+          ggCoinsDistributed: { allTime: 0, lastMonth: 0 },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[seed] Created games/${def.gameId}`);
+      }
+    }
+    console.log('[seed] Game definitions seeded.');
+  } catch (e) {
+    console.error('[seed] Failed to seed game definitions:', e);
+  }
+}
+
 // Initial run for cron jobs on server start
+seedGamesOnStartup();
 updatePlatformStatsAggregatedGGCoins();
 
 // --- API Routes ---
@@ -527,21 +557,23 @@ app.post('/api/games/increment-ggcoins-gathered', protect, async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid amount" });
     }
 
-    // Game doc
+    // Game doc — set+merge so it auto-creates if missing
     const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'ggCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'ggCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
+    await gameRef.set({
+      'ggCoinsGathered': {
+        allTime: admin.firestore.FieldValue.increment(incrementValue),
+        lastMonth: admin.firestore.FieldValue.increment(incrementValue),
+      }
+    }, { merge: true });
 
-    // Platform stats doc
+    // Platform stats doc — set+merge so it auto-creates if missing
     const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
+    await statsRef.set({
       [`categories.${category}.ggCoinsGathered.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
       [`categories.${category}.ggCoinsGathered.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
       'totalGGCoinsGathered.allTime': admin.firestore.FieldValue.increment(incrementValue),
       'totalGGCoinsGathered.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
+    }, { merge: true });
 
     res.status(200).json({ success: true });
   } catch (error) {
@@ -559,21 +591,23 @@ app.post('/api/games/increment-ggcoins-distributed', protect, async (req, res) =
       return res.status(400).json({ success: false, error: "Invalid amount" });
     }
 
-    // Game doc
+    // Game doc — set+merge so it auto-creates if missing
     const gameRef = db.collection('games').doc(gameId);
-    await gameRef.update({
-      'ggCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
-      'ggCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
+    await gameRef.set({
+      'ggCoinsDistributed': {
+        allTime: admin.firestore.FieldValue.increment(incrementValue),
+        lastMonth: admin.firestore.FieldValue.increment(incrementValue),
+      }
+    }, { merge: true });
 
-    // Platform stats doc
+    // Platform stats doc — set+merge so it auto-creates if missing
     const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
+    await statsRef.set({
       [`categories.${category}.ggCoinsDistributed.allTime`]: admin.firestore.FieldValue.increment(incrementValue),
       [`categories.${category}.ggCoinsDistributed.lastMonth`]: admin.firestore.FieldValue.increment(incrementValue),
       'totalGGCoinsDistributed.allTime': admin.firestore.FieldValue.increment(incrementValue),
       'totalGGCoinsDistributed.lastMonth': admin.firestore.FieldValue.increment(incrementValue)
-    });
+    }, { merge: true });
 
     res.status(200).json({ success: true });
   } catch (error) {
@@ -604,13 +638,13 @@ app.post('/api/games/increment-games-played', protect, async (req, res) => {
       'gamesPlayed.lastMonth': admin.firestore.FieldValue.increment(1)
     });
 
-    // Platform stats doc — also increment the top-level totalGamesPlayed counter
+    // Platform stats doc — set+merge so it auto-creates if missing
     const statsRef = db.collection('platform').doc('stats');
-    await statsRef.update({
+    await statsRef.set({
       'totalGamesPlayed': admin.firestore.FieldValue.increment(1),
       [`categories.${category}.gamesPlayed.allTime`]: admin.firestore.FieldValue.increment(1),
       [`categories.${category}.gamesPlayed.lastMonth`]: admin.firestore.FieldValue.increment(1)
-    });
+    }, { merge: true });
 
     res.status(200).json({ success: true });
   } catch (error) {
@@ -625,6 +659,7 @@ app.post('/api/games/seed', protect, async (req, res) => {
     { gameId: 'whack-a-degen', name: 'Whack a Degen', category: 'arcade', playCost: 0.005, description: 'Whack degens for points — avoid bombs, grab power-ups!' },
     { gameId: 'degen-race', name: 'DegenRace', category: 'picker', playCost: 0.01, description: 'Pick your racer and watch them compete for the finish line.' },
     { gameId: 'degen-fighter', name: 'DegenFighter', category: 'pvp', playCost: 0.1, description: '1v1 fighting arena — chain combos and drain HP to win.' },
+    { gameId: 'casino', name: 'Casino', category: 'casino', playCost: 0.01, description: 'Try your luck at the degen casino.' },
   ];
 
   try {
