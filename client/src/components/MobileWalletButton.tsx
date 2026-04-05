@@ -1,20 +1,24 @@
 /**
  * MobileWalletButton
  *
- * On desktop or when already inside a wallet's in-app browser (Phantom, Solflare,
- * Backpack), renders the standard WalletMultiButton — the wallet is injected and
- * works normally.
+ * On desktop, renders the standard WalletMultiButton.
  *
- * On a mobile external browser (Chrome/Safari iOS, Chrome Android) the wallet
- * extension is NOT available.  The correct UX is to redirect the user into the
- * wallet's built-in browser where the wallet IS injected.  This component shows
- * "Open in [Wallet] Browser" deeplink buttons for Phantom and Solflare.
+ * On mobile:
+ *  - If the wallet is already connected (we're inside a wallet in-app browser
+ *    and the user tapped "Connect"), renders WalletMultiButton.
+ *  - Otherwise, shows deeplink buttons that open the page inside Phantom's or
+ *    Solflare's in-app browser, where the wallet provider IS injected.
  *
- * Deeplink formats (universal links — work on both iOS and Android):
- *   Phantom  : https://phantom.app/ul/browse/{encodedURL}?ref={encodedOrigin}
- *   Solflare : https://solflare.com/ul/v1/browse/{encodedURL}?ref={encodedOrigin}
+ * Why not just check `window.phantom`?
+ * Phantom's Wallet Standard bridge can inject `window.phantom` into regular
+ * Chrome on Android — but the provider can't actually complete a connection
+ * from Chrome.  The old `isInWalletBrowser()` check returned true, showing
+ * WalletMultiButton, which then redirected to phantom.com "Download Phantom".
+ * Now we use `useWallet().connected` as the source of truth: if the wallet
+ * IS connected, the provider works and we can show the standard button.
  */
 
+import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 
 // ─── detection helpers ────────────────────────────────────────────────────────
@@ -25,25 +29,6 @@ function isMobileDevice(): boolean {
 
 function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
-}
-
-/** Phantom injects window.phantom.solana in its in-app browser */
-function isInPhantomBrowser(): boolean {
-  return !!(window as any).phantom?.solana?.isPhantom;
-}
-
-/** Solflare injects window.solflare in its in-app browser */
-function isInSolflareBrowser(): boolean {
-  return !!(window as any).solflare?.isSolflare;
-}
-
-/** Backpack / xNFT injects window.xnft */
-function isInBackpackBrowser(): boolean {
-  return !!(window as any).xnft;
-}
-
-function isInWalletBrowser(): boolean {
-  return isInPhantomBrowser() || isInSolflareBrowser() || isInBackpackBrowser();
 }
 
 // ─── deeplink builders ────────────────────────────────────────────────────────
@@ -114,8 +99,11 @@ interface MobileWalletButtonProps {
 }
 
 export default function MobileWalletButton({ className }: MobileWalletButtonProps) {
-  // Desktop or already inside a wallet browser → standard button works fine
-  if (!isMobileDevice() || isInWalletBrowser()) {
+  const { connected } = useWallet();
+
+  // Desktop → standard button always works (extensions are available)
+  // Mobile + wallet connected → provider works, show standard button
+  if (!isMobileDevice() || connected) {
     return <WalletMultiButton className={className} />;
   }
 
