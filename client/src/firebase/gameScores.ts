@@ -209,6 +209,7 @@ export const saveWhackADegenScore = async (profile: ProfileData, score: number) 
 
       transaction.update(userProfileRef, {
         'stats.totalGamesPlayed': increment(1),
+        'stats.arcadeGamesPlayed': increment(1),
         'stats.bestScores.whackadegen': Math.max(score, currentProfileData.stats?.bestScores?.whackadegen || 0),
         'accountXP': increment(score),
         'coins.arcade': increment(coinsEarned),
