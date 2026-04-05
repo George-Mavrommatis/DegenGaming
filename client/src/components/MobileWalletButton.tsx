@@ -23,6 +23,10 @@ function isMobileDevice(): boolean {
   return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
+function isAndroid(): boolean {
+  return /Android/i.test(navigator.userAgent);
+}
+
 /** Phantom injects window.phantom.solana in its in-app browser */
 function isInPhantomBrowser(): boolean {
   return !!(window as any).phantom?.solana?.isPhantom;
@@ -43,22 +47,62 @@ function isInWalletBrowser(): boolean {
 }
 
 // ─── deeplink builders ────────────────────────────────────────────────────────
+//
+// Android Chrome does NOT honour HTTPS universal links the same way iOS does —
+// if the App Link isn't verified, it opens phantom.app in the browser (showing
+// "install extension") instead of the app.
+//
+// The fix: on Android use the Chrome Intent URL scheme which always opens the
+// installed app, with a fallback to the download page if the app isn't present.
+// On iOS, the HTTPS universal link works reliably.
 
 function phantomBrowseLink(url: string): string {
+  const encodedUrl = encodeURIComponent(url);
+  const encodedRef = encodeURIComponent(window.location.origin);
+
+  if (isAndroid()) {
+    // Chrome Intent URL — directly opens the Phantom app on Android
+    return (
+      'intent://ul/browse/' +
+      encodedUrl +
+      '?ref=' +
+      encodedRef +
+      '#Intent;package=app.phantom;scheme=https;S.browser_fallback_url=' +
+      encodeURIComponent('https://phantom.app/download') +
+      ';end'
+    );
+  }
+
+  // iOS: HTTPS universal link — opens Phantom in-app browser if installed
   return (
     'https://phantom.app/ul/browse/' +
-    encodeURIComponent(url) +
+    encodedUrl +
     '?ref=' +
-    encodeURIComponent(window.location.origin)
+    encodedRef
   );
 }
 
 function solflareBrowseLink(url: string): string {
+  const encodedUrl = encodeURIComponent(url);
+  const encodedRef = encodeURIComponent(window.location.origin);
+
+  if (isAndroid()) {
+    return (
+      'intent://v1/browse/' +
+      encodedUrl +
+      '?ref=' +
+      encodedRef +
+      '#Intent;package=com.solflare.mobile;scheme=solflare;S.browser_fallback_url=' +
+      encodeURIComponent('https://solflare.com/download') +
+      ';end'
+    );
+  }
+
   return (
     'https://solflare.com/ul/v1/browse/' +
-    encodeURIComponent(url) +
+    encodedUrl +
     '?ref=' +
-    encodeURIComponent(window.location.origin)
+    encodedRef
   );
 }
 

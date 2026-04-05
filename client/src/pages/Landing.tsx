@@ -15,10 +15,16 @@ export default function Landing() {
   const [loadingSignIn, setLoadingSignIn] = useState(false);
   const { isAuthenticated, loading: profileLoading } = useProfile();
 
-  // Scroll to top on mount
+  // Scroll to top on mount.
+  // Also clear the wallet adapter's stored wallet name so the connect button
+  // always opens the wallet picker (instead of auto-selecting the last wallet
+  // and immediately trying to use the Phantom browser extension on mobile).
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, []);
+    if (!isAuthenticated) {
+      localStorage.removeItem('walletName');
+    }
+  }, [isAuthenticated]);
 
   const handleGetStarted = () => {
     if (loginRef.current) {
